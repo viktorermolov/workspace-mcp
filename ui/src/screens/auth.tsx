@@ -163,7 +163,9 @@ export function ConsentScreen() {
 
   useEffect(() => {
     const c = info.data;
-    if (c && !name) setName(c.connection?.name ?? c.client.name ?? '');
+    // The suggested name fills only an empty field: this runs after the screen is shown, and the owner
+    // may already have typed a name by then.
+    if (c) setName((typed) => typed || (c.connection?.name ?? c.client.name ?? ''));
   }, [info.data]);
 
   const decide = (accept: boolean) =>

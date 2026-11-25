@@ -110,6 +110,37 @@ test('owner creates roles, a project and a task', async () => {
   await expect(page.getByText('Draft the intro')).toBeVisible();
 });
 
+test('the task list shows what a task waits for under any filter, and Back keeps the filter', async () => {
+  await page.goto('/tasks/new');
+  await page.getByLabel('Title').fill('Review the intro');
+  await page.getByLabel('Role').selectOption({ label: 'Editor' });
+  await page.getByRole('button', { name: /^(Create|Save)/ }).click();
+  await expect(page.getByRole('heading', { name: 'Review the intro' })).toBeVisible();
+
+  await go('Tasks');
+  await page.getByRole('link', { name: /Draft the intro/ }).click();
+  await page.getByLabel('Depends on').selectOption({ label: 'Review the intro' });
+  const saved = page.waitForResponse((r) => r.url().endsWith('/api/owner/tasks') && r.request().method() === 'POST' && r.ok());
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saved;
+
+  await go('Tasks');
+  const draft = page.locator('li.task').filter({ has: page.locator('.task-title', { hasText: 'Draft the intro' }) });
+  await expect(draft.getByText('waits for: Review the intro')).toBeVisible();
+  // The task it waits for belongs to another role, so it is outside this filter; the hint stays.
+  await page.getByLabel('Role').selectOption({ label: 'Writer' });
+  await expect(page).toHaveURL(/\/tasks\?role=writer$/);
+  await expect(page.locator('li.task .task-title', { hasText: 'Review the intro' })).toHaveCount(0);
+  await expect(draft.getByText('waits for: Review the intro')).toBeVisible();
+
+  await draft.getByRole('link').click();
+  await expect(page.getByRole('heading', { name: 'Draft the intro' })).toBeVisible();
+  await page.getByRole('link', { name: 'Back', exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks\?role=writer$/);
+  await expect(page.getByLabel('Role')).toHaveValue('writer');
+  await expect(page.locator('li.task .task-title', { hasText: 'Review the intro' })).toHaveCount(0);
+});
+
 test('documents keep versions; compare and restore', async () => {
   await page.goto('/documents/new');
   await page.getByLabel('Title').fill('Style guide');
@@ -191,6 +222,43 @@ test('an AI platform connects through the consent screen', async () => {
   await expect(page.locator('.list li').filter({ hasText: 'Agent on my phone' })).toBeVisible();
 });
 
+test('a connection name typed as soon as the consent screen shows is kept', async () => {
+  const redirect = 'http://127.0.0.1:9/early';
+  const { url } = await newAuthorization(redirect);
+  // Hold the client details so the name field can be typed into in the very moment it appears,
+  // before the screen has run anything after showing it.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/api/owner/consent/client**', async (r) => {
+    await held;
+    await r.continue();
+  });
+  await page.goto(url);
+  await page.evaluate(() => {
+    new MutationObserver((_, observer) => {
+      const input = document.querySelector<HTMLInputElement>('input[placeholder="For example: Claude on my phone"]');
+      if (!input) return;
+      observer.disconnect();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Typed right away');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  release();
+  const field = page.getByLabel('Name this connection');
+  await expect(field).toHaveValue('Typed right away');
+  // Let every deferred update of the screen run, then check the typed name survived them.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 100))));
+  await expect(field).toHaveValue('Typed right away');
+  await page.unroute('**/api/owner/consent/client**');
+  const back = page.waitForRequest((r) => r.url().startsWith(redirect));
+  await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
+  await page.getByRole('button', { name: 'Approve' }).click();
+  await back;
+  await page.waitForURL((u) => u.href.startsWith(redirect));
+  await page.goto('/connections');
+  await expect(page.locator('.list li').filter({ hasText: 'Typed right away' })).toBeVisible();
+});
+
 test('a signed-out authorization goes through sign-in to consent', async () => {
   await go('More');
   await page.getByRole('button', { name: 'Sign out' }).click();
@@ -237,6 +305,16 @@ test('log shows owner actions and the theme can be switched', async () => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('radio', { name: 'System' }).click();
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
+});
+
+test('a temporary server error while loading shows a message and a way to try again', async () => {
+  await page.route('**/api/owner/me', (r) => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"unavailable","message":"Service is restarting"}' }));
+  await page.goto('/tasks');
+  await expect(page.getByRole('alert')).toContainText('Service is restarting');
+  await page.unroute('**/api/owner/me');
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
+  await expect(page).toHaveURL(/\/tasks$/);
 });
 
 test('navigation fits the screen and the page breaks no content security rule', async () => {

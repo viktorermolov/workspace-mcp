@@ -1,12 +1,13 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { api, post, setUnauthorizedHandler } from './api.ts';
+import { api, ApiError, post, setUnauthorizedHandler } from './api.ts';
 import { match, navigate, onLinkClick, useLocation } from './router.ts';
 import { applyTheme, ConnectionsScreen, DataScreen, getTheme, GitHubScreen, LogScreen, MoreScreen, PasskeysScreen, WebhooksScreen } from './screens/admin.tsx';
 import { ConsentScreen, LoginScreen, SetupScreen } from './screens/auth.tsx';
 import { ChangesScreen, DocumentScreen, HistoryScreen, ProjectScreen, ProjectsScreen, RoleScreen, RolesScreen, RulesScreen } from './screens/content.tsx';
 import { MapScreen } from './screens/map.tsx';
 import { TaskScreen, TasksScreen } from './screens/tasks.tsx';
+import { Alert, Button } from './ui.tsx';
 import './styles.css';
 
 applyTheme(getTheme());
@@ -69,6 +70,8 @@ function Icon({ d }: { d: string }) {
 
 function Shell({ path }: { path: string }) {
   const [authed, setAuthed] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(0);
   const refresh = () =>
     api<{ items: unknown[]; has_more: boolean }>('/changes')
@@ -76,18 +79,33 @@ function Shell({ path }: { path: string }) {
       .catch(() => undefined);
 
   useEffect(() => {
+    setBootError(null);
     api('/me')
       .then(() => {
         setAuthed(true);
         void post('/visit').catch(() => undefined);
         void refresh();
       })
-      .catch(() => undefined);
-  }, []);
+      .catch((e: unknown) => {
+        // A 401 already sends the owner to the sign-in page. Anything else (the server restarting, a proxy
+        // error, no network) is shown with a way to try again instead of an endless "Loading…".
+        if (e instanceof ApiError && e.status === 401) return;
+        setBootError(e instanceof ApiError ? e.message : 'Could not reach the server.');
+      });
+  }, [attempt]);
   useEffect(() => {
     if (authed) void refresh();
   }, [path, authed]);
 
+  if (!authed && bootError)
+    return (
+      <div class="boot">
+        <Alert>The workspace could not be loaded: {bootError}</Alert>
+        <Button kind="primary" onClick={() => setAttempt((n) => n + 1)}>
+          Try again
+        </Button>
+      </div>
+    );
   if (!authed) return <p class="muted loading boot">Loading…</p>;
 
   let screen: preact.JSX.Element | null = null;

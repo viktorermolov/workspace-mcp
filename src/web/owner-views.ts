@@ -74,9 +74,14 @@ export function taskTree(db: DB, memberId: string, f: { project?: string; role?:
     ...vals,
   );
   const ids = new Set(tasks.map((t) => t.id));
-  const deps = all<{ task_id: string; depends_on_id: string }>(db, 'SELECT d.task_id, d.depends_on_id FROM task_dependency d JOIN task t ON t.id = d.task_id WHERE t.member_id = ?', memberId).filter(
-    (d) => ids.has(d.task_id),
-  );
+  // Each dependency carries the title and status of the task it waits for, which may be outside the
+  // filter (another role, project or status): the list still shows what a task waits for.
+  const deps = all<{ task_id: string; depends_on_id: string; depends_on_title: string; depends_on_status: string }>(
+    db,
+    `SELECT d.task_id, d.depends_on_id, o.title AS depends_on_title, o.status AS depends_on_status
+     FROM task_dependency d JOIN task t ON t.id = d.task_id JOIN task o ON o.id = d.depends_on_id WHERE t.member_id = ?`,
+    memberId,
+  ).filter((d) => ids.has(d.task_id));
   const issueConds = ['i.member_id = ?'];
   const issueVals: unknown[] = [memberId];
   if (f.project) (issueConds.push('(p.slug = ? OR p.id = ?)'), issueVals.push(f.project, f.project));
