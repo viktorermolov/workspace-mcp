@@ -179,6 +179,37 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('never skips changes when more happened than one start shows', async () => {
+    const a = (await connectAgent(env, owner, 'Platform C2')).client;
+    await call(a, 'start', { role: 'dev' });
+    const made: string[] = [];
+    for (let i = 0; i < 36; i++) made.push((await call(a, 'save_task', { title: `Backlog item ${i}`, role: 'dev' })).id);
+    const first = await call(a, 'start', { role: 'dev' });
+    const s1 = first.data.changes_since_previous_start;
+    assert.equal(s1.events.length, 30);
+    assert.equal(s1.more, true);
+    assert.equal(s1.next_cursor, s1.events.at(-1).id);
+    // The rest can be read right away with changes …
+    const rest = await call(a, 'changes', { cursor: s1.next_cursor, limit: 200 });
+    assert.ok(rest.events.length > 0);
+    // … and each following start continues after the last event shown, until nothing is left.
+    const seen = [...s1.events];
+    for (let i = 0; i < 20; i++) {
+      const s = (await call(a, 'start', { role: 'dev' })).data.changes_since_previous_start;
+      if (s.events.length) assert.equal(s.events[0].id, seen.at(-1).id + 1);
+      seen.push(...s.events);
+      if (!s.more) {
+        assert.equal(s.next_cursor, undefined);
+        break;
+      }
+    }
+    assert.deepEqual(seen.slice(s1.events.length).map((e: any) => e.id), rest.events.map((e: any) => e.id));
+    const created = seen.filter((e: any) => e.action === 'task.created').map((e: any) => e.entity_id);
+    assert.deepEqual(created, made);
+    assert.equal((await call(a, 'start', { role: 'dev' })).data.changes_since_previous_start.events.length, 0);
+    await a.close();
+  });
+
   it('keeps versions, compares, rolls back, and never rewrites history', async () => {
     const a = (await connectAgent(env, owner, 'Platform D')).client;
     let role = await call(a, 'get', { type: 'role', id: 'dev' });

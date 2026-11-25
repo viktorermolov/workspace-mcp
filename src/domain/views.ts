@@ -322,9 +322,13 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   const prev = get<{ last_event_id: number }>(db, 'SELECT last_event_id FROM start_cursor WHERE connection_id = ? AND role_key = ?', connKey, key);
   const latest = latestEventId(db, memberId);
   let since: unknown = null;
+  // The cursor moves only past the events shown: when more than fit, the next start continues
+  // where this one stopped, and next_cursor lets the agent read the rest now with changes.
+  let seenUpTo = latest;
   if (prev) {
     const ch = changes(db, memberId, { cursor: prev.last_event_id, limit: 30 });
-    since = { since_event: prev.last_event_id, events: ch.events, more: ch.has_more };
+    since = { since_event: prev.last_event_id, events: ch.events, more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
+    if (ch.has_more) seenUpTo = ch.next_cursor;
   }
   run(
     db,
@@ -332,7 +336,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
      ON CONFLICT (connection_id, role_key) DO UPDATE SET last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,
     connKey,
     key,
-    latest,
+    seenUpTo,
     now(),
   );
 
