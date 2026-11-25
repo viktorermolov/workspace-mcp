@@ -175,6 +175,9 @@ async function approveAndCatchRedirect(name: string, redirect: string) {
   await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
   await page.getByRole('button', { name: 'Approve' }).click();
   const url = new URL((await back).url());
+  // Wait until the browser has landed on the platform's callback, so the next test's navigation
+  // cannot be interrupted by this redirect still finishing.
+  await page.waitForURL((u) => u.href.startsWith(redirect));
   expect(url.searchParams.get('code')).toBeTruthy();
   expect(url.searchParams.get('state')).toBe('st-1');
 }
@@ -241,8 +244,12 @@ test('navigation fits the screen and the page breaks no content security rule', 
   if (isPhone()) {
     await expect(page.locator('nav.tabbar')).toBeVisible();
     await expect(page.locator('nav.sidebar')).toBeHidden();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    expect(overflow).toBeLessThanOrEqual(1);
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(await overflow()).toBeLessThanOrEqual(1);
+    // The More screen shows long addresses (MCP endpoint, source code); they must wrap, not widen the page.
+    await go('More');
+    await expect(page.getByRole('link', { name: /github\.com/ })).toBeVisible();
+    expect(await overflow()).toBeLessThanOrEqual(1);
   } else {
     await expect(page.locator('nav.sidebar')).toBeVisible();
     await expect(page.locator('nav.tabbar')).toBeHidden();

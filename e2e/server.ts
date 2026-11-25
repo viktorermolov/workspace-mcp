@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// A long source address, so the phone layout test proves that long addresses wrap whatever the fonts are.
+const LONG_SOURCE_URL = 'https://github.com/anexampleorganizationwithalongname/workspacemcpforkwithalongname';
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function freePort(): Promise<number> {
@@ -34,7 +37,7 @@ export async function startServer(): Promise<RunningServer> {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-e2e-'));
   const child: ChildProcess = spawn(process.execPath, ['src/main.ts'], {
     cwd: root,
-    env: { ...process.env, PUBLIC_URL: base, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, SECRET_KEY: randomBytes(32).toString('base64'), LOG_LEVEL: 'warn', BACKUP_INTERVAL_HOURS: '0', GITHUB_SYNC_INTERVAL_MINUTES: '0' },
+    env: { ...process.env, PUBLIC_URL: base, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, SECRET_KEY: randomBytes(32).toString('base64'), LOG_LEVEL: 'warn', BACKUP_INTERVAL_HOURS: '0', GITHUB_SYNC_INTERVAL_MINUTES: '0', SOURCE_URL: LONG_SOURCE_URL },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let out = '';

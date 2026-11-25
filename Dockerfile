@@ -21,7 +21,7 @@ RUN --mount=type=secret,id=extra_ca,required=false \
 FROM node:26-bookworm-slim
 LABEL org.opencontainers.image.title="workspace-mcp" \
       org.opencontainers.image.description="Self-hosted portable workspace for AI agents, served as a remote MCP server." \
-      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.source="https://github.com/viktorermolov/workspace-mcp"
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

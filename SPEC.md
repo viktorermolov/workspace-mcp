@@ -12,7 +12,7 @@ Boundary of responsibility: the service stores, shows and notifies. It does not 
 
 ## 2. Product format
 
-- Open source, Apache-2.0, no paid features, no telemetry, no required external services or accounts.
+- Open source under AGPL-3.0-only (the owner's choice, replacing Apache-2.0 before the first release), no paid features, no telemetry, no required external services or accounts.
 - One instance serves one owner. Anyone who wants the same runs their own.
 - The data model has a member from day one and every record belongs to one, so a second person can be added later without a rewrite. Invitations, permissions and data separation are not built now.
 

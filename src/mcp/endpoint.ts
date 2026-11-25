@@ -24,7 +24,7 @@ export function createMcpEndpoint(opts: { config: Config; db: DB; auth: Auth; ve
     ({ authInfo }) => {
       const actor = authInfo?.extra?.actor as Actor | undefined;
       if (!actor) throw new Error('unauthenticated MCP request reached the server factory');
-      return buildMcpServer(db, () => actor, version);
+      return buildMcpServer(db, () => actor, version, config.sourceUrl);
     },
     {
       maxRequestBodySize: MAX_MCP_BODY,

@@ -639,6 +639,8 @@ fieldset .row select {
 .facts dd {
   margin: 0;
   min-width: 0;
+  /* Long addresses (MCP endpoint, source code) must wrap instead of widening the page on phones. */
+  overflow-wrap: anywhere;
 }
 .secret {
   margin: 10px 0;

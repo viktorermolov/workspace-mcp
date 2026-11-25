@@ -7,7 +7,7 @@ You keep one workspace (working rules, roles, projects, documents, tasks and che
 The service stores, shows and notifies. It does not run agents, assign work, set priorities or call an LLM: your agents and you decide, the platform executes.
 
 - One instance serves one person. Anyone who wants the same runs their own.
-- Open source under Apache-2.0. No paid features, no telemetry, no external services or accounts.
+- Open source under the [GNU Affero General Public License v3.0](LICENSE). No paid features, no telemetry, no external services or accounts.
 - One Docker container with SQLite. Runs on a Raspberry Pi 4.
 
 > **Status:** pre-release (0.1.0, unreleased). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
@@ -88,4 +88,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as desc
 
 ## License
 
-[Apache License 2.0](LICENSE).
+Copyright (C) 2026 Viktor Ermolov.
+
+Workspace MCP is free software under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). You may use it for any purpose, including commercially, and change it. Sharing copies (including container images) or running a modified version as a service for others comes with the license's conditions: among them, you must offer the source code under the same license. For a modified service, set `SOURCE_URL` to where your source is ([configuration](docs/configuration.md#source-code-agpl)). Third-party dependencies keep their own licenses.

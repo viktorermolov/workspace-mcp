@@ -50,4 +50,4 @@ docker build -t workspace-mcp:local . && scripts/container-smoke.sh workspace-mc
 - Describe what changes for a user, and how you tested it.
 - A pull request is merged when CI is green and it has been reviewed.
 
-By contributing, you agree that your contributions are licensed under the [Apache License 2.0](LICENSE).
+By contributing, you agree that your contributions are licensed under the project's license, the [GNU Affero General Public License v3.0 only](LICENSE).

@@ -29,8 +29,16 @@ Workspace MCP reads its settings from environment variables once, at start. With
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub REST API base. Change it only for GitHub Enterprise Server. |
 | `WEBHOOK_ALLOW_PRIVATE_ADDRESSES` | `false` | Allow webhooks to loopback, private, link-local and other non-public addresses. Keep it off unless the receiver really runs on your own network. |
 | `ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token, `60` to `86400`. Platforms renew it with a refresh token that is replaced on every use; an unused refresh token expires after 60 days. |
+| `SOURCE_URL` | `https://github.com/viktorermolov/workspace-mcp` | Where users of this deployment can get its source code. Shown under **More**, in `/healthz` and in the MCP server information. See [Source code (AGPL)](#source-code-agpl). |
 | `UNUSED_CLIENT_TTL_DAYS` | `7` | Self-registered OAuth clients (dynamic registration or a client metadata document) that never completed a connection are removed after this many days, `1` to `365`. Clients you create under **More → Connections** are kept. |
 | `UI_DIR` | `dist/ui` next to the source (`/app/dist/ui` in the image) | Location of the built web interface. |
+
+## Source code (AGPL)
+
+Workspace MCP is licensed under AGPL-3.0-only. Section 13 of the license says that if you modify the program, users who interact with your modified version over a network must be offered its Corresponding Source. The service already offers the source at `SOURCE_URL` in three places: the **More** screen, `/healthz` and the MCP server information (`websiteUrl`).
+
+- Running the upstream code unchanged: leave `SOURCE_URL` unset; it points to the upstream repository.
+- Running a modified version: publish your changes (for example in a public fork), set `SOURCE_URL` to that location so it matches what you run, and keep these links in your version.
 
 ## Compose-only variables
 

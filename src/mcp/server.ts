@@ -83,8 +83,9 @@ function wrap<A>(fn: (args: A) => unknown) {
 }
 
 /** Builds a fresh MCP server bound to one caller. Called once per HTTP request (stateless). */
-export function buildMcpServer(db: DB, actorOf: () => Actor, version: string): McpServer {
-  const server = new McpServer({ name: SERVER_NAME, version }, { instructions: SERVER_INSTRUCTIONS });
+export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, sourceUrl?: string): McpServer {
+  // websiteUrl points clients at the source (AGPL-3.0 section 13).
+  const server = new McpServer({ name: SERVER_NAME, version, ...(sourceUrl ? { websiteUrl: sourceUrl } : {}) }, { instructions: SERVER_INSTRUCTIONS });
   const act = (role?: string): Actor => ({ ...actorOf(), role: role?.trim() || undefined });
 
   server.registerTool(
