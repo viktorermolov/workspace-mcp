@@ -7,7 +7,7 @@ You keep one workspace (working rules, roles, projects, documents, tasks and che
 The service stores, shows and notifies. It does not run agents, assign work, set priorities or call an LLM: your agents and you decide, the platform executes.
 
 - One instance serves one person. Anyone who wants the same runs their own.
-- Open source under Apache-2.0. No paid features, no telemetry, no external services or accounts.
+- Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): free for personal and other noncommercial use. No paid features, no telemetry, no external services or accounts.
 - One Docker container with SQLite. Runs on a Raspberry Pi 4.
 
 > **Status:** pre-release (0.1.0, unreleased). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
@@ -88,4 +88,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as desc
 
 ## License
 
-[Apache License 2.0](LICENSE).
+[PolyForm Noncommercial License 1.0.0](LICENSE). You may use, change and share the software for any noncommercial purpose: personal use, study, hobby projects, and use by charities, schools, research and public organizations. Commercial use, including running it for a business or offering it as a service, is not covered; ask the author about a separate license.
+
+This is a source-available license, not an open source license in the OSI sense. Third-party dependencies keep their own (permissive) licenses.
