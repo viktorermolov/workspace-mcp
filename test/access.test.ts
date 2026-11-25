@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { expireUnusedClients } from '../src/auth/connections.ts';
 import { issueCode } from '../src/auth/setup.ts';
+import { ConfigError, loadConfig } from '../src/config.ts';
 import { get, run } from '../src/db/db.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService, TestOAuthProvider, type TestEnv } from './helpers/harness.ts';
 import { SoftAuthenticator } from './helpers/webauthn.ts';
@@ -43,6 +44,17 @@ describe('access control', () => {
     assert.equal(as.authorization_response_iss_parameter_supported, true);
     assert.equal(as.client_id_metadata_document_supported, true);
     assert.ok(as.registration_endpoint);
+  });
+
+  it('offers the source code of the running service (AGPL section 13)', async () => {
+    const health = await (await fetch(`${env.base}/healthz`)).json();
+    assert.equal(health.license, 'AGPL-3.0-only');
+    assert.equal(health.source, 'https://github.com/viktorermolov/workspace-mcp');
+    const me = await (await owner.fetch('/api/owner/me')).json();
+    assert.equal(me.source_url, health.source);
+    const base = { PUBLIC_URL: 'http://localhost:1', SECRET_KEY: Buffer.alloc(32, 3).toString('base64') };
+    assert.equal(loadConfig({ ...base, SOURCE_URL: 'https://example.org/fork' }).sourceUrl, 'https://example.org/fork');
+    assert.throws(() => loadConfig({ ...base, SOURCE_URL: 'javascript:alert(1)' }), ConfigError);
   });
 
   it('rejects MCP calls without a token or with an invalid token, pointing to the metadata', async () => {

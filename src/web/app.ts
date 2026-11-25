@@ -76,7 +76,7 @@ export function createApp(deps: AppDeps) {
     return c.json({ error: 'internal', message: 'Internal error' }, 500);
   });
 
-  app.get('/healthz', (c) => c.json({ status: 'ok', version }));
+  app.get('/healthz', (c) => c.json({ status: 'ok', version, source: config.sourceUrl, license: 'AGPL-3.0-only' }));
 
   // ---------- OAuth discovery (served at the root as clients expect) ----------
   const forwardAuth = (target: string) => async (c: Context) => {

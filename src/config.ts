@@ -21,6 +21,8 @@ export interface Config {
   trustProxy: boolean;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   githubApiUrl: string;
+  /** Where users can get the Corresponding Source of this deployment (AGPL-3.0 section 13). */
+  sourceUrl: string;
   githubSyncIntervalMinutes: number;
   webhookAllowPrivate: boolean;
   backupIntervalHours: number;
@@ -42,6 +44,21 @@ function int(name: string, v: string | undefined, dflt: number, min: number, max
   const n = Number(v);
   if (!Number.isInteger(n) || n < min || n > max) throw new ConfigError(`${name} must be an integer between ${min} and ${max}`);
   return n;
+}
+
+/** Default source location: the upstream repository. A modified deployment must point SOURCE_URL at its own source. */
+export const UPSTREAM_SOURCE_URL = 'https://github.com/viktorermolov/workspace-mcp';
+
+function sourceUrl(raw: string | undefined): string {
+  if (!raw) return UPSTREAM_SOURCE_URL;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new ConfigError('SOURCE_URL must be an absolute URL');
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new ConfigError('SOURCE_URL must be an http or https URL');
+  return u.toString();
 }
 
 export function normalizePublicUrl(raw: string): string {
@@ -92,6 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: bool(env.TRUST_PROXY, false),
     logLevel,
     githubApiUrl: (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, ''),
+    sourceUrl: sourceUrl(env.SOURCE_URL),
     githubSyncIntervalMinutes: int('GITHUB_SYNC_INTERVAL_MINUTES', env.GITHUB_SYNC_INTERVAL_MINUTES, 15, 0, 1440),
     webhookAllowPrivate: bool(env.WEBHOOK_ALLOW_PRIVATE_ADDRESSES, false),
     backupIntervalHours: int('BACKUP_INTERVAL_HOURS', env.BACKUP_INTERVAL_HOURS, 24, 0, 720),

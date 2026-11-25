@@ -64,6 +64,7 @@ interface Me {
   version: string;
   public_url: string;
   mcp_url: string;
+  source_url: string;
 }
 
 export function useMe() {
@@ -1078,6 +1079,13 @@ export function MoreScreen() {
             </dd>
             <dt>Version</dt>
             <dd>{me.data.version}</dd>
+            <dt>Source code</dt>
+            <dd>
+              <a href={me.data.source_url} target="_blank" rel="noopener noreferrer">
+                {me.data.source_url}
+              </a>{' '}
+              (AGPL-3.0)
+            </dd>
           </dl>
         </>
       )}

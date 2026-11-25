@@ -76,7 +76,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   // ---------- session ----------
   api.get('/me', (c) => {
     const m = get<{ last_review_event_id: number; last_visit_at: string | null; name: string }>(db, 'SELECT * FROM member WHERE id = ?', actor(c).memberId)!;
-    return c.json({ member_id: actor(c).memberId, name: m.name, last_review_event_id: m.last_review_event_id, last_visit_at: m.last_visit_at, version: deps.version, public_url: config.publicUrl, mcp_url: config.mcpUrl });
+    return c.json({ member_id: actor(c).memberId, name: m.name, last_review_event_id: m.last_review_event_id, last_visit_at: m.last_visit_at, version: deps.version, public_url: config.publicUrl, mcp_url: config.mcpUrl, source_url: config.sourceUrl });
   });
   api.post('/visit', (c) => {
     run(db, 'UPDATE member SET last_visit_at = ? WHERE id = ?', now(), actor(c).memberId);

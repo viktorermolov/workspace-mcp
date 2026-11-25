@@ -133,6 +133,8 @@ Follow [first-setup.md](first-setup.md): open `PUBLIC_URL`, enter the setup code
 
 The service restarts automatically after a crash or reboot (`restart: unless-stopped`), as long as Docker starts at boot.
 
+If you change the code you deploy, set `SOURCE_URL` to where your modified source is published, as the AGPL requires ([details](configuration.md#source-code-agpl)).
+
 ## Updating and rolling back
 
 Before an update, keep the current image under a second tag so you can switch back without rebuilding:
