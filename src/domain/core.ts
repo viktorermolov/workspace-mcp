@@ -70,14 +70,17 @@ export function preview(text: string | null | undefined, max: number = LIMITS.pr
   return text.length > max ? `${text.slice(0, max)}… (${text.length - max} more characters, use get for the full text)` : text;
 }
 
-/** Control characters other than tab and line breaks: no use in Markdown, and each grows sixfold in JSON. */
-const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
-
-/** Checks a text field: its length, no control characters, and well-formed Unicode (no lone surrogates). */
+/**
+ * Checks a text field: its length, no NUL characters and well-formed Unicode (no lone surrogates).
+ * Other control characters (ANSI colours in pasted terminal output, form feeds from PDFs) are kept;
+ * responses that grow too large when escaped are handled where they are sent.
+ */
 export function checkLen(field: string, value: string | undefined | null, max: number): void {
   if (value == null) return;
   if (value.length > max) throw new DomainError('limit', `${field} is too long (${value.length} > ${max} characters)`);
-  if (CONTROL.test(value) || !value.isWellFormed()) throw new DomainError('invalid', `${field} contains control characters or broken Unicode`);
+  const nul = value.indexOf('\u0000');
+  if (nul >= 0) throw new DomainError('invalid', `${field} contains a NUL character at position ${nul}`);
+  if (!value.isWellFormed()) throw new DomainError('invalid', `${field} contains broken Unicode (an unpaired surrogate)`);
 }
 
 /** Hooks other modules attach to (webhooks enqueue deliveries inside the same transaction). */

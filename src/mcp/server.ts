@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import type { DB } from '../db/db.ts';
-import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, preview, type Actor } from '../domain/core.ts';
+import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, type Actor } from '../domain/core.ts';
 import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '../domain/entities.ts';
 import { claimTask, commentTask, PRIORITIES, saveTask, TASK_STATUSES, writeCheckpoint } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
@@ -33,7 +33,7 @@ export { MAX_RESPONSE_CHARS };
 
 /** Replaces strings longer than `max` with a preview, everywhere in a JSON value. */
 function shortenStrings(v: unknown, max: number): unknown {
-  if (typeof v === 'string') return preview(v, max);
+  if (typeof v === 'string') return v.length > max ? `${v.slice(0, max)}… (${v.length - max} more characters not shown in this response)` : v;
   if (Array.isArray(v)) return v.map((x) => shortenStrings(x, max));
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shortenStrings(x, max)]));
   return v;
@@ -47,7 +47,8 @@ function ok(value: unknown) {
     const short = JSON.stringify(
       {
         ...(shortenStrings(value, 2000) as Record<string, unknown>),
-        response_shortened: 'Long text fields are shortened because the full response would exceed the size limit. The stored text is complete.',
+        response_shortened:
+          'Long text fields are shortened because the full response would exceed the size limit. The stored text is complete; for a version comparison, compare smaller versions or read each version with get.',
       },
       null,
       1,

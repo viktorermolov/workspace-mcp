@@ -127,9 +127,14 @@ describe('MCP behaviour', () => {
     try {
       const o = (await registerOwner(odd)).browser;
       const a = (await connectAgent(odd, o, 'Odd text')).client;
-      await assert.rejects(call(a, 'update_rules', { text: 'ok\u0001' }), (e) => err(e).error === 'invalid' && /control characters/.test(err(e).message));
+      await assert.rejects(call(a, 'update_rules', { text: 'ok\u0000' }), (e) => err(e).error === 'invalid' && /NUL character at position 2/.test(err(e).message));
+      await assert.rejects(call(a, 'update_rules', { text: 'ok\ud800' }), (e) => err(e).error === 'invalid' && /broken Unicode/.test(err(e).message));
+      // Terminal colours and form feeds are ordinary pasted text and are kept.
+      await call(a, 'update_rules', { text: '\u001b[32mgreen\u001b[0m\fnext page' });
+      const kept = await call(a, 'get', { type: 'rules' });
+      assert.equal(kept.text, '\u001b[32mgreen\u001b[0m\fnext page');
       // Within the length limits, but quotes and backslashes double when escaped.
-      await call(a, 'update_rules', { text: '"'.repeat(100_000) });
+      await call(a, 'update_rules', { text: '"'.repeat(100_000), rev: kept.rev });
       const role = await call(a, 'save_role', { name: 'Odd', slug: 'odd', area: 'x', instruction: '\\'.repeat(100_000) });
       for (let i = 0; i < 50; i++) await call(a, 'save_project', { name: `Project ${i}`, slug: `p-${i}`, focus: '"'.repeat(2000), state: '"'.repeat(2000) });
       const s = await call(a, 'start', { role: 'odd' });

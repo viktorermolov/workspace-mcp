@@ -238,14 +238,16 @@ export class GithubSync {
         // Issues come oldest update first. When the page cap stops a run early, the next run
         // continues from the newest update fetched (inclusive), so nothing is skipped.
         const capped = !!next && !!newest;
-        // Every fetched issue has the update time we started from: the cursor cannot move.
+        // Every fetched issue has the update time we started from: the cursor cannot move. Step past
+        // that second so later changes keep arriving, and say that some issues may be missing.
         const stuck = capped && repo.sync_cursor !== null && newest === repo.sync_cursor;
+        const cursor = stuck ? new Date(Date.parse(newest!) + 1000).toISOString() : capped ? newest : null;
         tx(this.db, () => {
           if (!get(this.db, 'SELECT 1 FROM github_repo WHERE id = ?', repo.id)) return; // removed meanwhile
           for (const i of batch) this.upsertIssue(memberId, repo.id, repo.full_name, i);
-          run(this.db, 'UPDATE github_repo SET last_synced_at = ?, sync_cursor = ? WHERE id = ?', started, capped ? newest : null, repo.id);
+          run(this.db, 'UPDATE github_repo SET last_synced_at = ?, sync_cursor = ? WHERE id = ?', started, cursor, repo.id);
         });
-        if (stuck) throw new Error(`more than ${MAX_PAGES * 100} issues share the update time ${newest}, so the sync cannot continue past it`);
+        if (stuck) throw new Error(`more than ${MAX_PAGES * 100} issues share the update time ${newest}; some of them may be missing, the next sync continues after it`);
         if (capped) partial.push(repo.full_name);
         count += batch.length;
       } catch (e) {

@@ -180,13 +180,20 @@ describe('GitHub mirror of a large repository', () => {
   });
 
   it('reports an error instead of looping when more issues share one update time than a run reads', async () => {
-    const { env, sync } = await bigRepo(issues(2100, () => Date.UTC(2026, 0, 1)));
+    const many = issues(2100, () => Date.UTC(2026, 0, 1));
+    const { env, sync, mirrored } = await bigRepo(many);
     try {
       const first = await sync();
       assert.match(first.message, /not complete yet/);
       const second = await sync();
       assert.equal(second.ok, false);
       assert.match(second.message, /share the update time/);
+      // It does not stay stuck: a later change still arrives.
+      many.push({ number: 9999, updated_at: new Date(Date.UTC(2026, 0, 2)).toISOString() });
+      const third = await sync();
+      assert.equal(third.ok, true, third.message);
+      assert.ok(get(env.svc.db, 'SELECT 1 FROM github_issue WHERE number = 9999'));
+      assert.ok(mirrored() >= 2001);
     } finally {
       await env.close();
     }

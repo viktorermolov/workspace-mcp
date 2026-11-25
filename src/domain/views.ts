@@ -344,7 +344,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   // resort the instructions are shortened with an explicit note to read them in full.
   const build = (pv: number, long: number, instr: number | null) => ({
     instructions: {
-      working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text, instr),
+      working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text || '(no working rules yet)', instr),
       working_rules_version: rules.version,
       working_rules_rev: rules.rev,
       save_state_rule: SAVE_STATE_RULE,
