@@ -107,15 +107,8 @@ describe('GitHub issues (read-only mirror)', () => {
 });
 
 describe('GitHub mirror of a large repository', () => {
-  it('continues after the page cap instead of skipping issues', async () => {
-    // 2,150 issues, more than one run reads (20 pages of 100).
-    const many = Array.from({ length: 2150 }, (_, k) => ({
-      number: k + 1,
-      title: `Issue ${k + 1}`,
-      body: '',
-      state: 'open' as const,
-      updated_at: new Date(Date.UTC(2026, 0, 1) + k * 3_600_000).toISOString(),
-    }));
+  /** A service whose GitHub serves `many` issues of example/big, oldest update first, `since` inclusive. */
+  async function bigRepo(many: { number: number; updated_at: string }[]) {
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input instanceof Request ? input.url : input));
       const p = url.pathname.replace('/api', '');
@@ -126,7 +119,16 @@ describe('GitHub mirror of a large repository', () => {
         const since = url.searchParams.get('since');
         const page = Number(url.searchParams.get('page') ?? '1');
         const list = many.filter((i) => !since || i.updated_at >= since);
-        const slice = list.slice((page - 1) * 100, page * 100).map((i) => ({ ...i, html_url: `https://github.test/example/big/issues/${i.number}`, labels: [], created_at: i.updated_at, closed_at: null }));
+        const slice = list.slice((page - 1) * 100, page * 100).map((i) => ({
+          ...i,
+          title: `Issue ${i.number}`,
+          body: '',
+          state: 'open',
+          html_url: `https://github.test/example/big/issues/${i.number}`,
+          labels: [],
+          created_at: i.updated_at,
+          closed_at: null,
+        }));
         const headers = new Headers();
         if (page * 100 < list.length) {
           const n = new URL(url);
@@ -138,16 +140,53 @@ describe('GitHub mirror of a large repository', () => {
       return Response.json({ message: 'Not Found' }, { status: 404 });
     };
     const env = await startService({ env: { GITHUB_API_URL: API }, fetchImpl: fetchImpl as typeof fetch });
+    const owner = (await registerOwner(env)).browser;
+    await owner.json('/api/owner/github/token', { json: { token: TOKEN } });
+    await owner.json('/api/owner/github/repos', { json: { full_name: 'example/big' } });
+    const sync = () => owner.json('/api/owner/github/sync', { method: 'POST', json: {} });
+    const mirrored = () => get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_issue')!.n;
+    return { env, sync, mirrored };
+  }
+  const issues = (n: number, at: (k: number) => number) =>
+    Array.from({ length: n }, (_, k) => ({ number: k + 1, updated_at: new Date(at(k)).toISOString() }));
+
+  it('continues after the page cap instead of skipping issues', async () => {
+    // 2,150 issues, more than one run reads (20 pages of 100).
+    const { env, sync, mirrored } = await bigRepo(issues(2150, (k) => Date.UTC(2026, 0, 1) + k * 3_600_000));
     try {
-      const owner = (await registerOwner(env)).browser;
-      await owner.json('/api/owner/github/token', { json: { token: TOKEN } });
-      await owner.json('/api/owner/github/repos', { json: { full_name: 'example/big' } });
-      const first = await owner.json('/api/owner/github/sync', { method: 'POST', json: {} });
+      const first = await sync();
       assert.match(first.message, /not complete yet for example\/big/);
-      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_issue')!.n, 2000);
-      const second = await owner.json('/api/owner/github/sync', { method: 'POST', json: {} });
+      assert.equal(mirrored(), 2000);
+      const second = await sync();
       assert.doesNotMatch(second.message, /not complete/);
-      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_issue')!.n, 2150, 'every issue arrives');
+      assert.equal(mirrored(), 2150, 'every issue arrives');
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('makes progress when thousands of issues changed within one minute', async () => {
+    // A bulk edit: 2,500 issues updated within 50 seconds. Stepping back a minute would re-read the same 2,000 forever.
+    const { env, sync, mirrored } = await bigRepo(issues(2500, (k) => Date.UTC(2026, 0, 1) + k * 20));
+    try {
+      await sync();
+      assert.equal(mirrored(), 2000);
+      const second = await sync();
+      assert.doesNotMatch(second.message, /not complete/);
+      assert.equal(mirrored(), 2500);
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('reports an error instead of looping when more issues share one update time than a run reads', async () => {
+    const { env, sync } = await bigRepo(issues(2100, () => Date.UTC(2026, 0, 1)));
+    try {
+      const first = await sync();
+      assert.match(first.message, /not complete yet/);
+      const second = await sync();
+      assert.equal(second.ok, false);
+      assert.match(second.message, /share the update time/);
     } finally {
       await env.close();
     }

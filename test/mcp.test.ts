@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { get, run } from '../src/db/db.ts';
+import { startView } from '../src/domain/views.ts';
 import { call, connectAgent, registerOwner, ToolError, startService, type Browser, type TestEnv } from './helpers/harness.ts';
 
 const err = (e: unknown) => JSON.parse((e as ToolError).message) as { error: string; message: string };
@@ -118,6 +119,44 @@ describe('MCP behaviour', () => {
       await a.close();
     } finally {
       await big.close();
+    }
+  });
+
+  it('keeps start within one response also for text that escapes badly in JSON', async () => {
+    const odd = await startService();
+    try {
+      const o = (await registerOwner(odd)).browser;
+      const a = (await connectAgent(odd, o, 'Odd text')).client;
+      await assert.rejects(call(a, 'update_rules', { text: 'ok\u0001' }), (e) => err(e).error === 'invalid' && /control characters/.test(err(e).message));
+      // Within the length limits, but quotes and backslashes double when escaped.
+      await call(a, 'update_rules', { text: '"'.repeat(100_000) });
+      const role = await call(a, 'save_role', { name: 'Odd', slug: 'odd', area: 'x', instruction: '\\'.repeat(100_000) });
+      for (let i = 0; i < 50; i++) await call(a, 'save_project', { name: `Project ${i}`, slug: `p-${i}`, focus: '"'.repeat(2000), state: '"'.repeat(2000) });
+      const s = await call(a, 'start', { role: 'odd' });
+      assert.equal(s.instructions.working_rules.length, 100_000, 'the overview shrinks first, the instructions stay whole');
+      assert.equal(s.instructions.role_instruction.length, 100_000);
+      assert.equal(s.instructions.instructions_shortened, undefined);
+      assert.ok(s.data.projects[0].state.length < 300, 'project previews are shorter than usual');
+      const r = await call(a, 'get', { type: 'role', id: role.id });
+      assert.equal(r.instruction.length, 100_000);
+      assert.equal(r.response_shortened, undefined);
+
+      // A task whose fields and comment page together escape past the limit is still answered, shortened.
+      const t = await call(a, 'save_task', { title: 'Quoted', description: '"'.repeat(50_000), result: '"'.repeat(50_000) });
+      for (let i = 0; i < 10; i++) await call(a, 'comment_task', { id: t.id, body: '"'.repeat(20_000) });
+      const g = await call(a, 'get', { type: 'task', id: t.id });
+      assert.match(g.response_shortened, /stored text is complete/);
+      assert.equal(g.comments.length, 10);
+
+      // As a last resort (here forced by a small budget) the instructions are shortened with a note.
+      const actor = { kind: 'agent' as const, memberId: get<{ id: string }>(odd.svc.db, 'SELECT id FROM member')!.id, connectionId: 'test' };
+      const tight = startView(odd.svc.db, actor, 'odd', { budget: 150_000 });
+      assert.match(tight.instructions.instructions_shortened as string, /read them in full/);
+      assert.match(tight.instructions.working_rules as string, /more characters, use get/);
+      assert.ok(JSON.stringify(tight, null, 1).length <= 150_000);
+      await a.close();
+    } finally {
+      await odd.close();
     }
   });
 

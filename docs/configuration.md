@@ -50,7 +50,7 @@ These are not configurable.
 | Limit | Value |
 | --- | --- |
 | MCP request body | 1 MiB |
-| MCP response | 512 KiB of JSON; larger results ask the client to paginate or fetch by id |
+| MCP response | 512 KiB of JSON; a larger one is sent with long text fields shortened (`response_shortened`), or else asks the client to paginate or fetch by id |
 | MCP requests | 600 per minute per client address |
 | Setup and recovery code attempts | 10 per minute per client address; a code is valid for 30 minutes and works once |
 | OAuth client registration | 30 per hour per client address |

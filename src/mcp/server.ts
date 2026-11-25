@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import type { DB } from '../db/db.ts';
-import { DomainError, getVersion, LIMITS, type Actor } from '../domain/core.ts';
+import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, preview, type Actor } from '../domain/core.ts';
 import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '../domain/entities.ts';
 import { claimTask, commentTask, PRIORITIES, saveTask, TASK_STATUSES, writeCheckpoint } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
@@ -28,11 +28,32 @@ const rev = z.number().int().positive().describe('The rev you last read; require
 const idem = z.string().min(1).max(200).describe('Optional key that makes a create safe to retry.');
 const note = z.string().max(LIMITS.shortText).describe('Optional note stored with the new version.');
 
-/** Maximum serialized size of one tool response. Larger results must be paginated or fetched by id. */
-export const MAX_RESPONSE_CHARS = 512 * 1024;
+/** Larger results must be paginated or fetched by id. */
+export { MAX_RESPONSE_CHARS };
+
+/** Replaces strings longer than `max` with a preview, everywhere in a JSON value. */
+function shortenStrings(v: unknown, max: number): unknown {
+  if (typeof v === 'string') return preview(v, max);
+  if (Array.isArray(v)) return v.map((x) => shortenStrings(x, max));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shortenStrings(x, max)]));
+  return v;
+}
 
 function ok(value: unknown) {
   let text = JSON.stringify(value, null, 1);
+  if (text.length > MAX_RESPONSE_CHARS && value && typeof value === 'object' && !Array.isArray(value)) {
+    // Text that escapes badly in JSON can overflow even within the length limits. A write has already
+    // happened at this point, so answer with shortened fields rather than an error that invites a retry.
+    const short = JSON.stringify(
+      {
+        ...(shortenStrings(value, 2000) as Record<string, unknown>),
+        response_shortened: 'Long text fields are shortened because the full response would exceed the size limit. The stored text is complete.',
+      },
+      null,
+      1,
+    );
+    if (short.length <= MAX_RESPONSE_CHARS) return { content: [{ type: 'text' as const, text: short }] };
+  }
   if (text.length > MAX_RESPONSE_CHARS) {
     text = JSON.stringify({ error: 'limit', message: `Response too large (${text.length} characters). Narrow the request, use a smaller limit or fetch items by id.` });
     return { content: [{ type: 'text' as const, text }], isError: true };

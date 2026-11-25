@@ -195,7 +195,6 @@ describe('access control', () => {
     assert.ok(!JSON.stringify(conns).includes(created.client_secret));
   });
 
-  // Last in this file: the server closes a connection whose oversized body it did not read.
   it('expires unused self-registered clients but keeps clients the owner created', async () => {
     const manual = await owner.json('/api/owner/clients', { json: { name: 'Kept manual client', redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'] } });
     const reg = await fetch(`${env.base}/api/auth/oauth2/register`, {
@@ -210,6 +209,7 @@ describe('access control', () => {
     assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthClient WHERE clientId = ?', dcr.client_id), undefined, 'abandoned registration removed');
   });
 
+  // The server answers an oversized body early and closes that connection (connection: close).
   it('limits the MCP request size, also for bodies sent without a length', async () => {
     const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
     const big = 'x'.repeat(1024 * 1024 + 10);

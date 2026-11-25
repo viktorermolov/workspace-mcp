@@ -44,11 +44,14 @@ export function slugify(name: string): string {
   return s || 'item';
 }
 
+/** Maximum serialized size of one MCP tool response (JSON with indent 1). */
+export const MAX_RESPONSE_CHARS = 512 * 1024;
+
 export const LIMITS = {
   title: 300,
   shortText: 2000,
   text: 50_000,
-  /** Documents and project descriptions. Kept well under the 512 KiB response limit, also after JSON escaping. */
+  /** Documents and project descriptions. Kept well under the response limit for ordinary text after JSON escaping. */
   document: 200_000,
   /** Working rules and role instructions: both are returned together by `start`. */
   instruction: 100_000,
@@ -67,8 +70,14 @@ export function preview(text: string | null | undefined, max: number = LIMITS.pr
   return text.length > max ? `${text.slice(0, max)}… (${text.length - max} more characters, use get for the full text)` : text;
 }
 
+/** Control characters other than tab and line breaks: no use in Markdown, and each grows sixfold in JSON. */
+const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+/** Checks a text field: its length, no control characters, and well-formed Unicode (no lone surrogates). */
 export function checkLen(field: string, value: string | undefined | null, max: number): void {
-  if (value != null && value.length > max) throw new DomainError('limit', `${field} is too long (${value.length} > ${max} characters)`);
+  if (value == null) return;
+  if (value.length > max) throw new DomainError('limit', `${field} is too long (${value.length} > ${max} characters)`);
+  if (CONTROL.test(value) || !value.isWellFormed()) throw new DomainError('invalid', `${field} contains control characters or broken Unicode`);
 }
 
 /** Hooks other modules attach to (webhooks enqueue deliveries inside the same transaction). */

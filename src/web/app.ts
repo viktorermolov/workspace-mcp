@@ -174,15 +174,18 @@ export function createApp(deps: AppDeps) {
   return { app, close: () => mcp.close() };
 }
 
+/** Largest accepted body for the OAuth and passkey endpoints. */
+export const AUTH_BODY_MAX = 64 * 1024;
+
 /**
  * Dynamic registration defaults `application_type` to "web", which forbids loopback redirects. Clients
  * that run on the user's machine (Claude Code, IDEs) redirect to a loopback port and some do not send
  * `application_type`. Like the MCP SDK (SEP-837), treat a registration whose redirect URIs are all
- * loopback http or custom schemes as a native application (RFC 8252). Mutates `body`; returns true if changed.
+ * loopback http (the exact hosts the authorization server accepts for native clients: localhost,
+ * 127.0.0.1, [::1]) or custom schemes as a native application (RFC 8252). Done here rather than with the
+ * library's "infer" default, whose rules are not documented as a stable contract. Mutates `body`;
+ * returns true if changed.
  */
-/** Largest accepted body for the OAuth and passkey endpoints. */
-export const AUTH_BODY_MAX = 64 * 1024;
-
 export function withNativeApplicationType(body: Record<string, unknown>): boolean {
   if (body.application_type !== undefined) return false;
   const uris = body.redirect_uris;
@@ -198,7 +201,7 @@ export function withNativeApplicationType(body: Record<string, unknown>): boolea
     if (u.protocol === 'https:') return false;
     if (u.protocol !== 'http:') return true;
     const host = u.hostname.replace(/^\[|\]$/g, '');
-    return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+    return host === 'localhost' || host === '::1' || host === '127.0.0.1';
   });
   if (!native) return false;
   body.application_type = 'native';

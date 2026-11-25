@@ -181,6 +181,19 @@ describe('webhook deliveries', () => {
     const r = await postJson(`http://127.0.0.1:${p}/drip`, {}, '{}', { timeoutMs: 500, allowPrivate: true });
     assert.equal(r.status, 200);
     assert.ok(Date.now() - started < 3000, 'did not wait for the endless body');
+    // A large body that keeps coming is cut after its first bytes, long before the deadline.
+    const flood = http.createServer((req, res) => {
+      res.writeHead(200);
+      res.write('y'.repeat(1 << 20));
+    });
+    await new Promise<void>((r) => flood.listen(0, '127.0.0.1', r));
+    const f = (flood.address() as AddressInfo).port;
+    const f0 = Date.now();
+    const fr = await postJson(`http://127.0.0.1:${f}/flood`, {}, '{}', { timeoutMs: 10_000, allowPrivate: true });
+    assert.equal(fr.status, 200);
+    assert.ok(Date.now() - f0 < 2000, 'read only the start of the body');
+    flood.closeAllConnections();
+    flood.close();
     // A receiver that dribbles its headers never trips the idle timeout, but hits the total deadline.
     const slow = net.createServer((sock) => {
       sock.on('error', () => {});

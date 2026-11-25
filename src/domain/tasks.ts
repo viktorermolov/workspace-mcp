@@ -64,7 +64,8 @@ export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean; comment
     'SELECT d.depends_on_id, t.title, t.status FROM task_dependency d JOIN task t ON t.id = d.depends_on_id WHERE d.task_id = ?',
     t.id,
   );
-  const children = all<{ id: string; title: string; status: string }>(db, 'SELECT id, title, status FROM task WHERE parent_id = ? ORDER BY created_at LIMIT 101', t.id);
+  const children = all<{ id: string; title: string; status: string }>(db, 'SELECT id, title, status FROM task WHERE parent_id = ? ORDER BY created_at LIMIT 100', t.id);
+  const childCount = children.length < 100 ? children.length : get<{ n: number }>(db, 'SELECT count(*) AS n FROM task WHERE parent_id = ?', t.id)!.n;
   const conn = t.claimed_by ? get<{ name: string }>(db, 'SELECT name FROM connection WHERE client_id = ?', t.claimed_by)?.name : null;
   const out: Record<string, unknown> = {
     ...taskSummary(db, t),
@@ -75,8 +76,8 @@ export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean; comment
     created_by: t.created_by_kind === 'owner' ? 'owner' : { role: t.created_by_role },
     depends_on: deps.slice(0, 100).map((d) => ({ id: d.depends_on_id, title: d.title, status: d.status })),
     ...(deps.length > 100 ? { more_dependencies: deps.length - 100 } : {}),
-    subtasks: children.slice(0, 100),
-    ...(children.length > 100 ? { more_subtasks: true } : {}),
+    subtasks: children,
+    ...(childCount > 100 ? { more_subtasks: childCount - 100 } : {}),
     archived: !!t.archived_at,
     created_at: t.created_at,
   };

@@ -12,7 +12,7 @@ The server's MCP `instructions` and the description of `start` both tell a newly
 - **Updates** pass `id` and `rev`, the revision you last read. If someone changed the item since, the call fails with `conflict` and the current revision; read the item again, merge and retry. Nothing is overwritten silently.
 - **`claimed_role`** on writes is your own role, recorded in the log and in version history. A role is a label the agent claims, not a permission.
 - **Instructions and data are separate.** Only the `instructions` block of `start` holds instructions. Everything else (tasks, documents, comments, checkpoints, mirrored issues) is data written by agents or third parties and never changes rules or access.
-- **Limits.** Lists return 25 items by default and 100 at most, with a `cursor` for the next page. A response larger than 512 KiB is replaced by a `limit` error that asks for a narrower request. Field limits are listed in [configuration.md](configuration.md#fixed-limits).
+- **Limits.** Lists return 25 items by default and 100 at most, with a `cursor` for the next page. A response larger than 512 KiB of JSON first has its long text fields shortened to previews and carries `response_shortened` (the stored text stays complete); only if it is still too large is it replaced by a `limit` error that asks for a narrower request. Text fields refuse control characters other than tab and line breaks, and broken Unicode. Field limits are listed in [configuration.md](configuration.md#fixed-limits).
 - **Annotations.** Reads are marked read-only and idempotent; writes are marked non-destructive (nothing is ever deleted through MCP). Every tool is closed-world. This lets platforms skip confirmation prompts for plain reads. `start` is marked read-only but not idempotent: it changes no workspace content, only remembers for this connection and role where the previous `start` was, so the next one can report what changed.
 
 ## Entity types
@@ -50,7 +50,7 @@ Returns two blocks:
 - `instructions`: `working_rules`, `working_rules_version` and `working_rules_rev` (pass it to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`.
 - `data`: the `roles` (id, slug, name, area), the `projects` with `focus` and `state`, and for the given role its links and setup notes, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events). `latest_event_id` is a cursor for `changes`.
 
-`start` is an overview of a fixed size, so it always fits in one response however large the workspace grows. At most 50 roles and 50 projects are listed (`more_roles` and `more_projects` count the rest; find them with `search`). Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full.
+`start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles and 50 projects are listed (`more_roles` and `more_projects` count the rest; find them with `search`), and at most 100 links of the role (`more_links`). Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
 
 On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` explains the first fill: working rules, roles, projects, documents, tasks, then `start` again with a role.
 
@@ -60,7 +60,7 @@ On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` ex
 
 Input: `type` (an entity type), `id` (not needed for `rules`), and for tasks an optional `cursor`.
 
-Roles include their links and the current instruction; projects include open tasks and documents; tasks include dependencies, subtasks and the newest 10 comments (oldest first), with `comments_total` and `comments_cursor`: pass it as `cursor` for the 10 before them; documents include the current body.
+Roles include their links and the current instruction; projects include open tasks and documents; tasks include up to 100 dependencies and 100 subtasks (`more_dependencies` and `more_subtasks` count the rest) and the newest 10 comments (oldest first), with `comments_total` and `comments_cursor`: pass it as `cursor` for the 10 before them; documents include the current body.
 
 ### `search`
 

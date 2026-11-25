@@ -1,5 +1,5 @@
 import { all, get, now, run, type DB } from '../db/db.ts';
-import { actorLabel, DomainError, ftsQuery, invalid, LIMITS, notFound, parseEvent, preview, type Actor } from './core.ts';
+import { actorLabel, DomainError, ftsQuery, invalid, LIMITS, MAX_RESPONSE_CHARS, notFound, parseEvent, preview, type Actor } from './core.ts';
 import {
   documentView,
   findProject,
@@ -278,7 +278,7 @@ export const SAFETY_RULE =
 /** Roles and projects listed by start; the rest are counted and found with search. */
 export const START_LIST_MAX = 50;
 
-export function startView(db: DB, actor: Actor, roleRef?: string) {
+export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget?: number } = {}) {
   const memberId = actor.memberId;
   const rules = getRules(db, memberId);
   const roles = listRoles(db, memberId);
@@ -313,7 +313,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string) {
     ).map((t) => taskSummary(db, t));
     const cp = lastCheckpoint(db, memberId, r.id);
     // Long checkpoint parts are shortened; get(type: checkpoint, id) returns them in full.
-    checkpoint = cp ? { ...cp, done: preview(cp.done as string, 4000), stopped_at: preview(cp.stopped_at as string, 4000), next: preview(cp.next as string, 4000) } : null;
+    checkpoint = cp;
   }
 
   // Changes since this connection's previous start call for the same role.
@@ -336,32 +336,55 @@ export function startView(db: DB, actor: Actor, roleRef?: string) {
     now(),
   );
 
-  return {
+  const roleInstruction = role ? (role as { instruction?: string }).instruction || '(this role has no instruction yet)' : undefined;
+  const cpPart = (v: unknown, n: number) => preview(v as string | null, n);
+  // An overview with a fixed size: long fields are previews and long lists are cut, so start fits in
+  // one response. Everything is one get or search away. Text that escapes badly in JSON (many quotes,
+  // newlines or control characters) can still overflow; then the overview shrinks, and as a last
+  // resort the instructions are shortened with an explicit note to read them in full.
+  const build = (pv: number, long: number, instr: number | null) => ({
     instructions: {
-      working_rules: rules.text || '(no working rules yet)',
+      working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text, instr),
       working_rules_version: rules.version,
       working_rules_rev: rules.rev,
       save_state_rule: SAVE_STATE_RULE,
       safety_rule: SAFETY_RULE,
-      ...(role ? { role_instruction: (role as { instruction?: string }).instruction || '(this role has no instruction yet)', role: role.slug } : {}),
+      ...(role ? { role_instruction: instr === null ? roleInstruction : preview(roleInstruction!, instr), role: role.slug } : {}),
+      ...(instr === null
+        ? {}
+        : {
+            instructions_shortened:
+              'The working rules or the role instruction are too long to return in full here. Before working, read them in full with get(type: rules) and get(type: role, id: <role id>), and follow them.',
+          }),
     },
     data: {
       ...out,
-      // An overview with a fixed size: long fields are previews and long lists are cut, so start
-      // always fits in one response. Everything is one get or search away.
-      roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area) })),
+      roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area, pv) })),
       ...(roles.length > START_LIST_MAX ? { more_roles: roles.length - START_LIST_MAX } : {}),
-      projects: projects.slice(0, START_LIST_MAX).map((p) => ({ id: p.id, slug: p.slug, name: p.name, focus: preview(p.focus), state: preview(p.state) })),
+      projects: projects.slice(0, START_LIST_MAX).map((p) => ({ id: p.id, slug: p.slug, name: p.name, focus: preview(p.focus, pv), state: preview(p.state, pv) })),
       ...(projects.length > START_LIST_MAX ? { more_projects: projects.length - START_LIST_MAX } : {}),
       ...(role
         ? {
-            role: { id: role.id, slug: role.slug, name: role.name, area: role.area, links: role.links.slice(0, 100), setup_notes: preview(role.setup_notes, 4000), rev: role.rev },
+            role: { id: role.id, slug: role.slug, name: role.name, area: role.area, links: role.links.slice(0, 100), ...(role.links.length > 100 ? { more_links: role.links.length - 100 } : {}), setup_notes: preview(role.setup_notes, long), rev: role.rev },
             open_tasks: roleTasks,
-            last_checkpoint: checkpoint,
+            last_checkpoint: checkpoint
+              ? { ...(checkpoint as Record<string, unknown>), done: cpPart((checkpoint as Record<string, unknown>).done, long), stopped_at: cpPart((checkpoint as Record<string, unknown>).stopped_at, long), next: cpPart((checkpoint as Record<string, unknown>).next, long) }
+              : null,
           }
         : {}),
       changes_since_previous_start: since,
       latest_event_id: latest,
     },
-  };
+  });
+  const BUDGET = opts.budget ?? MAX_RESPONSE_CHARS - 16 * 1024;
+  const fits = (v: unknown) => JSON.stringify(v, null, 1).length <= BUDGET;
+  let result = build(LIMITS.preview, 4000, null);
+  if (fits(result)) return result;
+  result = build(100, 500, null);
+  if (fits(result)) return result;
+  for (const n of [50_000, 20_000, 5_000, 1_000]) {
+    result = build(100, 500, n);
+    if (fits(result)) return result;
+  }
+  return result;
 }

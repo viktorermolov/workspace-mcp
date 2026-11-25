@@ -211,14 +211,21 @@ export class GithubSync {
   private async doSync(memberId: string): Promise<{ ok: boolean; message: string; issues: number }> {
     const token = this.token(memberId);
     if (!token) return { ok: false, message: 'GitHub is not connected', issues: 0 };
-    const repos = all<{ id: number; full_name: string; last_synced_at: string | null }>(this.db, 'SELECT id, full_name, last_synced_at FROM github_repo WHERE member_id = ?', memberId);
+    const repos = all<{ id: number; full_name: string; last_synced_at: string | null; sync_cursor: string | null }>(
+      this.db,
+      'SELECT id, full_name, last_synced_at, sync_cursor FROM github_repo WHERE member_id = ?',
+      memberId,
+    );
     let count = 0;
     const errors: string[] = [];
     const partial: string[] = [];
     for (const repo of repos) {
       const started = now();
       try {
-        const since = repo.last_synced_at ? `&since=${encodeURIComponent(new Date(Date.parse(repo.last_synced_at) - 60_000).toISOString())}` : '';
+        // A run cut short by the page cap continues exactly from GitHub's own update time. Otherwise the
+        // last run's local start time is used, a minute earlier to absorb clock differences.
+        const from = repo.sync_cursor ?? (repo.last_synced_at ? new Date(Date.parse(repo.last_synced_at) - 60_000).toISOString() : null);
+        const since = from ? `&since=${encodeURIComponent(from)}` : '';
         let next: string | null = `/repos/${repo.full_name}/issues?state=all&per_page=100&sort=updated&direction=asc${since}`;
         const batch: GhIssue[] = [];
         let newest: string | null = null;
@@ -229,13 +236,16 @@ export class GithubSync {
           next = r.next;
         }
         // Issues come oldest update first. When the page cap stops a run early, the next run
-        // continues from the newest update fetched, so nothing is skipped.
-        const capped = !!next;
+        // continues from the newest update fetched (inclusive), so nothing is skipped.
+        const capped = !!next && !!newest;
+        // Every fetched issue has the update time we started from: the cursor cannot move.
+        const stuck = capped && repo.sync_cursor !== null && newest === repo.sync_cursor;
         tx(this.db, () => {
           if (!get(this.db, 'SELECT 1 FROM github_repo WHERE id = ?', repo.id)) return; // removed meanwhile
           for (const i of batch) this.upsertIssue(memberId, repo.id, repo.full_name, i);
-          run(this.db, 'UPDATE github_repo SET last_synced_at = ? WHERE id = ?', capped && newest ? newest : started, repo.id);
+          run(this.db, 'UPDATE github_repo SET last_synced_at = ?, sync_cursor = ? WHERE id = ?', started, capped ? newest : null, repo.id);
         });
+        if (stuck) throw new Error(`more than ${MAX_PAGES * 100} issues share the update time ${newest}, so the sync cannot continue past it`);
         if (capped) partial.push(repo.full_name);
         count += batch.length;
       } catch (e) {

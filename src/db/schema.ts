@@ -263,6 +263,8 @@ CREATE TABLE github_repo (
   project_id TEXT REFERENCES project(id),
   created_at TEXT NOT NULL,
   last_synced_at TEXT,
+  -- Set while a very large repository is synced over several runs: GitHub's update time to continue from.
+  sync_cursor TEXT,
   UNIQUE (member_id, full_name)
 );
 
