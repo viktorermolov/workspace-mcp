@@ -480,7 +480,7 @@ function TaskExtras({ task, onChange }: { task: TaskFull; onChange: () => void }
           <a class="btn btn-quiet" href={`/log?entity_type=task&entity_id=${enc(task.id)}`}>
             History
           </a>
-          <ArchiveControls type="task" id={task.id} archived={task.archived} onDone={onChange} onDeleted={() => navigate('/tasks')} />
+          <ArchiveControls type="task" id={task.id} archived={task.archived} onDone={onChange} onDeleted={() => navigate(lastListUrl)} />
         </div>
       </Card>
       <h2>Comments</h2>
