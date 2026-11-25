@@ -244,8 +244,12 @@ test('navigation fits the screen and the page breaks no content security rule', 
   if (isPhone()) {
     await expect(page.locator('nav.tabbar')).toBeVisible();
     await expect(page.locator('nav.sidebar')).toBeHidden();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    expect(overflow).toBeLessThanOrEqual(1);
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(await overflow()).toBeLessThanOrEqual(1);
+    // The More screen shows long addresses (MCP endpoint, source code); they must wrap, not widen the page.
+    await go('More');
+    await expect(page.getByRole('link', { name: /github\.com/ })).toBeVisible();
+    expect(await overflow()).toBeLessThanOrEqual(1);
   } else {
     await expect(page.locator('nav.sidebar')).toBeVisible();
     await expect(page.locator('nav.tabbar')).toBeHidden();

@@ -90,4 +90,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as desc
 
 Copyright (C) 2026 Viktor Ermolov.
 
-Workspace MCP is free software under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). You may use it for any purpose, including commercially, and change and share it. If you run a modified version as a service for others, you must offer them its source code under the same license; set `SOURCE_URL` to where your source is ([configuration](docs/configuration.md#source-code-agpl)). Third-party dependencies keep their own permissive licenses.
+Workspace MCP is free software under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). You may use it for any purpose, including commercially, and change it. Sharing copies (including container images) or running a modified version as a service for others comes with the license's conditions: among them, you must offer the source code under the same license. For a modified service, set `SOURCE_URL` to where your source is ([configuration](docs/configuration.md#source-code-agpl)). Third-party dependencies keep their own licenses.

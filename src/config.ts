@@ -58,6 +58,8 @@ function sourceUrl(raw: string | undefined): string {
     throw new ConfigError('SOURCE_URL must be an absolute URL');
   }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new ConfigError('SOURCE_URL must be an http or https URL');
+  // The address is public (shown on /healthz), so it must not carry credentials.
+  if (u.username || u.password) throw new ConfigError('SOURCE_URL must not contain a user name or password');
   return u.toString();
 }
 
