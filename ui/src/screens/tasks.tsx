@@ -35,7 +35,7 @@ interface Issue {
 }
 interface Tree {
   tasks: TaskSummary[];
-  dependencies: { task_id: string; depends_on_id: string }[];
+  dependencies: { task_id: string; depends_on_id: string; depends_on_title: string; depends_on_status: string }[];
   issues: Issue[];
 }
 
@@ -44,9 +44,11 @@ export function useChoices() {
   return useData(() => api<{ roles: { slug: string; name: string }[]; projects: { slug: string; name: string }[] }>('/choices'));
 }
 
-function TaskRow({ t, depth, byId, deps }: { t: TaskSummary; depth: number; byId: Map<string, TaskSummary>; deps: Map<string, string[]> }) {
-  const after = (deps.get(t.id) ?? []).map((id) => byId.get(id)).filter(Boolean) as TaskSummary[];
-  const waiting = after.filter((d) => !['done', 'cancelled'].includes(d.status));
+type Dep = { title: string; status: string };
+
+function TaskRow({ t, depth, deps }: { t: TaskSummary; depth: number; deps: Map<string, Dep[]> }) {
+  // Dependencies come with their own title and status, so a filter never hides what a task waits for.
+  const waiting = (deps.get(t.id) ?? []).filter((d) => !['done', 'cancelled'].includes(d.status));
   return (
     <li class={`task depth-${Math.min(depth, 4)}`}>
       <a href={`/tasks/${enc(t.id)}`} class="task-link">
@@ -106,12 +108,17 @@ function IssueRow({ i, roles, onChange }: { i: Issue; roles: { slug: string; nam
   );
 }
 
+/** The task list as last shown (with its filters), so Back from a task returns to the same view. */
+let lastListUrl = '/tasks';
+const listUrl = () => `/tasks${location.search}`;
+
 export function TasksScreen() {
   const q = new URLSearchParams(location.search);
+  lastListUrl = listUrl();
   const [project, setProject] = useState(q.get('project') ?? '');
   const [role, setRole] = useState(q.get('role') ?? '');
   const [status, setStatus] = useState(q.get('status') ?? 'active');
-  const [archived, setArchived] = useState(false);
+  const [archived, setArchived] = useState(q.get('archived') === '1');
   const choices = useChoices();
   const tree = useData(() => {
     const p = new URLSearchParams();
@@ -129,6 +136,7 @@ export function TasksScreen() {
     if (v) p.set(k, v);
     else p.delete(k);
     history.replaceState(null, '', `/tasks${p.size ? `?${p}` : ''}`);
+    lastListUrl = listUrl();
   };
 
   const view = useMemo(() => {
@@ -136,8 +144,8 @@ export function TasksScreen() {
     if (!d) return null;
     const tasks = role === '-' ? d.tasks.filter((t) => !t.role) : d.tasks;
     const byId = new Map(tasks.map((t) => [t.id, t]));
-    const deps = new Map<string, string[]>();
-    for (const x of d.dependencies) deps.set(x.task_id, [...(deps.get(x.task_id) ?? []), x.depends_on_id]);
+    const deps = new Map<string, Dep[]>();
+    for (const x of d.dependencies) deps.set(x.task_id, [...(deps.get(x.task_id) ?? []), { title: x.depends_on_title, status: x.depends_on_status }]);
     const children = new Map<string, TaskSummary[]>();
     const roots: TaskSummary[] = [];
     for (const t of tasks) {
@@ -153,7 +161,7 @@ export function TasksScreen() {
     };
     const seen = new Set<string>();
     for (const r of roots) walk(r, 0, seen);
-    return { rows, byId, deps, issues: role === '-' ? d.issues.filter((i) => !i.role) : d.issues };
+    return { rows, deps, issues: role === '-' ? d.issues.filter((i) => !i.role) : d.issues };
   }, [tree.data, role]);
 
   return (
@@ -193,7 +201,12 @@ export function TasksScreen() {
           ))}
         </select>
         <label class="check">
-          <input type="checkbox" checked={archived} onChange={(e) => setArchived((e.target as HTMLInputElement).checked)} /> archived
+          <input
+            type="checkbox"
+            checked={archived}
+            onChange={(e) => setFilter('archived', (e.target as HTMLInputElement).checked ? '1' : '', (v) => setArchived(v === '1'))}
+          />{' '}
+          archived
         </label>
       </div>
       <Loading error={tree.error} loading={tree.loading && !tree.data}>
@@ -202,7 +215,7 @@ export function TasksScreen() {
             {view.rows.length ? (
               <ul class="tasks">
                 {view.rows.map(({ t, depth }) => (
-                  <TaskRow key={t.id} t={t} depth={depth} byId={view.byId} deps={view.deps} />
+                  <TaskRow key={t.id} t={t} depth={depth} deps={view.deps} />
                 ))}
               </ul>
             ) : (
@@ -257,7 +270,7 @@ export function TaskScreen({ id }: { id: string }) {
   const all = useData(() => api<Tree>('/tasks?archived=0'));
   const t = task.data;
   return (
-    <Page title={isNew ? 'New task' : (t?.title ?? 'Task')} back="/tasks">
+    <Page title={isNew ? 'New task' : (t?.title ?? 'Task')} back={lastListUrl}>
       <Loading error={task.error} loading={task.loading}>
         {(isNew || t) && (
           <TaskForm

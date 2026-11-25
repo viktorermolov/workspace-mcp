@@ -110,6 +110,37 @@ test('owner creates roles, a project and a task', async () => {
   await expect(page.getByText('Draft the intro')).toBeVisible();
 });
 
+test('the task list shows what a task waits for under any filter, and Back keeps the filter', async () => {
+  await page.goto('/tasks/new');
+  await page.getByLabel('Title').fill('Review the intro');
+  await page.getByLabel('Role').selectOption({ label: 'Editor' });
+  await page.getByRole('button', { name: /^(Create|Save)/ }).click();
+  await expect(page.getByRole('heading', { name: 'Review the intro' })).toBeVisible();
+
+  await go('Tasks');
+  await page.getByRole('link', { name: /Draft the intro/ }).click();
+  await page.getByLabel('Depends on').selectOption({ label: 'Review the intro' });
+  const saved = page.waitForResponse((r) => r.url().endsWith('/api/owner/tasks') && r.request().method() === 'POST' && r.ok());
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await saved;
+
+  await go('Tasks');
+  const draft = page.locator('li.task').filter({ has: page.locator('.task-title', { hasText: 'Draft the intro' }) });
+  await expect(draft.getByText('waits for: Review the intro')).toBeVisible();
+  // The task it waits for belongs to another role, so it is outside this filter; the hint stays.
+  await page.getByLabel('Role').selectOption({ label: 'Writer' });
+  await expect(page).toHaveURL(/\/tasks\?role=writer$/);
+  await expect(page.locator('li.task .task-title', { hasText: 'Review the intro' })).toHaveCount(0);
+  await expect(draft.getByText('waits for: Review the intro')).toBeVisible();
+
+  await draft.getByRole('link').click();
+  await expect(page.getByRole('heading', { name: 'Draft the intro' })).toBeVisible();
+  await page.getByRole('link', { name: 'Back', exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks\?role=writer$/);
+  await expect(page.getByLabel('Role')).toHaveValue('writer');
+  await expect(page.locator('li.task .task-title', { hasText: 'Review the intro' })).toHaveCount(0);
+});
+
 test('documents keep versions; compare and restore', async () => {
   await page.goto('/documents/new');
   await page.getByLabel('Title').fill('Style guide');
@@ -237,6 +268,16 @@ test('log shows owner actions and the theme can be switched', async () => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('radio', { name: 'System' }).click();
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
+});
+
+test('a temporary server error while loading shows a message and a way to try again', async () => {
+  await page.route('**/api/owner/me', (r) => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"unavailable","message":"Service is restarting"}' }));
+  await page.goto('/tasks');
+  await expect(page.getByRole('alert')).toContainText('Service is restarting');
+  await page.unroute('**/api/owner/me');
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
+  await expect(page).toHaveURL(/\/tasks$/);
 });
 
 test('navigation fits the screen and the page breaks no content security rule', async () => {
