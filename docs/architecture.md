@@ -115,7 +115,7 @@ The **Changes** screen reads `event` after the owner's last "reviewed" mark and 
 
 ### Webhooks
 
-An event hook queues a delivery for each role subscription that matches, inside the change's transaction. A background loop coalesces events of a subscription for a short window into one request, signs it with HMAC-SHA256 over the timestamp and body, sends it with a timeout, retries with backoff a limited number of times and records every attempt. See [webhooks.md](webhooks.md).
+An event hook queues a delivery for each role subscription that matches, inside the change's transaction. A background loop coalesces events of a subscription for a short window into one request, signs it with HMAC-SHA256 over the timestamp and body, sends it with a total deadline per attempt, retries with backoff a limited number of times and records every attempt. See [webhooks.md](webhooks.md).
 
 ### GitHub mirror
 

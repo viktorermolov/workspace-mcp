@@ -71,13 +71,15 @@ The only way in for platforms is the service's own OAuth 2.1 authorization serve
 - Access tokens are short-lived JWTs signed with a key that better-auth stores encrypted. Refresh tokens are stored only as hashes. A copy of the database does not contain usable tokens.
 - Every MCP request also checks that the token's connection is still approved, so revocation takes effect at once even though access tokens are self-contained.
 - Dynamic registration cannot register `client_credentials` clients: every connection needs the owner's approval on the consent screen.
-- Clients registered dynamically that never complete a connection are removed after `UNUSED_CLIENT_TTL_DAYS`.
+- A registration whose redirects are all loopback (`http://127.0.0.1`, `[::1]` or `localhost`) or custom schemes, and that sends no `application_type`, is registered as a native app, so its loopback redirect may use any port (RFC 8252). Public-host `http` redirects are always refused.
+- Self-registered clients that never complete a connection are removed after `UNUSED_CLIENT_TTL_DAYS`; clients the owner created are kept.
 - **Revoke** on the Connections screen marks the connection revoked and drops its grants in one transaction; every later request with its tokens gets `401`.
 
 ### The owner: passkeys only
 
 - The owner signs in with a passkey (WebAuthn). There is no password and no email sign-in. The same sign-in opens the web interface and the OAuth consent screen.
 - The passkey's relying party is the host name of `PUBLIC_URL`, so a passkey only works on that address. Changing `PUBLIC_URL` invalidates it.
+- User verification is required: the device must confirm the person with a PIN, fingerprint or face, not just a touch. A security key without a PIN cannot be used.
 - The owner session lasts 30 days and is renewed daily while used. Cookies are `Secure` when `PUBLIC_URL` uses `https`.
 - Every owner API call needs the session. Every change must also come from the service's own origin (`Origin`, or `Sec-Fetch-Site: same-origin`), which blocks cross-site request forgery.
 
@@ -116,6 +118,7 @@ The GitHub API base is fixed by configuration (`GITHUB_API_URL`).
 | Token requests | 60 per minute per client address |
 | Passkey sign-in / registration | 20 / 10 per minute per client address |
 | Setup and recovery codes | 10 attempts per minute per client address |
+| OAuth and passkey request body | 64 KiB, including chunked bodies |
 | Owner API body | 2 MiB (import: 100 MB) |
 
 Every input is validated against a schema with length limits ([configuration.md](configuration.md#fixed-limits)). All SQL is parameterised.
@@ -151,7 +154,7 @@ Rate limits are per client address and are kept in memory, so they reset on rest
 | Brute force of the setup or recovery code | 80-bit codes, 30-minute lifetime, one use, 10 attempts per minute | Before first setup, anyone who reads the logs can take the instance. |
 | Theft of the database or a backup | Refresh tokens hashed; the token signing key and secrets encrypted with keys that are not stored | Workspace content is readable in plain text. |
 | Loss of `SECRET_KEY` | Documented; keep a copy in a password manager | Encrypted secrets become unreadable; reconnect GitHub and re-enter webhook values. |
-| A webhook receiver or the GitHub API is slow or down | Timeouts, limited retries with backoff, delivery log, coalescing | None to the workspace. |
+| A webhook receiver or the GitHub API is slow or down | A total deadline per attempt, only the first bytes of a response read, limited retries with backoff, delivery log, coalescing | None to the workspace. |
 | Request floods | Per-address rate limits and size limits | Limits are in memory and per process; use the proxy or tunnel for real DDoS protection. |
 | The host or container is compromised | Out of scope: non-root user, no shell through MCP | Full compromise of the workspace. |
 

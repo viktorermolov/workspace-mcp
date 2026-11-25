@@ -222,6 +222,9 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
       for (const row of rows) {
         const vals: Record<string, unknown> = { ...row };
         if (t.member) vals.member_id = memberId;
+        // Working rules belong to the member, so their versions and log entries point at the
+        // member id, which differs between instances.
+        if ((t.name === 'version' || t.name === 'event') && vals.entity_type === 'rules') vals.entity_id = memberId;
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
         const use = cols.filter((c) => c in vals);
         run(db, `INSERT INTO ${t.name} (${use.join(',')}) VALUES (${use.map(() => '?').join(',')})`, ...use.map((c) => (vals[c] === undefined ? null : vals[c])));

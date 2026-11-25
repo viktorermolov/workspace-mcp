@@ -37,4 +37,4 @@ Every attempt is recorded under **Connections → Diagnostics** in the web inter
 
 ## Claude Code
 
-Claude Code connects as an MCP client from your own computer and uses a loopback redirect on a random port. The server accepts loopback redirects on any port for native clients, as RFC 8252 asks. Add it with `claude mcp add --transport http workspace https://<your address>/mcp` and complete the sign-in in the browser it opens. This path has not been tested against a real Claude Code session.
+Claude Code connects as an MCP client from your own computer and uses a loopback redirect on a random port. The server accepts loopback redirects on any port for native clients, as RFC 8252 asks. A client that registers only loopback or custom-scheme redirects and sends no `application_type` is treated as a native app, as the MCP authorization profile says clients should declare; one that explicitly says `web` keeps the stricter rules. Add it with `claude mcp add --transport http workspace https://<your address>/mcp` and complete the sign-in in the browser it opens. This path has not been tested against a real Claude Code session.

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { type BrowserContext, type CDPSession, expect, type Page, test } from '@playwright/test';
+import { type BrowserContext, type CDPSession, expect, type Page, request, test } from '@playwright/test';
 import { type RunningServer, startServer } from './server.ts';
 
 // One owner, one browser profile with a virtual passkey authenticator, walking through the key flows in order.
@@ -129,7 +129,7 @@ test('documents keep versions; compare and restore', async () => {
   page.once('dialog', (d) => d.accept());
   await page.locator('.versions li').filter({ hasText: 'v1' }).getByRole('button', { name: 'Restore' }).click();
   await expect(page.locator('.versions li').filter({ hasText: 'v3' }).getByText('current')).toBeVisible();
-  await page.getByRole('link', { name: 'Back' }).click();
+  await page.getByRole('link', { name: 'Back', exact: true }).click();
   await expect(page.getByText('No jargon.')).toBeVisible();
 });
 
@@ -142,12 +142,15 @@ test('working rules are edited and versioned', async () => {
 
 /** PKCE authorization request for a client registered through dynamic registration. */
 async function newAuthorization(redirect: string) {
-  const meta = await (await page.request.get('/.well-known/oauth-authorization-server')).json();
-  const reg = await page.request.post(meta.registration_endpoint, {
+  // Discovery and registration come from the platform's server, without the owner's browser cookies.
+  const platform = await request.newContext({ baseURL: server.base });
+  const meta = await (await platform.get('/.well-known/oauth-authorization-server')).json();
+  const reg = await platform.post(meta.registration_endpoint, {
     data: { client_name: 'Test Agent', redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' },
   });
-  expect(reg.ok()).toBeTruthy();
+  expect(reg.ok(), `registration failed: ${reg.status()} ${await reg.text()}`).toBeTruthy();
   const client = await reg.json();
+  await platform.dispose();
   const verifier = randomBytes(32).toString('base64url');
   const u = new URL(meta.authorization_endpoint);
   u.search = new URLSearchParams({

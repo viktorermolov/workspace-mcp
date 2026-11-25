@@ -62,6 +62,14 @@ export async function postJson(url: string, headers: Record<string, string>, bod
   const u = validateWebhookUrl(url, opts.allowPrivate);
   const mod = u.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let answered: (() => void) | undefined;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      fn();
+    };
     const req = mod.request(
       u,
       {
@@ -73,16 +81,29 @@ export async function postJson(url: string, headers: Record<string, string>, bod
       (res) => {
         const chunks: Buffer[] = [];
         let size = 0;
+        const done = (answered = () => finish(() => resolve({ status: res.statusCode ?? 0, snippet: Buffer.concat(chunks).toString('utf8').slice(0, 200) })));
         res.on('data', (c: Buffer) => {
-          if (size < 512) chunks.push(c);
+          chunks.push(c);
           size += c.length;
+          // Only the status and the first bytes matter; stop reading a long or endless body.
+          if (size >= 512) {
+            done();
+            res.destroy();
+          }
         });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, snippet: Buffer.concat(chunks).toString('utf8').slice(0, 200) }));
-        res.on('error', reject);
+        res.on('end', done);
+        res.on('error', (e) => finish(() => reject(e)));
       },
     );
+    // `timeout` above is an idle timeout; this is the deadline for the whole attempt. A receiver
+    // that already answered keeps its status, only the rest of its body is dropped.
+    const deadline = setTimeout(() => {
+      if (answered) answered();
+      else finish(() => reject(new Error(`timed out after ${opts.timeoutMs} ms`)));
+      req.destroy();
+    }, opts.timeoutMs);
     req.on('timeout', () => req.destroy(new Error(`timed out after ${opts.timeoutMs} ms`)));
-    req.on('error', reject);
+    req.on('error', (e) => finish(() => reject(e)));
     req.end(body);
   });
 }

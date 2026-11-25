@@ -116,7 +116,8 @@ export function MapScreen() {
                       </a>
                     </div>
                     {r.area && <p class="muted">{r.area}</p>}
-                    {Object.keys(r.open_tasks).length > 0 && (
+                    {/* The breakdown by status adds nothing when every open task is plain "open": the badge already says it. */}
+                    {Object.keys(r.open_tasks).some((s) => s !== 'open') && (
                       <p class="small">
                         {Object.entries(r.open_tasks)
                           .map(([s, n]) => `${n} ${s.replace('_', ' ')}`)

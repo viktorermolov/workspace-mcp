@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, enc, post } from '../api.ts';
+import { api, enc, post, searchAll } from '../api.ts';
 import { navigate } from '../router.ts';
 import { Alert, ArchiveControls, Badge, Button, Card, Diff, Empty, Field, label, Loading, Page, Prose, STATUS_TONE, Time, useAction, useData, type DiffLine } from '../ui.tsx';
 
@@ -68,7 +68,7 @@ interface RoleFull {
 
 export function RolesScreen() {
   const [archived, setArchived] = useState(false);
-  const list = useData(() => api<{ results: { id: string; title: string; snippet: string; updated_at: string; archived?: boolean }[] }>(`/search?type=role&limit=200${archived ? '&archived=1' : ''}`), [archived]);
+  const list = useData(() => searchAll<{ id: string; title: string; snippet: string; updated_at: string; archived?: boolean }>(`/search?type=role${archived ? '&archived=1' : ''}`), [archived]);
   return (
     <Page
       title="Roles"
@@ -227,8 +227,8 @@ interface ProjectFull {
 
 export function ProjectsScreen() {
   const [archived, setArchived] = useState(false);
-  const list = useData(() => api<{ results: { id: string; title: string; snippet: string; updated_at: string }[] }>(`/search?type=project&limit=200${archived ? '&archived=1' : ''}`), [archived]);
-  const docs = useData(() => api<{ results: { id: string; title: string; snippet: string; updated_at: string }[] }>('/search?type=document&limit=200'));
+  const list = useData(() => searchAll<{ id: string; title: string; snippet: string; updated_at: string }>(`/search?type=project${archived ? '&archived=1' : ''}`), [archived]);
+  const docs = useData(() => searchAll<{ id: string; title: string; snippet: string; updated_at: string }>('/search?type=document'));
   return (
     <Page
       title="Projects and documents"
@@ -673,6 +673,7 @@ interface ChangeItem {
 interface Feed {
   last_review_event_id: number;
   latest_event_id: number;
+  review_up_to: number;
   has_more: boolean;
   items: ChangeItem[];
 }
@@ -707,7 +708,7 @@ export function ChangesScreen({ onReviewed }: { onReviewed?: () => void }) {
   const f = feed.data;
   const markReviewed = () =>
     act.run(async () => {
-      await post('/changes/reviewed', { up_to: f!.latest_event_id });
+      await post('/changes/reviewed', { up_to: f!.review_up_to });
       await feed.reload();
       onReviewed?.();
     });
@@ -760,7 +761,7 @@ export function ChangesScreen({ onReviewed }: { onReviewed?: () => void }) {
       actions={
         f && f.items.length > 0 ? (
           <Button kind="primary" onClick={markReviewed} busy={act.busy}>
-            Mark all reviewed
+            {f.has_more ? 'Mark these reviewed' : 'Mark all reviewed'}
           </Button>
         ) : undefined
       }
@@ -789,7 +790,7 @@ export function ChangesScreen({ onReviewed }: { onReviewed?: () => void }) {
             </ul>
           </>
         )}
-        {f?.has_more && <p class="muted small">More changes exist; mark these reviewed to see the next ones, or open the log.</p>}
+        {f?.has_more && <p class="muted small">These are the oldest unreviewed changes. Mark them reviewed to see the next ones, or open the log.</p>}
       </Loading>
     </Page>
   );

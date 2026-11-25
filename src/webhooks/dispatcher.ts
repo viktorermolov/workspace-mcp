@@ -62,6 +62,8 @@ export class WebhookDispatcher {
   private timer: NodeJS.Timeout | undefined;
   private inflight = new Set<Promise<void>>();
   private busy = false;
+  /** Deliveries whose request is in flight; new events never join them. */
+  private sending = new Set<string>();
   send: Sender;
 
   constructor(db: DB, config: Config, opts: { fetchImpl?: typeof fetch; send?: Sender } = {}) {
@@ -85,14 +87,16 @@ export class WebhookDispatcher {
     for (const h of hooks) {
       if (!(JSON.parse(h.events) as string[]).includes(c.type)) continue;
       const signal = { id: e.id, type: c.type, at: e.at };
+      // Coalesce only into a delivery that is not on the wire: appending to one being sent would
+      // mark events as delivered that the receiver never got.
       const pending = get<{ id: string; events: string }>(
         db,
         "SELECT id, events FROM webhook_delivery WHERE webhook_id = ? AND status = 'pending' AND attempts = 0 ORDER BY created_at DESC LIMIT 1",
         h.id,
       );
-      if (pending) {
-        const evs = JSON.parse(pending.events) as unknown[];
-        if (evs.length < 100) evs.push(signal);
+      const evs = pending && !this.sending.has(pending.id) ? (JSON.parse(pending.events) as unknown[]) : null;
+      if (pending && evs && evs.length < 100) {
+        evs.push(signal);
         run(db, 'UPDATE webhook_delivery SET events = ? WHERE id = ?', JSON.stringify(evs), pending.id);
       } else {
         run(
@@ -176,12 +180,15 @@ export class WebhookDispatcher {
     const attempt = d.attempts + 1;
     let status: number | null = null;
     let error: string | null = null;
+    this.sending.add(d.id);
     try {
       const r = await this.send(h.url, headers, bodyText);
       status = r.status;
       if (r.status < 200 || r.status >= 300) error = `HTTP ${r.status}${r.snippet ? `: ${r.snippet.replace(/\s+/g, ' ').slice(0, 120)}` : ''}`;
     } catch (e) {
       error = errMessage(e).slice(0, 300);
+    } finally {
+      this.sending.delete(d.id);
     }
     if (!error) {
       run(this.db, "UPDATE webhook_delivery SET status = 'delivered', attempts = ?, last_status = ?, last_error = NULL, delivered_at = ? WHERE id = ?", attempt, status, now(), d.id);

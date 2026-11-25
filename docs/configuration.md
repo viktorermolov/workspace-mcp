@@ -29,7 +29,7 @@ Workspace MCP reads its settings from environment variables once, at start. With
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub REST API base. Change it only for GitHub Enterprise Server. |
 | `WEBHOOK_ALLOW_PRIVATE_ADDRESSES` | `false` | Allow webhooks to loopback, private, link-local and other non-public addresses. Keep it off unless the receiver really runs on your own network. |
 | `ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token, `60` to `86400`. Platforms renew it with a refresh token that is replaced on every use; an unused refresh token expires after 60 days. |
-| `UNUSED_CLIENT_TTL_DAYS` | `7` | Dynamically registered OAuth clients that never completed a connection are removed after this many days, `1` to `365`. |
+| `UNUSED_CLIENT_TTL_DAYS` | `7` | Self-registered OAuth clients (dynamic registration or a client metadata document) that never completed a connection are removed after this many days, `1` to `365`. Clients you create under **More → Connections** are kept. |
 | `UI_DIR` | `dist/ui` next to the source (`/app/dist/ui` in the image) | Location of the built web interface. |
 
 ## Compose-only variables
@@ -55,10 +55,12 @@ These are not configurable.
 | Setup and recovery code attempts | 10 per minute per client address; a code is valid for 30 minutes and works once |
 | OAuth client registration | 30 per hour per client address |
 | OAuth token requests | 60 per minute per client address |
+| OAuth and passkey request body | 64 KiB |
 | Owner web API body | 2 MiB (export import: 100 MB) |
 | Titles | 300 characters |
 | Short text (area, focus, blocking reason, version note) | 2,000 characters |
 | Text (task description, result, project state, checkpoint parts) | 50,000 characters |
-| Documents, instructions, working rules, project descriptions | 400,000 characters |
+| Documents and project descriptions | 200,000 characters |
+| Working rules and role instructions (returned together by `start`) | 100,000 characters each |
 | Comments | 20,000 characters |
 | List page size | 25 by default, 100 at most |

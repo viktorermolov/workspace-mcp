@@ -98,10 +98,12 @@ export function createApp(deps: AppDeps) {
   app.on('OPTIONS', '/.well-known/*', () => withCors(new Response(null, { status: 204 })));
 
   // ---------- OAuth server and passkey endpoints ----------
+  // OAuth and WebAuthn requests are small. The limit applies before anything reads the body.
+  app.use('/api/auth/*', bodyLimit({ maxSize: AUTH_BODY_MAX, onError: (c) => c.json({ error: 'invalid_request', error_description: 'Request too large' }, 413, { connection: 'close' }) }));
   app.on(['GET', 'POST', 'OPTIONS'], '/api/auth/*', async (c) => {
     const headers = new Headers(c.req.raw.headers);
     headers.set(CLIENT_IP_HEADER, clientIpOf(c, config.trustProxy));
-    const req = new Request(c.req.raw, { headers });
+    let req = new Request(c.req.raw, { headers });
     const url = new URL(req.url);
     const step = classifyAuthPath(url.pathname);
     let form: URLSearchParams | Record<string, unknown> | null = null;
@@ -113,6 +115,10 @@ export function createApp(deps: AppDeps) {
       } catch {
         form = null;
       }
+    }
+    if (step === 'registration' && form && !(form instanceof URLSearchParams) && withNativeApplicationType(form)) {
+      headers.delete('content-length');
+      req = new Request(req.url, { method: 'POST', headers, body: JSON.stringify(form) });
     }
     const res = await auth.handler(req);
     if (step) await diagAuth(db, step, req, url, form, res);
@@ -137,7 +143,7 @@ export function createApp(deps: AppDeps) {
   app.route('/api/owner', createOwnerApi({ ...deps, clientIp: (c) => clientIpOf(c, config.trustProxy) }));
 
   // ---------- MCP ----------
-  const mcpBody = bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.json({ jsonrpc: '2.0', error: { code: -32600, message: 'Request too large' }, id: null }, 413) });
+  const mcpBody = bodyLimit({ maxSize: 1024 * 1024, onError: (c) => c.json({ jsonrpc: '2.0', error: { code: -32600, message: 'Request too large' }, id: null }, 413, { connection: 'close' }) });
   app.all(
     '/mcp',
     async (c, next) => {
@@ -166,6 +172,37 @@ export function createApp(deps: AppDeps) {
   });
 
   return { app, close: () => mcp.close() };
+}
+
+/**
+ * Dynamic registration defaults `application_type` to "web", which forbids loopback redirects. Clients
+ * that run on the user's machine (Claude Code, IDEs) redirect to a loopback port and some do not send
+ * `application_type`. Like the MCP SDK (SEP-837), treat a registration whose redirect URIs are all
+ * loopback http or custom schemes as a native application (RFC 8252). Mutates `body`; returns true if changed.
+ */
+/** Largest accepted body for the OAuth and passkey endpoints. */
+export const AUTH_BODY_MAX = 64 * 1024;
+
+export function withNativeApplicationType(body: Record<string, unknown>): boolean {
+  if (body.application_type !== undefined) return false;
+  const uris = body.redirect_uris;
+  if (!Array.isArray(uris) || uris.length === 0) return false;
+  const native = uris.every((raw) => {
+    if (typeof raw !== 'string') return false;
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      return false;
+    }
+    if (u.protocol === 'https:') return false;
+    if (u.protocol !== 'http:') return true;
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+  });
+  if (!native) return false;
+  body.application_type = 'native';
+  return true;
 }
 
 function withCors(res: Response): Response {

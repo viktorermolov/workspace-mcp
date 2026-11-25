@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { get } from '../src/db/db.ts';
 import { hmacSha256Hex } from '../src/util/crypto.ts';
@@ -132,6 +132,70 @@ describe('webhook deliveries', () => {
     assert.equal(d.last_status, 500);
     assert.match(d.last_error, /HTTP 500/);
     status = 200;
+  });
+
+  it('does not mark events as delivered that arrived while a request was in flight', async () => {
+    const hook = await owner.json('/api/owner/webhooks', { json: { role: 'lead', url: `http://127.0.0.1:${port}/race`, events: ['task.assigned'] } });
+    const a = (await connectAgent(env, owner, 'Race platform')).client;
+    const realSend = env.svc.webhooks.send;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const sent: string[] = [];
+    env.svc.webhooks.send = async (url, headers, body) => {
+      if (!url.endsWith('/race')) return { status: 200, snippet: '' };
+      sent.push(body);
+      await gate;
+      return { status: 200, snippet: '' };
+    };
+    try {
+      await call(a, 'save_task', { title: 'First', role: 'lead', claimed_role: 'builder' });
+      const ticking = env.svc.webhooks.tick(later(11));
+      // The first request is on the wire; a second assignment arrives now.
+      await new Promise((r) => setTimeout(r, 20));
+      await call(a, 'save_task', { title: 'Second', role: 'lead', claimed_role: 'builder' });
+      release();
+      await ticking;
+      assert.equal(sent.length, 1);
+      assert.equal(JSON.parse(sent[0]!).events.length, 1);
+      const rows = env.svc.db.prepare("SELECT status, events FROM webhook_delivery WHERE webhook_id = ? ORDER BY created_at").all(hook.id) as { status: string; events: string }[];
+      assert.deepEqual(rows.map((r) => [r.status, JSON.parse(r.events).length]), [['delivered', 1], ['pending', 1]], 'the second event waits in its own delivery');
+      await env.svc.webhooks.tick(later(30));
+      assert.equal(sent.length, 2, 'and is sent next');
+    } finally {
+      env.svc.webhooks.send = realSend;
+      await owner.json(`/api/owner/webhooks/${hook.id}`, { method: 'DELETE' });
+      await a.close();
+    }
+  });
+
+  it('bounds each attempt by a total deadline, also for a receiver that answers slowly', async () => {
+    const drip = http.createServer((req, res) => {
+      res.writeHead(200);
+      const t = setInterval(() => res.write('x'), 100);
+      res.on('close', () => clearInterval(t));
+    });
+    await new Promise<void>((r) => drip.listen(0, '127.0.0.1', r));
+    const p = (drip.address() as AddressInfo).port;
+    const started = Date.now();
+    // An endless body is cut at the deadline; the status that already arrived is kept.
+    const r = await postJson(`http://127.0.0.1:${p}/drip`, {}, '{}', { timeoutMs: 500, allowPrivate: true });
+    assert.equal(r.status, 200);
+    assert.ok(Date.now() - started < 3000, 'did not wait for the endless body');
+    // A receiver that dribbles its headers never trips the idle timeout, but hits the total deadline.
+    const slow = net.createServer((sock) => {
+      sock.on('error', () => {});
+      sock.write('HTTP/1.1 200 OK\r\n');
+      const t = setInterval(() => sock.write('X-Slow: 1\r\n'), 100);
+      sock.on('close', () => clearInterval(t));
+    });
+    await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+    const q = (slow.address() as AddressInfo).port;
+    const t0 = Date.now();
+    await assert.rejects(postJson(`http://127.0.0.1:${q}/slow`, {}, '{}', { timeoutMs: 500, allowPrivate: true }), /timed out/);
+    assert.ok(Date.now() - t0 < 3000);
+    drip.closeAllConnections();
+    drip.close();
+    slow.close();
   });
 
   it('refuses private targets unless the operator opts in', async () => {

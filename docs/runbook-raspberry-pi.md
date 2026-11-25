@@ -219,8 +219,9 @@ If instead the log says `The database was upgraded by a newer release`, the upda
 
 ```sh
 docker compose stop workspace
-docker compose run --rm --no-deps workspace cli backups | grep pre-migration | tail -1
-docker compose run --rm --no-deps workspace cli restore <name from the previous line>
+# The list is newest first, so the first pre-migration line is the backup made by this update.
+docker compose run --rm --no-deps workspace cli backups | grep pre-migration | head -n1 | awk '{print $1}'
+docker compose run --rm --no-deps workspace cli restore <name printed by the previous command>
 docker compose up -d workspace
 ```
 

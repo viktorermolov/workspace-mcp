@@ -214,29 +214,38 @@ export class GithubSync {
     const repos = all<{ id: number; full_name: string; last_synced_at: string | null }>(this.db, 'SELECT id, full_name, last_synced_at FROM github_repo WHERE member_id = ?', memberId);
     let count = 0;
     const errors: string[] = [];
+    const partial: string[] = [];
     for (const repo of repos) {
       const started = now();
       try {
         const since = repo.last_synced_at ? `&since=${encodeURIComponent(new Date(Date.parse(repo.last_synced_at) - 60_000).toISOString())}` : '';
         let next: string | null = `/repos/${repo.full_name}/issues?state=all&per_page=100&sort=updated&direction=asc${since}`;
         const batch: GhIssue[] = [];
+        let newest: string | null = null;
         for (let page = 0; next && page < MAX_PAGES; page++) {
           const r: { data: GhIssue[]; next: string | null } = await this.api<GhIssue[]>(token, next);
           batch.push(...r.data.filter((i) => !i.pull_request));
+          for (const i of r.data) if (!newest || i.updated_at > newest) newest = i.updated_at;
           next = r.next;
         }
+        // Issues come oldest update first. When the page cap stops a run early, the next run
+        // continues from the newest update fetched, so nothing is skipped.
+        const capped = !!next;
         tx(this.db, () => {
           if (!get(this.db, 'SELECT 1 FROM github_repo WHERE id = ?', repo.id)) return; // removed meanwhile
           for (const i of batch) this.upsertIssue(memberId, repo.id, repo.full_name, i);
-          run(this.db, 'UPDATE github_repo SET last_synced_at = ? WHERE id = ?', started, repo.id);
+          run(this.db, 'UPDATE github_repo SET last_synced_at = ? WHERE id = ?', capped && newest ? newest : started, repo.id);
         });
+        if (capped) partial.push(repo.full_name);
         count += batch.length;
       } catch (e) {
         errors.push(`${repo.full_name}: ${errMessage(e)}`);
       }
     }
     const ok = errors.length === 0;
-    const message = ok ? `Synced ${repos.length} repositories, ${count} issues changed` : errors.join('; ').slice(0, 1000);
+    const message = ok
+      ? `Synced ${repos.length} repositories, ${count} issues changed${partial.length ? `; not complete yet for ${partial.join(', ')}, the next sync continues` : ''}`
+      : errors.join('; ').slice(0, 1000);
     run(
       this.db,
       'UPDATE github_config SET last_sync_at = ?, last_sync_ok = ?, last_sync_message = ?, last_sync_count = ? WHERE member_id = ?',

@@ -4,7 +4,7 @@ This is done once, after the service is deployed and reachable at its public add
 
 - the public address (`PUBLIC_URL`), for example `https://workspace.example.com`;
 - the one-time setup code, printed in the service log (whoever deployed the service gives it to you);
-- a device that can create a passkey: a phone, or a computer with a password manager, Touch ID, Windows Hello or a security key.
+- a device that can create a passkey: a phone, or a computer with a password manager, Touch ID, Windows Hello or a security key with a PIN. The device must verify you (PIN, fingerprint or face); a plain touch is not enough.
 
 There is no password. You sign in with the passkey, to the web interface and when you approve an AI platform.
 
@@ -53,7 +53,7 @@ For each new platform afterwards, connect it and say: *"This is my workspace, ca
 
 ## 4. Watch what agents change
 
-Agents change the workspace directly, without asking you. The **Changes** tab shows everything changed since your last visit: who, when and exactly what, line by line, with a one-tap rollback. Changes to working rules and role instructions come first, because they change how every later session behaves. **Mark all reviewed** clears the list.
+Agents change the workspace directly, without asking you. The **Changes** tab shows everything changed since your last visit: who, when and exactly what, line by line, with a one-tap rollback. Changes to working rules and role instructions come first, because they change how every later session behaves. **Mark all reviewed** clears the list. After a very busy stretch (more than 200 changes) the screen shows the oldest ones first; marking them reviewed shows the next ones, so nothing is skipped.
 
 ## If you lose your passkey
 

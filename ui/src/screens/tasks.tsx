@@ -235,7 +235,18 @@ interface TaskFull extends TaskSummary {
   depends_on: { id: string; title: string; status: string }[] | string[];
   subtasks: { id: string; title: string; status: string }[];
   created_at: string;
-  comments: { id: string; body: string; actor_kind: string; connection_name: string | null; claimed_role: string | null; created_at: string }[];
+  comments: TaskComment[];
+  comments_total: number;
+  comments_cursor: string | null;
+}
+
+interface TaskComment {
+  id: string;
+  body: string;
+  actor_kind: string;
+  connection_name: string | null;
+  claimed_role: string | null;
+  created_at: string;
 }
 
 export function TaskScreen({ id }: { id: string }) {
@@ -259,7 +270,7 @@ export function TaskScreen({ id }: { id: string }) {
             onSaved={(saved) => (isNew ? navigate(`/tasks/${enc(saved.id)}`, true) : task.reload())}
           />
         )}
-        {t && <TaskExtras task={t} onChange={task.reload} />}
+        {t && <TaskExtras key={`${t.id}-${t.comments_total}`} task={t} onChange={task.reload} />}
       </Loading>
     </Page>
   );
@@ -414,6 +425,9 @@ function TaskForm({
 function TaskExtras({ task, onChange }: { task: TaskFull; onChange: () => void }) {
   const [comment, setComment] = useState('');
   const act = useAction();
+  const older = useAction();
+  const [earlier, setEarlier] = useState<TaskComment[]>([]);
+  const [cursor, setCursor] = useState<string | null>(task.comments_cursor);
   return (
     <>
       <Card>
@@ -458,8 +472,24 @@ function TaskExtras({ task, onChange }: { task: TaskFull; onChange: () => void }
       </Card>
       <h2>Comments</h2>
       {task.comments.length === 0 && <Empty>No comments yet.</Empty>}
+      {cursor && (
+        <Button
+          kind="quiet"
+          busy={older.busy}
+          onClick={() =>
+            void older.run(async () => {
+              const page = await api<TaskFull>(`/entity/task/${enc(task.id)}?cursor=${enc(cursor)}`);
+              setEarlier([...page.comments, ...earlier]);
+              setCursor(page.comments_cursor);
+            })
+          }
+        >
+          Show older comments ({task.comments_total - task.comments.length - earlier.length})
+        </Button>
+      )}
+      {older.error && <Alert>{older.error}</Alert>}
       <ul class="comments">
-        {task.comments.map((c) => (
+        {[...earlier, ...task.comments].map((c) => (
           <li key={c.id}>
             <div class="small muted">
               {c.actor_kind === 'owner' ? 'You' : (c.connection_name ?? 'agent')}

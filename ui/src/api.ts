@@ -42,6 +42,19 @@ export async function api<T = any>(path: string, init: Init = {}): Promise<T> {
   return (text ? JSON.parse(text) : null) as T;
 }
 
+/** Reads every page of a search listing (pages of 100, at most 20 pages). */
+export async function searchAll<T = any>(path: string): Promise<{ results: T[] }> {
+  const results: T[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 20; page++) {
+    const r: { results: T[]; next_cursor: string | null } = await api(`${path}${path.includes('?') ? '&' : '?'}limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    results.push(...r.results);
+    cursor = r.next_cursor;
+    if (!cursor) break;
+  }
+  return { results };
+}
+
 export const post = <T = any>(path: string, json: unknown = {}) => api<T>(path, { method: 'POST', json });
 export const del = <T = any>(path: string) => api<T>(path, { method: 'DELETE' });
 

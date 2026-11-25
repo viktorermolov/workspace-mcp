@@ -27,14 +27,17 @@ export function hasOwner(db: DB): boolean {
   return ownerUserId(db) !== null;
 }
 
-/** Issues a fresh code (older unused codes of the same purpose are invalidated). */
-export function issueCode(db: DB, purpose: CodePurpose): { code: string; expiresAt: string } {
+/**
+ * Issues a fresh code. By default older unused codes of the same purpose stop working; the code
+ * printed at start keeps them, so a code issued with the CLI just before a start stays valid.
+ */
+export function issueCode(db: DB, purpose: CodePurpose, opts: { keepOthers?: boolean } = {}): { code: string; expiresAt: string } {
   if (purpose === 'setup' && hasOwner(db)) throw new Error('The owner already exists; use a recovery code instead.');
   if (purpose === 'recovery' && !hasOwner(db)) throw new Error('No owner exists yet; open the web UI and use the setup code from the server log.');
   const code = oneTimeCode();
   const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60_000).toISOString();
   tx(db, () => {
-    run(db, 'UPDATE setup_code SET used_at = ? WHERE purpose = ? AND used_at IS NULL', now(), purpose);
+    if (!opts.keepOthers) run(db, 'UPDATE setup_code SET used_at = ? WHERE purpose = ? AND used_at IS NULL', now(), purpose);
     run(db, 'INSERT INTO setup_code (purpose, code_hash, created_at, expires_at) VALUES (?,?,?,?)', purpose, sha256(normalizeCode(code)), now(), expiresAt);
   });
   return { code, expiresAt };

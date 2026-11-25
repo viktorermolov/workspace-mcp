@@ -48,12 +48,24 @@ export const LIMITS = {
   title: 300,
   shortText: 2000,
   text: 50_000,
-  document: 400_000,
+  /** Documents and project descriptions. Kept well under the 512 KiB response limit, also after JSON escaping. */
+  document: 200_000,
+  /** Working rules and role instructions: both are returned together by `start`. */
+  instruction: 100_000,
   comment: 20_000,
   listMax: 100,
   listDefault: 25,
-  responseChars: 60_000,
+  /** Length of previews of long fields in `start`; the full text is one `get` away. */
+  preview: 500,
+  /** Comments per page in `get(task)`. */
+  commentPage: 10,
 };
+
+/** Shortens a long field for an overview. */
+export function preview(text: string | null | undefined, max: number = LIMITS.preview): string | null {
+  if (text == null) return null;
+  return text.length > max ? `${text.slice(0, max)}… (${text.length - max} more characters, use get for the full text)` : text;
+}
 
 export function checkLen(field: string, value: string | undefined | null, max: number): void {
   if (value != null && value.length > max) throw new DomainError('limit', `${field} is too long (${value.length} > ${max} characters)`);

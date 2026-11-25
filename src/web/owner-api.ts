@@ -41,8 +41,8 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   const api = new Hono<Env>();
   const origin = new URL(config.publicUrl).origin;
 
-  const smallBody = bodyLimit({ maxSize: 2 * 1024 * 1024, onError: (c) => c.json({ error: 'limit', message: 'Request too large' }, 413) });
-  const importBody = bodyLimit({ maxSize: MAX_IMPORT_BYTES, onError: (c) => c.json({ error: 'limit', message: 'Export file is larger than 100 MB' }, 413) });
+  const smallBody = bodyLimit({ maxSize: 2 * 1024 * 1024, onError: (c) => c.json({ error: 'limit', message: 'Request too large' }, 413, { connection: 'close' }) });
+  const importBody = bodyLimit({ maxSize: MAX_IMPORT_BYTES, onError: (c) => c.json({ error: 'limit', message: 'Export file is larger than 100 MB' }, 413, { connection: 'close' }) });
   api.use('*', (c, next) => (c.req.path.endsWith('/import') ? importBody(c, next) : smallBody(c, next)));
 
   // Session + CSRF: every call needs the owner's session cookie; mutations must come from our own origin.
@@ -195,7 +195,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.get('/entity/:type/:id?', (c) => {
     const type = c.req.param('type') as EntityType;
     if (!ENTITY_TYPES.includes(type)) throw new DomainError('invalid', 'unknown type');
-    return c.json(getEntity(db, actor(c).memberId, type, c.req.param('id')));
+    return c.json(getEntity(db, actor(c).memberId, type, c.req.param('id'), { cursor: c.req.query('cursor') || undefined }));
   });
   api.get('/search', (c) =>
     c.json(

@@ -72,6 +72,9 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string): M
       description:
         'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open tasks, last checkpoint and changes since your previous start. On an empty workspace it explains how to fill it.',
       inputSchema: z.object({ role: z.string().max(200).optional().describe('Your role slug or id, if you have one.') }),
+      // Read-only for the workspace: the only write is this connection's "previous start" marker,
+      // which changes no content. Marking start as a write would make platforms ask the owner to
+      // confirm the first call of every session.
       annotations: { ...READ, idempotentHint: false, title: 'Start here' },
     },
     wrap(({ role }) => startView(db, act(role), role)),
@@ -81,11 +84,12 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string): M
     'get',
     {
       title: 'Get by id',
-      description: 'Fetch one item by id (roles and projects also by slug). type "rules" needs no id. Tasks include comments; projects include open tasks and documents.',
-      inputSchema: z.object({ type: z.enum(ENTITY_TYPES), id: id.optional() }),
+      description:
+        'Fetch one item by id (roles and projects also by slug). type "rules" needs no id. Tasks include the newest comments; pass comments_cursor as cursor for older ones. Projects include open tasks and documents.',
+      inputSchema: z.object({ type: z.enum(ENTITY_TYPES), id: id.optional(), cursor: z.string().max(100).optional().describe('For tasks: comments_cursor from a previous get, to page to older comments.') }),
       annotations: READ,
     },
-    wrap(({ type, id: ref }) => getEntity(db, actorOf().memberId, type, ref)),
+    wrap(({ type, id: ref, cursor }) => getEntity(db, actorOf().memberId, type, ref, { cursor })),
   );
 
   server.registerTool(
@@ -119,7 +123,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string): M
         name: z.string().max(LIMITS.title).optional(),
         slug: z.string().max(100).optional(),
         area: z.string().max(LIMITS.shortText).optional().describe('Area of responsibility.'),
-        instruction: z.string().max(LIMITS.document).optional(),
+        instruction: z.string().max(LIMITS.instruction).optional(),
         setup_notes: z.string().max(LIMITS.text).optional().describe('What a new platform must recreate by hand: schedules, connectors, wake-up triggers.'),
         links: z.array(z.object({ to: id, type: z.string().min(1).max(100) })).max(50).optional(),
         note: note.optional(),
@@ -179,8 +183,8 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string): M
     'update_rules',
     {
       title: 'Update the working rules',
-      description: 'Replace the working rules shared by all roles and platforms. Pass the rev from start or get(rules). Creates a new version.',
-      inputSchema: z.object({ text: z.string().max(LIMITS.document), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
+      description: 'Replace the working rules shared by all roles and platforms. Pass working_rules_rev from start, or rev from get(rules). Creates a new version.',
+      inputSchema: z.object({ text: z.string().max(LIMITS.instruction), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
       annotations: WRITE_IDEMPOTENT,
     },
     wrap(({ claimed_role, ...input }) => updateRules(db, act(claimed_role), input)),

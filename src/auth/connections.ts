@@ -148,10 +148,17 @@ function toMillis(v: unknown): number {
   return Number.isNaN(n) ? Number(v) : n;
 }
 
-/** Deletes clients that were registered but never approved within `days`. Approved clients are kept. */
+/**
+ * Deletes self-registered clients (dynamic registration, or a cached metadata document that is
+ * fetched again on the next attempt) that were never approved within `days`. Approved clients and
+ * clients the owner created in the web interface are kept.
+ */
 export function expireUnusedClients(db: DB, days: number): number {
   const cutoff = Date.now() - days * 86_400_000;
-  const rows = all<{ id: string; clientId: string; createdAt: unknown }>(db, 'SELECT id, clientId, createdAt FROM oauthClient WHERE clientId NOT IN (SELECT client_id FROM connection)');
+  const rows = all<{ id: string; clientId: string; createdAt: unknown }>(
+    db,
+    'SELECT id, clientId, createdAt FROM oauthClient WHERE userId IS NULL AND clientId NOT IN (SELECT client_id FROM connection)',
+  );
   let n = 0;
   for (const r of rows) {
     if (toMillis(r.createdAt) >= cutoff) continue;

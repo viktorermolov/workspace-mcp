@@ -56,7 +56,7 @@ export function getRules(db: DB, memberId: string) {
 }
 
 export function updateRules(db: DB, actor: Actor, input: { text: string; rev?: number; note?: string }) {
-  checkLen('text', input.text, LIMITS.document);
+  checkLen('text', input.text, LIMITS.instruction);
   return tx(db, () => {
     const r = getRules(db, actor.memberId);
     // The first text needs no rev (there is nothing to overwrite); every later change does.
@@ -171,7 +171,7 @@ export function indexRole(db: DB, r: RoleRow): void {
 export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
   checkLen('name', input.name, LIMITS.title);
   checkLen('area', input.area, LIMITS.shortText);
-  checkLen('instruction', input.instruction, LIMITS.document);
+  checkLen('instruction', input.instruction, LIMITS.instruction);
   checkLen('setup_notes', input.setup_notes, LIMITS.text);
   if (input.slug !== undefined && !/^[a-z0-9][a-z0-9-]{0,59}$/.test(input.slug)) throw invalid('slug must be lowercase letters, digits and dashes (max 60)');
   return tx(db, () => {

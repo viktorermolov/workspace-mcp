@@ -135,6 +135,10 @@ describe('data safety', () => {
     assert.equal(s.instructions.role_instruction, 'Draft and edit posts.');
     const versions = await call(agent.client, 'versions', { type: 'role', id: 'writer' });
     assert.equal(versions.versions.length, 2, 'history survives the move');
+    const rulesHistory = await call(agent.client, 'versions', { type: 'rules' });
+    assert.equal(rulesHistory.versions.length, 1, 'working rules history survives the move');
+    const rulesUpdate = await call(agent.client, 'update_rules', { text: 'Be brief and kind.', rev: s.instructions.working_rules_rev });
+    assert.equal(rulesUpdate.version, 2, 'the next rules version continues the history');
     const hit = await call(agent.client, 'search', { query: 'short sentences' });
     assert.ok(hit.results.length >= 1, 'search index rebuilt');
     const publish = s.data.open_tasks.find((t: any) => t.title === 'Publish');

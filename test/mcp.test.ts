@@ -53,6 +53,74 @@ describe('MCP behaviour', () => {
     await b.close();
   });
 
+  it('lets a second platform continue the task of the first one from its checkpoint, also after the first is revoked', async () => {
+    // SPEC section 12, the main scenario end to end.
+    const a = (await connectAgent(env, owner, 'Handover platform A')).client;
+    await call(a, 'save_role', { name: 'Writer', slug: 'writer', instruction: 'Write the docs.' });
+    await call(a, 'save_project', { name: 'Docs', slug: 'docs' });
+    const t = await call(a, 'save_task', { title: 'Write the install guide', role: 'writer', project: 'docs' });
+    const claimed = await call(a, 'claim_task', { id: t.id, role: 'writer' });
+    const half = await call(a, 'save_task', { id: t.id, rev: claimed.rev, status: 'in_progress', result: 'Prerequisites section drafted.', claimed_role: 'writer' });
+    await call(a, 'checkpoint', { role: 'writer', project: 'docs', done: 'Drafted prerequisites.', stopped_at: 'Before the Docker section.', next: 'Write the Docker section, then review.' });
+
+    const conns = await owner.json('/api/owner/connections');
+    const aId = conns.connections.find((c: any) => c.name === 'Handover platform A').client_id;
+    await owner.json(`/api/owner/connections/${encodeURIComponent(aId)}/revoke`, { method: 'POST', json: {} });
+    await assert.rejects(call(a, 'start'), 'the revoked platform is cut off');
+
+    const b = (await connectAgent(env, owner, 'Handover platform B')).client;
+    const s = await call(b, 'start', { role: 'writer' });
+    assert.equal(s.data.last_checkpoint.next, 'Write the Docker section, then review.');
+    const open = s.data.open_tasks.find((x: any) => x.id === t.id);
+    assert.equal(open.status, 'in_progress');
+    const full = await call(b, 'get', { type: 'task', id: t.id });
+    assert.equal(full.result, 'Prerequisites section drafted.');
+    const done = await call(b, 'save_task', { id: t.id, rev: full.rev, status: 'done', result: 'Install guide written.', claimed_role: 'writer' });
+    assert.equal(done.status, 'done');
+    assert.ok(half.rev < done.rev);
+    await call(b, 'checkpoint', { role: 'writer', project: 'docs', done: 'Finished the install guide.', stopped_at: 'Done.', next: 'Nothing open.' });
+    assert.equal((await call(b, 'start', { role: 'writer' })).data.last_checkpoint.done, 'Finished the install guide.');
+    await b.close();
+  });
+
+  it('keeps start within one response however large the workspace is, and pages task comments', async () => {
+    const big = await startService();
+    try {
+      const o = (await registerOwner(big)).browser;
+      const a = (await connectAgent(big, o, 'Large workspace')).client;
+      const long = (n: number) => 'Line of text.\n'.repeat(Math.ceil(n / 14)).slice(0, n);
+      await call(a, 'update_rules', { text: long(100_000) });
+      await call(a, 'save_role', { name: 'Heavy', slug: 'heavy', area: long(2000), instruction: long(100_000), setup_notes: long(50_000) });
+      for (let i = 0; i < 60; i++) await call(a, 'save_project', { name: `Project ${i}`, slug: `p-${i}`, focus: long(2000), state: long(50_000) });
+      await call(a, 'checkpoint', { role: 'heavy', done: long(50_000), stopped_at: long(50_000), next: long(50_000) });
+      const t = await call(a, 'save_task', { title: 'Busy task', role: 'heavy', description: long(50_000), result: long(50_000) });
+      for (let i = 0; i < 25; i++) await call(a, 'comment_task', { id: t.id, body: `Comment ${i} ${long(19_900)}` });
+
+      const s = await call(a, 'start', { role: 'heavy' });
+      assert.equal(s.instructions.working_rules.length, 100_000, 'instructions are never cut');
+      assert.equal(s.instructions.role_instruction.length, 100_000);
+      assert.equal(s.data.projects.length, 50);
+      assert.equal(s.data.more_projects, 10);
+      assert.match(s.data.projects[0].state, /more characters, use get/);
+      assert.match(s.data.last_checkpoint.next, /more characters/);
+      const cp = await call(a, 'get', { type: 'checkpoint', id: s.data.last_checkpoint.id });
+      assert.equal(cp.next.length, 50_000, 'the full checkpoint is one get away');
+
+      const g1 = await call(a, 'get', { type: 'task', id: t.id });
+      assert.equal(g1.comments.length, 10);
+      assert.equal(g1.comments_total, 25);
+      assert.match(g1.comments[9].body, /^Comment 24 /, 'newest page, oldest first');
+      const g2 = await call(a, 'get', { type: 'task', id: t.id, cursor: g1.comments_cursor });
+      assert.match(g2.comments[0].body, /^Comment 5 /);
+      const g3 = await call(a, 'get', { type: 'task', id: t.id, cursor: g2.comments_cursor });
+      assert.equal(g3.comments.length, 5);
+      assert.equal(g3.comments_cursor, null);
+      await a.close();
+    } finally {
+      await big.close();
+    }
+  });
+
   it('shows changes since the previous start and keeps checkpoints per role', async () => {
     const a = (await connectAgent(env, owner, 'Platform C')).client;
     await call(a, 'start', { role: 'dev' });

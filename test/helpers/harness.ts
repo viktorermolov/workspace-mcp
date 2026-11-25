@@ -37,7 +37,7 @@ export interface TestEnv {
 }
 
 export async function startService(
-  opts: { dataDir?: string; env?: Record<string, string>; cimdFetch?: ClientMetadataResourceFetch; fetchImpl?: typeof fetch; jobs?: boolean; port?: number } = {},
+  opts: { dataDir?: string; env?: Record<string, string>; cimdFetch?: ClientMetadataResourceFetch; fetchImpl?: typeof fetch; jobs?: boolean; port?: number; announceSetupCode?: boolean } = {},
 ): Promise<TestEnv> {
   const port = opts.port ?? (await freePort());
   const dataDir = opts.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'wsmcp-test-'));
@@ -52,7 +52,7 @@ export async function startService(
     ...opts.env,
   });
   setLogLevel(config.logLevel);
-  const svc = await createService(config, { jobs: opts.jobs ?? false, announceSetupCode: false, cimdFetch: opts.cimdFetch, fetchImpl: opts.fetchImpl });
+  const svc = await createService(config, { jobs: opts.jobs ?? false, announceSetupCode: opts.announceSetupCode ?? false, cimdFetch: opts.cimdFetch, fetchImpl: opts.fetchImpl });
   await svc.listen();
   return {
     svc,

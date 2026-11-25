@@ -106,7 +106,8 @@ export function createAuth({ config, db, cimdFetch }: AuthDeps) {
         rpID,
         rpName: 'Workspace MCP',
         origin: config.publicUrl,
-        authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+        // The passkey is the only factor for the owner account, so the device must verify the person (PIN or biometrics).
+        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
         registration: {
           requireSession: false,
           resolveUser: ({ context }) => resolveRegistrationUser(db, config, context),

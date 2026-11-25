@@ -58,13 +58,13 @@ export function taskSummary(db: DB, t: TaskRow) {
   };
 }
 
-export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean } = {}) {
+export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean; commentsBefore?: string } = {}) {
   const deps = all<{ depends_on_id: string; title: string; status: string }>(
     db,
     'SELECT d.depends_on_id, t.title, t.status FROM task_dependency d JOIN task t ON t.id = d.depends_on_id WHERE d.task_id = ?',
     t.id,
   );
-  const children = all<{ id: string; title: string; status: string }>(db, 'SELECT id, title, status FROM task WHERE parent_id = ? ORDER BY created_at', t.id);
+  const children = all<{ id: string; title: string; status: string }>(db, 'SELECT id, title, status FROM task WHERE parent_id = ? ORDER BY created_at LIMIT 101', t.id);
   const conn = t.claimed_by ? get<{ name: string }>(db, 'SELECT name FROM connection WHERE client_id = ?', t.claimed_by)?.name : null;
   const out: Record<string, unknown> = {
     ...taskSummary(db, t),
@@ -73,19 +73,34 @@ export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean } = {}) 
     blocking_reason: t.blocking_reason,
     claimed_by: t.claimed_by ? { connection: conn ?? t.claimed_by, role: t.claimed_role } : null,
     created_by: t.created_by_kind === 'owner' ? 'owner' : { role: t.created_by_role },
-    depends_on: deps.map((d) => ({ id: d.depends_on_id, title: d.title, status: d.status })),
-    subtasks: children,
+    depends_on: deps.slice(0, 100).map((d) => ({ id: d.depends_on_id, title: d.title, status: d.status })),
+    ...(deps.length > 100 ? { more_dependencies: deps.length - 100 } : {}),
+    subtasks: children.slice(0, 100),
+    ...(children.length > 100 ? { more_subtasks: true } : {}),
     archived: !!t.archived_at,
     created_at: t.created_at,
   };
   if (opts.comments) {
-    out.comments = all(
+    // The newest page of comments, oldest first within the page; `comments_cursor` pages back.
+    const before = opts.commentsBefore ? decodeCommentCursor(opts.commentsBefore) : null;
+    const page = all<{ id: string; rowid: number; body: string; actor_kind: string; connection_name: string | null; claimed_role: string | null; created_at: string }>(
       db,
-      'SELECT id, body, actor_kind, connection_name, claimed_role, created_at FROM task_comment WHERE task_id = ? ORDER BY created_at LIMIT 200',
-      t.id,
+      `SELECT rowid, id, body, actor_kind, connection_name, claimed_role, created_at FROM task_comment WHERE task_id = ? ${before ? 'AND rowid < ?' : ''} ORDER BY rowid DESC LIMIT ?`,
+      ...(before ? [t.id, before, LIMITS.commentPage + 1] : [t.id, LIMITS.commentPage + 1]),
     );
+    const more = page.length > LIMITS.commentPage;
+    const shown = page.slice(0, LIMITS.commentPage).reverse();
+    out.comments = shown.map(({ rowid: _r, ...c }) => c);
+    out.comments_total = get<{ n: number }>(db, 'SELECT count(*) AS n FROM task_comment WHERE task_id = ?', t.id)!.n;
+    out.comments_cursor = more ? `c${shown[0]!.rowid}` : null;
   }
   return out;
+}
+
+function decodeCommentCursor(c: string): number {
+  const n = /^c(\d+)$/.exec(c);
+  if (!n) throw invalid('cursor is not a comments cursor from get(task)');
+  return Number(n[1]);
 }
 
 function assertNoParentCycle(db: DB, taskId: string, parentId: string): void {

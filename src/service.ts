@@ -153,7 +153,7 @@ function hasData(db: DB): boolean {
 }
 
 export function announceSetupCode(db: DB, config: Config): string {
-  const { code, expiresAt } = issueCode(db, 'setup');
+  const { code, expiresAt } = issueCode(db, 'setup', { keepOthers: true });
   const lines = [
     '',
     '================================================================',

@@ -44,6 +44,20 @@ describe('administration CLI', () => {
     assert.equal(cli(dir, 'nonsense').code, 1);
   });
 
+  it('issues a setup code that still works after the service starts and prints its own', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsmcp-cli-'));
+    const setup = cli(dir, 'setup-code');
+    assert.equal(setup.code, 0, setup.err);
+    const code = /\n {4}(\S+)/.exec(setup.out)![1]!;
+    const env = await startService({ dataDir: dir, announceSetupCode: true });
+    try {
+      const r = await fetch(`${env.base}/api/setup/verify`, { method: 'POST', headers: { 'content-type': 'application/json', origin: env.base }, body: JSON.stringify({ code }) });
+      assert.equal(r.status, 200, await r.clone().text());
+    } finally {
+      await env.close();
+    }
+  });
+
   it('refuses to touch the database while the service runs', async () => {
     const env = await startService();
     try {

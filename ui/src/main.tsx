@@ -120,7 +120,7 @@ function Shell({ path }: { path: string }) {
           </a>
         ))}
         <a href="/more" class={path === '/more' ? 'on' : ''}>
-          Settings
+          More
         </a>
       </nav>
       <main id="main" class="main">

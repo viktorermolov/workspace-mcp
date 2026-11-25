@@ -105,3 +105,51 @@ describe('GitHub issues (read-only mirror)', () => {
     assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_config')!.n, 0);
   });
 });
+
+describe('GitHub mirror of a large repository', () => {
+  it('continues after the page cap instead of skipping issues', async () => {
+    // 2,150 issues, more than one run reads (20 pages of 100).
+    const many = Array.from({ length: 2150 }, (_, k) => ({
+      number: k + 1,
+      title: `Issue ${k + 1}`,
+      body: '',
+      state: 'open' as const,
+      updated_at: new Date(Date.UTC(2026, 0, 1) + k * 3_600_000).toISOString(),
+    }));
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input instanceof Request ? input.url : input));
+      const p = url.pathname.replace('/api', '');
+      if (new Headers(init?.headers).get('authorization') !== `Bearer ${TOKEN}`) return Response.json({}, { status: 401 });
+      if (p === '/user') return Response.json({ login: 'octo-tester' });
+      if (p === '/repos/example/big') return Response.json({ full_name: 'example/big' });
+      if (p === '/repos/example/big/issues') {
+        const since = url.searchParams.get('since');
+        const page = Number(url.searchParams.get('page') ?? '1');
+        const list = many.filter((i) => !since || i.updated_at >= since);
+        const slice = list.slice((page - 1) * 100, page * 100).map((i) => ({ ...i, html_url: `https://github.test/example/big/issues/${i.number}`, labels: [], created_at: i.updated_at, closed_at: null }));
+        const headers = new Headers();
+        if (page * 100 < list.length) {
+          const n = new URL(url);
+          n.searchParams.set('page', String(page + 1));
+          headers.set('link', `<${n.toString()}>; rel="next"`);
+        }
+        return Response.json(slice, { headers });
+      }
+      return Response.json({ message: 'Not Found' }, { status: 404 });
+    };
+    const env = await startService({ env: { GITHUB_API_URL: API }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      const owner = (await registerOwner(env)).browser;
+      await owner.json('/api/owner/github/token', { json: { token: TOKEN } });
+      await owner.json('/api/owner/github/repos', { json: { full_name: 'example/big' } });
+      const first = await owner.json('/api/owner/github/sync', { method: 'POST', json: {} });
+      assert.match(first.message, /not complete yet for example\/big/);
+      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_issue')!.n, 2000);
+      const second = await owner.json('/api/owner/github/sync', { method: 'POST', json: {} });
+      assert.doesNotMatch(second.message, /not complete/);
+      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM github_issue')!.n, 2150, 'every issue arrives');
+    } finally {
+      await env.close();
+    }
+  });
+});

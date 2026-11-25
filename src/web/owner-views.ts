@@ -112,14 +112,16 @@ const VERSIONED_ACTIONS: Record<string, VersionedType> = {
 };
 
 /**
- * Changes since the owner's last review, newest first, with line diffs for versioned text.
- * Edits to working rules and role instructions come first: they change every later session.
+ * Changes since the owner's last review, with line diffs for versioned text. The feed takes the
+ * oldest unreviewed changes first, so marking a page reviewed never skips one the owner has not
+ * seen; within a page, edits to working rules and role instructions come first (they change every
+ * later session), then newest first.
  */
 export function changeFeed(db: DB, memberId: string, limit = 200) {
   const m = get<{ last_review_event_id: number }>(db, 'SELECT last_review_event_id FROM member WHERE id = ?', memberId)!;
   const rows = all<Record<string, unknown>>(
     db,
-    "SELECT * FROM event WHERE member_id = ? AND id > ? AND actor_kind <> 'owner' ORDER BY id DESC LIMIT ?",
+    "SELECT * FROM event WHERE member_id = ? AND id > ? AND actor_kind <> 'owner' ORDER BY id LIMIT ?",
     memberId,
     m.last_review_event_id,
     limit + 1,
@@ -157,6 +159,9 @@ export function changeFeed(db: DB, memberId: string, limit = 200) {
       diff,
     };
   });
+  // "Mark reviewed" covers exactly what is shown: up to the newest shown change while older ones
+  // remain hidden, otherwise everything (including the owner's own events).
+  const reviewUpTo = more ? Math.max(...items.map((i) => i.id)) : latest;
   items.sort((a, b) => Number(b.critical) - Number(a.critical) || b.id - a.id);
-  return { last_review_event_id: m.last_review_event_id, latest_event_id: latest, has_more: more, items };
+  return { last_review_event_id: m.last_review_event_id, latest_event_id: latest, review_up_to: reviewUpTo, has_more: more, items };
 }

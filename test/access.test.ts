@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { expireUnusedClients } from '../src/auth/connections.ts';
 import { issueCode } from '../src/auth/setup.ts';
-import { get } from '../src/db/db.ts';
+import { get, run } from '../src/db/db.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService, TestOAuthProvider, type TestEnv } from './helpers/harness.ts';
 import { SoftAuthenticator } from './helpers/webauthn.ts';
 
@@ -140,6 +141,25 @@ describe('access control', () => {
     }
   });
 
+  it('registers local clients with a loopback callback as native apps, also without application_type', async () => {
+    const as = await (await fetch(`${env.base}/.well-known/oauth-authorization-server`)).json();
+    const register = (body: Record<string, unknown>) =>
+      fetch(as.registration_endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ client_name: 'Local client', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', ...body }),
+      });
+    for (const uri of ['http://127.0.0.1:53682/callback', 'http://localhost:33418/callback', 'http://[::1]:8976/cb']) {
+      const r = await register({ redirect_uris: [uri] });
+      assert.equal(r.status, 201, `${uri}: ${r.status} ${await r.clone().text()}`);
+      assert.equal((await r.json()).application_type, 'native');
+    }
+    // An explicit web client keeps its type, so loopback is refused for it as the OIDC rules say.
+    assert.equal((await register({ redirect_uris: ['http://127.0.0.1:53682/callback'], application_type: 'web' })).status, 400);
+    // A plain http callback on a public host is never accepted.
+    assert.equal((await register({ redirect_uris: ['http://agent.example.org/callback'] })).status, 400);
+  });
+
   it('refuses self-registered clients that ask for tokens without the owner (client_credentials)', async () => {
     const as = await (await fetch(`${env.base}/.well-known/oauth-authorization-server`)).json();
     const r = await fetch(as.registration_endpoint, {
@@ -176,6 +196,20 @@ describe('access control', () => {
   });
 
   // Last in this file: the server closes a connection whose oversized body it did not read.
+  it('expires unused self-registered clients but keeps clients the owner created', async () => {
+    const manual = await owner.json('/api/owner/clients', { json: { name: 'Kept manual client', redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'] } });
+    const reg = await fetch(`${env.base}/api/auth/oauth2/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_name: 'Abandoned', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'], token_endpoint_auth_method: 'none' }),
+    });
+    const dcr = (await reg.json()) as { client_id: string };
+    run(env.svc.db, 'UPDATE oauthClient SET createdAt = ? WHERE clientId IN (?, ?)', '2020-01-01T00:00:00.000Z', manual.client_id, dcr.client_id);
+    expireUnusedClients(env.svc.db, 7);
+    assert.ok(get(env.svc.db, 'SELECT 1 FROM oauthClient WHERE clientId = ?', manual.client_id), 'owner-created client kept');
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthClient WHERE clientId = ?', dcr.client_id), undefined, 'abandoned registration removed');
+  });
+
   it('limits the MCP request size, also for bodies sent without a length', async () => {
     const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
     const big = 'x'.repeat(1024 * 1024 + 10);
@@ -190,6 +224,22 @@ describe('access control', () => {
       },
     });
     const chunked = await fetch(env.config.mcpUrl, { method: 'POST', headers, body: stream, duplex: 'half' } as RequestInit);
+    assert.equal(chunked.status, 413);
+  });
+
+  it('limits the size of OAuth requests before reading them, also without a length', async () => {
+    const big = JSON.stringify({ client_name: 'x'.repeat(200_000), redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] });
+    const sized = await fetch(`${env.base}/api/auth/oauth2/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: big });
+    assert.equal(sized.status, 413);
+    const parts = [big.slice(0, 40_000), big.slice(40_000)];
+    const stream = new ReadableStream({
+      pull(ctl) {
+        const next = parts.shift();
+        if (next) ctl.enqueue(new TextEncoder().encode(next));
+        else ctl.close();
+      },
+    });
+    const chunked = await fetch(`${env.base}/api/auth/oauth2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: stream, duplex: 'half' } as RequestInit);
     assert.equal(chunked.status, 413);
   });
 });
