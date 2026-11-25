@@ -117,6 +117,9 @@ Checked against documentation on 25 November 2026, re-check before implementing:
 - Non-root user, persistent volume, health check, configuration through environment variables, graceful shutdown, automatic migrations with a backup before them.
 - Images for ARM64 and AMD64. The resource target is a Raspberry Pi 4.
 - Listens on the local address only by default. Publishing over HTTPS through a reverse proxy or a tunnel is described in the documentation.
+- The first real deployment is on the owner's Raspberry Pi and is carried out by another agent with shell access to it, not by you and not by the owner by hand. Write a deployment runbook for that reader: exact commands, the expected result after each step, how to verify the running service, how to update and how to roll back. Reference path: Raspberry Pi (ARM64), Docker Compose, a tunnel with a stable public hostname (Cloudflare Tunnel as the worked example).
+- Deployment from this repository alone must work: building the image on the Pi from source, with no dependency on a published image or package.
+- First-time setup after deployment is described separately for the owner: opening the public URL, entering the one-time setup code, registering the passkey, connecting the first platform.
 
 ## 11. Baseline security
 
@@ -142,7 +145,7 @@ Validation of all input, parameterized SQL, request size and rate limits, loggin
   - container restart without loss of state.
 - If your environment has no Docker, the container tests run in GitHub Actions.
 - Documentation in English: README, architecture, security model, deployment, tools and configuration reference, backup, connection guides for Claude, ChatGPT and Grok, a universal instruction for an agent. Plus LICENSE, CONTRIBUTING, SECURITY, CHANGELOG.
-- Support for a platform may be claimed only after checking its documentation or a real connection. Real connections from the platforms are made by the owner; that is the final acceptance.
+- Support for a platform may be claimed only after checking its documentation or a real connection. Real connections from the platforms are made by the owner after deployment; that is the final acceptance. Defects found there come back as issues in this repository.
 
 ## 13. Out of scope
 
@@ -159,7 +162,14 @@ Each stage ends with a working state in the default branch:
 
 You make reversible technical decisions yourself and do not stop after a plan or a scaffold.
 
-After stage 1, report to the owner and ask where to run a test instance. The owner connects real platforms to it at this point, before the rest is built on top. You continue with stage 2 meanwhile, but connection defects the owner finds are fixed first.
+The result of this task is the complete, finished product, not a core to be extended later. The stages are an order of work, not points of delivery: nothing in this brief is optional and nothing is left for a follow-up. The work is done when all of the following hold in the default branch:
+
+- every part of this brief is implemented: storage, the MCP interface, built-in OAuth with passkey sign-in, the web interface with all listed screens, the GitHub issues mirror, webhooks, versions with comparison and rollback, backup, export and import;
+- every test listed in section 12 exists and passes in CI;
+- the ARM64 image builds in CI and passes a smoke test: the container starts, first-time setup completes, a client goes through OAuth and calls the entry point;
+- an agent with shell access to a Raspberry Pi and nothing but this repository can deploy the service by following the runbook;
+- the documentation listed in section 12 is written and matches what the code does;
+- the final report states what was verified and how, and lists separately what could not be verified without real platforms.
 
 Stop and ask the owner before you:
 
