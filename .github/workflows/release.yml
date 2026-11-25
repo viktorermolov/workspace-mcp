@@ -1,0 +1,68 @@
+name: release
+
+# Runs only when the owner pushes a version tag (for example v0.1.0). It builds the image natively on
+# amd64 and arm64, runs the container smoke test on each, and publishes a multi-arch image to GHCR.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - name: Version tag matches package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+      - run: docker build -t workspace-mcp:local .
+      - run: scripts/container-smoke.sh workspace-mcp:local
+      - name: Push the per-architecture image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker tag workspace-mcp:local "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+          docker push "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Publish the multi-arch tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          V="${GITHUB_REF_NAME}"
+          docker buildx imagetools create -t "${IMAGE}:${V}" -t "${IMAGE}:${V#v}" -t "${IMAGE}:latest" \
+            "${IMAGE}:${V}-amd64" "${IMAGE}:${V}-arm64"
+          docker buildx imagetools inspect "${IMAGE}:${V}"

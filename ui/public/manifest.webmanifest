@@ -1,0 +1,9 @@
+{
+  "name": "Workspace MCP",
+  "short_name": "Workspace",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111412",
+  "theme_color": "#111412",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
