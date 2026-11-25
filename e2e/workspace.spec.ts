@@ -222,6 +222,43 @@ test('an AI platform connects through the consent screen', async () => {
   await expect(page.locator('.list li').filter({ hasText: 'Agent on my phone' })).toBeVisible();
 });
 
+test('a connection name typed as soon as the consent screen shows is kept', async () => {
+  const redirect = 'http://127.0.0.1:9/early';
+  const { url } = await newAuthorization(redirect);
+  // Hold the client details so the name field can be typed into in the very moment it appears,
+  // before the screen has run anything after showing it.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/api/owner/consent/client**', async (r) => {
+    await held;
+    await r.continue();
+  });
+  await page.goto(url);
+  await page.evaluate(() => {
+    new MutationObserver((_, observer) => {
+      const input = document.querySelector<HTMLInputElement>('input[placeholder="For example: Claude on my phone"]');
+      if (!input) return;
+      observer.disconnect();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Typed right away');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  release();
+  const field = page.getByLabel('Name this connection');
+  await expect(field).toHaveValue('Typed right away');
+  // Let every deferred update of the screen run, then check the typed name survived them.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 100))));
+  await expect(field).toHaveValue('Typed right away');
+  await page.unroute('**/api/owner/consent/client**');
+  const back = page.waitForRequest((r) => r.url().startsWith(redirect));
+  await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
+  await page.getByRole('button', { name: 'Approve' }).click();
+  await back;
+  await page.waitForURL((u) => u.href.startsWith(redirect));
+  await page.goto('/connections');
+  await expect(page.locator('.list li').filter({ hasText: 'Typed right away' })).toBeVisible();
+});
+
 test('a signed-out authorization goes through sign-in to consent', async () => {
   await go('More');
   await page.getByRole('button', { name: 'Sign out' }).click();
