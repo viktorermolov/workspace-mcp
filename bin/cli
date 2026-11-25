@@ -1,0 +1,3 @@
+#!/bin/sh
+# Offline administration inside the container: `docker compose run --rm workspace cli <command>`.
+exec node /app/src/cli.ts "$@"
