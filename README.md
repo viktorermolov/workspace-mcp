@@ -88,6 +88,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as desc
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](LICENSE). You may use, change and share the software for any noncommercial purpose: personal use, study, hobby projects, and use by charities, schools, research and public organizations. Commercial use, including running it for a business or offering it as a service, is not covered; ask the author about a separate license.
+[PolyForm Noncommercial License 1.0.0](LICENSE). You may use, change and share the software for any noncommercial purpose: personal use with no commercial application (study, hobby projects, private use), and use by charities, schools, research and public organizations. Copies you share must keep the license and its notice. Commercial use, including running it for a business or offering it as a service, is not covered; ask the author about a separate license.
 
 This is a source-available license, not an open source license in the OSI sense. Third-party dependencies keep their own (permissive) licenses.

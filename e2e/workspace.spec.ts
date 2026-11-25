@@ -175,6 +175,9 @@ async function approveAndCatchRedirect(name: string, redirect: string) {
   await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
   await page.getByRole('button', { name: 'Approve' }).click();
   const url = new URL((await back).url());
+  // Wait until the browser has landed on the platform's callback, so the next test's navigation
+  // cannot be interrupted by this redirect still finishing.
+  await page.waitForURL((u) => u.href.startsWith(redirect));
   expect(url.searchParams.get('code')).toBeTruthy();
   expect(url.searchParams.get('state')).toBe('st-1');
 }
