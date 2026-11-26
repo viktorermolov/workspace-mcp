@@ -249,6 +249,24 @@ describe('role checks on writes', () => {
     assert.equal(out.claimed_by?.role, 'no-such-role');
   });
 
+  it('in enforce mode, claim_task with an unknown claimed_role and no role is forbidden', async () => {
+    await owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['lead'], confirm: true } });
+    if (otherClientId) {
+      await owner.json(`/api/owner/connections/${encodeURIComponent(otherClientId)}/roles`, { json: { roles: ['intern'], confirm: true } });
+    }
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce' } });
+    try {
+      const task = await call<{ id: string }>(agent, 'save_task', { title: 'Claim unknown in enforce', role: 'lead', claimed_role: 'lead' });
+      await assert.rejects(() => call(agent, 'claim_task', { id: task.id, claimed_role: 'no-such-role' }), (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        assert.match(err(e).message, /role not found: no-such-role/);
+        return true;
+      });
+    } finally {
+      await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+    }
+  });
+
   it('lets the owner write as before, and a role removed from the list is refused in enforce', async () => {
     const created = await owner.json<{ id: string; title: string }>('/api/owner/tasks', { json: { title: 'Owner task', role: 'lead' } });
     assert.equal(created.title, 'Owner task');
