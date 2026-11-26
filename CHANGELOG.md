@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
 - Saving a connection's role list without confirming it now records a log event.
 - The owner change feed now sets `versioned.id` to the rule set's id, so a History link for a named or project rules set opens that set instead of the default working rules.
+- Documentation now states that the deprecated `role` synonym on `claim_task` and `checkpoint` is accepted in both warning and enforce modes, and that a connection added after enforcement is on cannot write until the owner confirms its role list.
 
 ## [0.2.0] - 2026-11-26
 
@@ -24,7 +25,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- `claimed_role` is required on every agent write once enforcement is on, including `save_routine`. On `claim_task` and `checkpoint`, `role` still names the item; using `role` as the author when `claimed_role` is omitted is deprecated and will be removed later. In warning mode the old calls still work and return a warning.
+- `claimed_role` is required on every agent write once enforcement is on, including `save_routine`. On `claim_task` and `checkpoint`, `role` still names the item; using `role` as the author when `claimed_role` is omitted is deprecated and will be removed later. Until then, the old calls are accepted in both warning and enforce modes, checked against the confirmed list, and return a deprecation warning.
 
 ### Fixed
 
