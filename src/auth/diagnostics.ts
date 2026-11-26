@@ -1,4 +1,4 @@
-import { all, now, run, type DB } from '../db/db.ts';
+import { all, afterTransaction, inTransaction, now, run, type DB } from '../db/db.ts';
 
 /**
  * OAuth diagnostics: a short log of each step of the connection flow (discovery, registration,
@@ -20,6 +20,10 @@ export interface DiagInput {
 const KEEP = 2000;
 
 export function recordDiag(db: DB, d: DiagInput): void {
+  if (inTransaction()) {
+    afterTransaction(db, (later) => recordDiag(later, d));
+    return;
+  }
   try {
     run(
       db,

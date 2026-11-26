@@ -95,7 +95,7 @@ function actorHasEditAny(db: DB, actor: Actor): boolean {
   return !!r && !r.archived_at && r.edit_any === 1;
 }
 
-function auditRoleCheck(
+export function auditRoleCheck(
   db: DB,
   actor: Actor,
   outcome: 'warning' | 'rejected' | 'override',

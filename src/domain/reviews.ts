@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { diffLines } from 'diff';
-import { addWarning, documentOwnerRoleId, getEnforcement, withOwnerRole, type RoleWarning } from './access.ts';
+import { addWarning, auditRoleCheck, documentOwnerRoleId, getEnforcement, withOwnerRole, type RoleWarning } from './access.ts';
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import {
   checkLen,
@@ -59,6 +59,8 @@ export const FUZZY_LENGTH_SLACK = 500;
 export const FUZZY_SIMILARITY = 0.8;
 export const CONTEXT_CHARS = 64;
 export const QUOTE_MAX = 500;
+/** Max exact-quote hits ranked inside the window (the unique-occurrence fallback is uncapped). */
+export const EXACT_HIT_CAP = 32;
 
 export interface ReviewCommentRow {
   id: string;
@@ -119,25 +121,70 @@ function splitLines(text: string): string[] {
 }
 
 function extractRange(text: string, start: number, end: number): string {
-  const lines = splitLines(text);
-  if (start < 1 || end < start || end > lines.length) {
-    throw invalid(`line range ${start}-${end} is outside the text (${lines.length} lines)`);
-  }
-  return lines.slice(start - 1, end).join('\n');
+  return extractRangeIndexed(text, lineStarts(text), start, end);
 }
 
 function contextAround(text: string, start: number, end: number): { ctx_before: string; ctx_after: string } {
-  const lines = splitLines(text);
-  const before = lines.slice(0, Math.max(0, start - 1)).join('\n');
-  const after = lines.slice(end).join('\n');
+  const starts = lineStarts(text);
+  if (start < 1 || end < start || end > starts.length) {
+    throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
+  }
+  const before = text.slice(0, start <= 1 ? 0 : endOfLine(starts, text.length, start - 1));
+  const after = text.slice(end < starts.length ? starts[end]! : text.length);
   return { ctx_before: before.slice(-CONTEXT_CHARS), ctx_after: after.slice(0, CONTEXT_CHARS) };
 }
 
-function lineAtOffset(text: string, index: number): number {
-  if (index <= 0) return 1;
-  let n = 1;
-  for (let i = 0; i < index && i < text.length; i++) if (text[i] === '\n') n++;
-  return n;
+/** Offsets of the first character of each line (0-based). Built once per remapping. */
+export function lineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+  return starts;
+}
+
+/** 1-based line number of a character offset, via binary search on `lineStarts`. */
+export function lineAtIndex(starts: number[], offset: number): number {
+  if (offset <= 0) return 1;
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid]! <= offset) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return Math.max(1, hi + 1);
+}
+
+function offsetOfLine(starts: number[], textLen: number, line: number): number {
+  if (line <= 1) return 0;
+  if (line > starts.length) return textLen;
+  return starts[line - 1]!;
+}
+
+function endOfLine(starts: number[], textLen: number, line: number): number {
+  if (line < starts.length) return starts[line]! - 1;
+  return textLen;
+}
+
+function extractRangeIndexed(text: string, starts: number[], start: number, end: number): string {
+  if (start < 1 || end < start || end > starts.length) {
+    throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
+  }
+  return text.slice(offsetOfLine(starts, text.length, start), endOfLine(starts, text.length, end));
+}
+
+/** Character window around a hint line: ±FUZZY_LINE_WINDOW lines, capped at FUZZY_CHAR_CAP. */
+function hintWindow(text: string, starts: number[], hintLine: number | null): { from: number; to: number } {
+  const hint = Math.min(Math.max(hintLine ?? 1, 1), Math.max(starts.length, 1));
+  const fromLine = Math.max(1, hint - FUZZY_LINE_WINDOW);
+  const toLine = Math.min(starts.length, hint + FUZZY_LINE_WINDOW);
+  let from = offsetOfLine(starts, text.length, fromLine);
+  let to = endOfLine(starts, text.length, toLine);
+  const hintOff = offsetOfLine(starts, text.length, hint);
+  const charFrom = Math.max(0, hintOff - Math.floor(FUZZY_CHAR_CAP / 2));
+  const charTo = Math.min(text.length, charFrom + FUZZY_CHAR_CAP);
+  from = Math.max(from, charFrom);
+  to = Math.min(to, charTo);
+  return { from, to };
 }
 
 function asTarget(v: string): ReviewTargetType {
@@ -223,13 +270,33 @@ function canReply(_db: DB, actor: Actor, _c: ReviewCommentRow): boolean {
   return actor.kind === 'owner' || actor.kind === 'agent';
 }
 
-function statusForbidden(message: string, actor: Actor, db: DB): boolean {
+function roleSlug(db: DB, roleId: string | null): string | null {
+  if (!roleId) return null;
+  return get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', roleId)?.slug ?? roleId;
+}
+
+function reviewStatusAudit(db: DB, actor: Actor, c: ReviewCommentRow, outcome: 'warning' | 'rejected'): void {
+  auditRoleCheck(db, actor, outcome, {
+    reason: 'review_status',
+    claimed_role: actor.role ?? null,
+    responsible_role: roleSlug(db, responsibleRoleId(db, c)),
+  });
+}
+
+function statusForbidden(message: string, actor: Actor, db: DB, c: ReviewCommentRow): boolean {
   const mode = actor.kind === 'agent' ? getEnforcement(db, actor.memberId) : 'enforce';
   if (mode === 'enforce' || actor.kind === 'owner') {
+    reviewStatusAudit(db, actor, c, 'rejected');
     throw new DomainError('forbidden', message);
   }
+  reviewStatusAudit(db, actor, c, 'warning');
   addWarning({ code: 'review_status_forbidden', message } satisfies RoleWarning);
   return true;
+}
+
+function rejectAgentResolve(db: DB, actor: Actor, c: ReviewCommentRow): never {
+  reviewStatusAudit(db, actor, c, 'rejected');
+  throw new DomainError('forbidden', 'only the owner can resolve or reopen a review comment');
 }
 
 function requireComment(db: DB, memberId: string, id: string): ReviewCommentRow {
@@ -461,13 +528,13 @@ export function replyReviewComment(
         if (wanted === 'resolved' || wanted === 'open') {
           if (actor.kind !== 'owner') {
             // Agents may never resolve or reopen, in either enforcement mode.
-            throw new DomainError('forbidden', 'only the owner can resolve or reopen a review comment');
+            rejectAgentResolve(db, actor, c);
           }
           status = wanted;
           statusChanged = true;
         } else if (wanted === 'answered') {
           if (!canMarkAnswered(db, actor, c)) {
-            statusForbidden('only the owner, the responsible role, or a role allowed to edit any item can mark a review comment answered', actor, db);
+            statusForbidden('only the owner, the responsible role, or a role allowed to edit any item can mark a review comment answered', actor, db, c);
             // In warning mode the change still applies (statusForbidden only throws in enforce).
           }
           status = 'answered';
@@ -544,9 +611,11 @@ export function setReviewCommentStatus(
     }
     if (c.status === input.status) return { ...reviewCommentView(db, c, { replies: true }), unchanged: true };
     if (input.status === 'resolved' || input.status === 'open') {
-      if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can resolve or reopen a review comment');
+      if (actor.kind !== 'owner') rejectAgentResolve(db, actor, c);
     } else if (input.status === 'answered') {
-      if (!canMarkAnswered(db, actor, c)) throw new DomainError('forbidden', 'only the owner, the responsible role, or a role allowed to edit any item can mark a review comment answered');
+      if (!canMarkAnswered(db, actor, c)) {
+        statusForbidden('only the owner, the responsible role, or a role allowed to edit any item can mark a review comment answered', actor, db, c);
+      }
     }
     const at = now();
     run(db, 'UPDATE review_comment SET status = ?, rev = rev + 1, updated_at = ? WHERE id = ?', input.status, at, c.id);
@@ -782,19 +851,57 @@ export function computeLineMap(oldText: string, newText: string, opts: { timeout
   return { map, limited: false };
 }
 
-function findExact(text: string, quote: string, hintLine: number | null, ctxBefore: string, ctxAfter: string): { start: number; end: number } | null {
-  if (!quote) return null;
+type ExactHit = { start: number; end: number };
+type ExactResult = ExactHit | 'timeout' | null;
+
+function collectExactHits(
+  text: string,
+  quote: string,
+  starts: number[],
+  from: number,
+  to: number,
+  cap: number,
+  deadline: number,
+  clock: () => number,
+): { hits: { start: number; end: number; index: number }[]; timeout: boolean } {
   const hits: { start: number; end: number; index: number }[] = [];
-  let from = 0;
-  while (from <= text.length) {
-    const i = text.indexOf(quote, from);
-    if (i < 0) break;
-    const start = lineAtOffset(text, i);
-    const end = lineAtOffset(text, i + Math.max(quote.length - 1, 0));
-    hits.push({ start, end, index: i });
-    from = i + 1;
+  let pos = from;
+  while (pos <= to) {
+    if (clock() >= deadline) return { hits, timeout: true };
+    const i = text.indexOf(quote, pos);
+    if (i < 0 || i >= to) break;
+    hits.push({ start: lineAtIndex(starts, i), end: lineAtIndex(starts, i + Math.max(quote.length - 1, 0)), index: i });
+    if (hits.length >= cap) break;
+    pos = i + 1;
   }
-  if (!hits.length) return null;
+  return { hits, timeout: false };
+}
+
+function findExact(
+  text: string,
+  quote: string,
+  hintLine: number | null,
+  ctxBefore: string,
+  ctxAfter: string,
+  starts: number[],
+  deadline: number,
+  clock: () => number,
+): ExactResult {
+  if (!quote) return null;
+  if (clock() >= deadline) return 'timeout';
+  const win = hintWindow(text, starts, hintLine);
+  const { hits, timeout } = collectExactHits(text, quote, starts, win.from, win.to, EXACT_HIT_CAP, deadline, clock);
+  if (timeout) return 'timeout';
+  if (!hits.length) {
+    // Unique occurrence outside the window still counts as exact (e.g. a moved unique quote
+    // when the diff was limited). Two or more hits are not ranked across the whole document.
+    if (clock() >= deadline) return 'timeout';
+    const i = text.indexOf(quote);
+    if (i < 0) return null;
+    if (clock() >= deadline) return 'timeout';
+    if (text.indexOf(quote, i + 1) >= 0) return null;
+    return { start: lineAtIndex(starts, i), end: lineAtIndex(starts, i + Math.max(quote.length - 1, 0)) };
+  }
   if (hits.length === 1) return { start: hits[0]!.start, end: hits[0]!.end };
   const ranked = hits
     .map((h) => {
@@ -806,9 +913,7 @@ function findExact(text: string, quote: string, hintLine: number | null, ctxBefo
     })
     .sort((a, b) => Number(b.ctxOk) - Number(a.ctxOk) || a.dist - b.dist);
   const best = ranked[0]!;
-  if (ctxBefore || ctxAfter) {
-    if (!best.ctxOk) return null;
-  }
+  if ((ctxBefore || ctxAfter) && !best.ctxOk) return null;
   return { start: best.h.start, end: best.h.end };
 }
 
@@ -838,52 +943,48 @@ function fuzzyFind(
   text: string,
   quote: string,
   hintLine: number | null,
+  starts: number[],
   deadline: number,
   clock: () => number,
 ): { start: number; end: number } | null {
   if (!quote || clock() >= deadline) return null;
-  const lines = splitLines(text);
-  const hint = hintLine ?? 1;
-  const from = Math.max(1, hint - FUZZY_LINE_WINDOW);
-  const to = Math.min(lines.length, hint + FUZZY_LINE_WINDOW);
-  let window = lines.slice(from - 1, to).join('\n');
-  if (window.length > FUZZY_CHAR_CAP) {
-    // Keep a character window around the start of the hinted line.
-    const prefix = lines.slice(0, hint - 1).join('\n');
-    const startAt = Math.max(0, prefix.length - Math.floor(FUZZY_CHAR_CAP / 2));
-    const absStart = (prefix.length ? prefix.length + 1 : 0) + startAt;
-    // Work in the sliced text, then map back via offsets inside `window`.
-    const hintedOffset = prefix.length + (prefix.length ? 1 : 0);
-    const sliceFrom = Math.max(0, hintedOffset - Math.floor(FUZZY_CHAR_CAP / 2));
-    window = text.slice(sliceFrom, sliceFrom + FUZZY_CHAR_CAP);
-    return fuzzyInWindow(window, quote, sliceFrom, text, deadline, clock);
-  }
-  const windowStart = from === 1 ? 0 : splitLines(text).slice(0, from - 1).join('\n').length + 1;
-  return fuzzyInWindow(window, quote, windowStart, text, deadline, clock);
+  const win = hintWindow(text, starts, hintLine);
+  const window = text.slice(win.from, win.to);
+  return fuzzyInWindow(window, quote, win.from, starts, deadline, clock);
 }
 
-function fuzzyInWindow(window: string, quote: string, windowOffset: number, full: string, deadline: number, clock: () => number): { start: number; end: number } | null {
+function fuzzyInWindow(
+  window: string,
+  quote: string,
+  windowOffset: number,
+  starts: number[],
+  deadline: number,
+  clock: () => number,
+): { start: number; end: number } | null {
   const want = normalizeQuote(quote);
   const minLen = Math.max(1, quote.length - FUZZY_LENGTH_SLACK);
   const maxLen = quote.length + FUZZY_LENGTH_SLACK;
   let best: { score: number; start: number; end: number } | null = null;
   // Walk line-aligned segments of length close to the quote.
   const wLines = splitLines(window);
+  let lineOff = 0;
   for (let i = 0; i < wLines.length; i++) {
     if (clock() >= deadline) return best && best.score >= FUZZY_SIMILARITY ? best : null;
     let acc = '';
     for (let j = i; j < wLines.length; j++) {
+      if (clock() >= deadline) return best && best.score >= FUZZY_SIMILARITY ? best : null;
       acc = j === i ? wLines[j]! : `${acc}\n${wLines[j]}`;
       if (acc.length < minLen && j < wLines.length - 1) continue;
       if (acc.length > maxLen) break;
       const score = dice(want, normalizeQuote(acc));
       if (!best || score > best.score) {
-        const abs = windowOffset + (i === 0 ? 0 : wLines.slice(0, i).join('\n').length + 1);
-        const start = lineAtOffset(full, abs);
-        const end = lineAtOffset(full, abs + Math.max(acc.length - 1, 0));
+        const abs = windowOffset + lineOff;
+        const start = lineAtIndex(starts, abs);
+        const end = lineAtIndex(starts, abs + Math.max(acc.length - 1, 0));
         best = { score, start, end };
       }
     }
+    lineOff += wLines[i]!.length + 1;
   }
   return best && best.score >= FUZZY_SIMILARITY ? { start: best.start, end: best.end } : null;
 }
@@ -916,6 +1017,8 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
     field,
   );
   const remaining = () => budget - (clock() - t0);
+  const deadline = () => t0 + budget;
+  const starts = lineStarts(opts.newText);
   const needLines = comments.filter((c) => c.line_start != null && c.line_end != null && c.quote);
   let lineMapping: LineMap | null = null;
   if (needLines.length) {
@@ -927,8 +1030,10 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
     }
   }
 
+  let exhausted = remaining() <= 0;
   for (const c of comments) {
-    if (clock() - t0 >= budget) {
+    if (exhausted || clock() >= deadline()) {
+      exhausted = true;
       mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
       continue;
     }
@@ -938,9 +1043,14 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
       continue;
     }
 
-    const exact = findExact(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, c.ctx_before, c.ctx_after);
-    if (exact) {
+    const exact = findExact(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, c.ctx_before, c.ctx_after, starts, deadline(), clock);
+    if (exact && exact !== 'timeout') {
       mark(db, c, 'exact', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, exact.start, exact.end);
+      continue;
+    }
+    if (exact === 'timeout' || clock() >= deadline()) {
+      exhausted = true;
+      mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
       continue;
     }
     if (lineMapping?.limited) {
@@ -952,7 +1062,7 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
       const end = lineMapping.map.get(c.anchor_line_end ?? c.line_end);
       if (start != null && end != null && end >= start) {
         try {
-          const at = extractRange(opts.newText, start, end);
+          const at = extractRangeIndexed(opts.newText, starts, start, end);
           if (at === c.quote || at.includes(c.quote) || normalizeQuote(at).includes(normalizeQuote(c.quote))) {
             mark(db, c, 'moved', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, start, end);
             continue;
@@ -962,7 +1072,17 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
         }
       }
     }
-    const found = fuzzyFind(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, t0 + budget, clock);
+    if (clock() >= deadline()) {
+      exhausted = true;
+      mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
+      continue;
+    }
+    const found = fuzzyFind(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, starts, deadline(), clock);
+    if (clock() >= deadline() && !found) {
+      exhausted = true;
+      mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
+      continue;
+    }
     if (found) {
       mark(db, c, 'moved', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, found.start, found.end);
     } else {
