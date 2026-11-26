@@ -4,6 +4,7 @@ import {
   checkLen,
   checkRev,
   currentBody,
+  currentVersionNumber,
   DomainError,
   idempotent,
   indexEntity,
@@ -60,7 +61,13 @@ export function updateRules(db: DB, actor: Actor, input: { text: string; rev?: n
   return tx(db, () => {
     const r = getRules(db, actor.memberId);
     // The first text needs no rev (there is nothing to overwrite); every later change does.
-    if (r.version > 0 || input.rev !== undefined) checkRev('working rules', 'rules', r.rev, input.rev);
+    if (r.version > 0 || input.rev !== undefined) {
+      checkRev('working rules', 'rules', r.rev, input.rev, {
+        version: r.version,
+        versionField: 'version (working_rules_version in start)',
+        revField: 'rev (working_rules_rev in start)',
+      });
+    }
     if (r.text === input.text) return { ...r, unchanged: true };
     const v = addVersion(db, actor, 'rules', actor.memberId, input.text, input.note);
     run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE member_id = ?', now(), actor.memberId);
@@ -168,6 +175,18 @@ export function indexRole(db: DB, r: RoleRow): void {
   indexEntity(db, r.member_id, 'role', r.id, r.name, `${r.slug}\n${r.area}\n${currentBody(db, r.current_version)}`);
 }
 
+
+function roleSlugTaken(existing: RoleRow, slug: string): DomainError {
+  if (existing.archived_at) {
+    return new DomainError(
+      'conflict',
+      `a role with slug "${slug}" already exists and is archived (id ${existing.id}). Restore it, change its slug, or delete it permanently before reusing this slug.`,
+      { id: existing.id, slug, archived: true },
+    );
+  }
+  return new DomainError('conflict', `a role with slug "${slug}" already exists`);
+}
+
 export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
   checkLen('name', input.name, LIMITS.title);
   checkLen('area', input.area, LIMITS.shortText);
@@ -179,7 +198,8 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_role', () => {
         if (!input.name?.trim()) throw invalid('name is required to create a role');
         const slug = input.slug ?? slugify(input.name);
-        if (findRole(db, actor.memberId, slug)) throw new DomainError('conflict', `a role with slug "${slug}" already exists`);
+        const taken = findRole(db, actor.memberId, slug);
+        if (taken) throw roleSlugTaken(taken, slug);
         const id = newId('role');
         const at = now();
         run(
@@ -204,7 +224,10 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       });
     }
     const role = requireRole(db, actor.memberId, input.id);
-    checkRev('role', role.slug, role.rev, input.rev);
+    checkRev('role', role.slug, role.rev, input.rev, {
+      version: currentVersionNumber(db, role.current_version),
+      versionField: 'instruction_version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -213,7 +236,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       if (v !== undefined && v !== role[f]) {
         if (f === 'slug') {
           const other = findRole(db, actor.memberId, v);
-          if (other && other.id !== role.id) throw new DomainError('conflict', `a role with slug "${v}" already exists`);
+          if (other && other.id !== role.id) throw roleSlugTaken(other, v);
         }
         if (f === 'name' && !v.trim()) throw invalid('name must not be empty');
         sets.push(`${f} = ?`);
@@ -361,7 +384,10 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
       });
     }
     const p = requireProject(db, actor.memberId, input.id);
-    checkRev('project', p.slug, p.rev, input.rev);
+    checkRev('project', p.slug, p.rev, input.rev, {
+      version: currentVersionNumber(db, p.current_version),
+      versionField: 'description_version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -497,7 +523,10 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
       });
     }
     const d = requireDocument(db, actor.memberId, input.id);
-    checkRev('document', d.id, d.rev, input.rev);
+    checkRev('document', d.id, d.rev, input.rev, {
+      version: currentVersionNumber(db, d.current_version),
+      versionField: 'version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];

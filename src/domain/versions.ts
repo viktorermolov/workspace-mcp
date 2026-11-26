@@ -1,6 +1,6 @@
 import { diffLines } from 'diff';
 import { get, now, run, tx, type DB } from '../db/db.ts';
-import { addVersion, DomainError, getVersion, indexEntity, listVersions, notFound, recordEvent, type Actor, type VersionedType } from './core.ts';
+import { addVersion, checkRev, currentVersionNumber, getVersion, indexEntity, listVersions, notFound, recordEvent, type Actor, type VersionedType } from './core.ts';
 import { indexProject, indexRole, logLabel, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
 
 export interface DiffLine {
@@ -82,10 +82,15 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
     const target = getVersion(db, type, id, toNumber);
     const current =
       type === 'rules'
-        ? get<{ rev: number }>(db, 'SELECT rev FROM rules WHERE member_id = ?', id)!
-        : get<{ rev: number }>(db, `SELECT rev FROM ${entityTable[type]} WHERE id = ?`, id)!;
-    if (rev !== undefined && rev !== current.rev) {
-      throw new DomainError('conflict', `${type} ${id} changed since you read it: your rev ${rev}, current rev ${current.rev}`, { current_rev: current.rev });
+        ? get<{ rev: number; current_version: number | null }>(db, 'SELECT rev, current_version FROM rules WHERE member_id = ?', id)!
+        : get<{ rev: number; current_version: number | null }>(db, `SELECT rev, current_version FROM ${entityTable[type]} WHERE id = ?`, id)!;
+    const versionField = type === 'role' ? 'instruction_version' : type === 'project' ? 'description_version' : 'version';
+    if (rev !== undefined) {
+      checkRev(type, type === 'rules' ? 'rules' : id, current.rev, rev, {
+        version: currentVersionNumber(db, current.current_version),
+        versionField: type === 'rules' ? 'version (working_rules_version in start)' : versionField,
+        revField: type === 'rules' ? 'rev (working_rules_rev in start)' : 'rev',
+      });
     }
     const v = addVersion(db, actor, type, id, target.body, note ?? `Rollback to version ${toNumber}`, target.id);
     if (type === 'rules') run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE member_id = ?', now(), id);
