@@ -60,6 +60,7 @@ interface RoleFull {
   setup_notes: string;
   instruction: string;
   instruction_version: number;
+  parent: { id: string; slug: string; name: string } | null;
   links: { id: string; from: string; to: string; type: string }[];
   rev: number;
   archived: boolean;
@@ -127,7 +128,8 @@ export function RoleScreen({ id }: { id: string }) {
   );
 }
 
-const LINK_TYPES = ['delegates_to', 'reports_to', 'reviews', 'works_with'];
+const NEW_LINK_TYPES = ['delegates_to', 'reviews', 'works_with'];
+const linkTypesFor = (current: string) => (current === 'reports_to' ? [...NEW_LINK_TYPES, 'reports_to'] : NEW_LINK_TYPES);
 
 function RoleForm({ role, others, onSaved }: { role?: RoleFull; others: { slug: string; name: string }[]; onSaved: (r: { id: string }) => void }) {
   const [f, setF] = useState({
@@ -136,16 +138,22 @@ function RoleForm({ role, others, onSaved }: { role?: RoleFull; others: { slug: 
     area: role?.area ?? '',
     instruction: role?.instruction ?? '',
     setup_notes: role?.setup_notes ?? '',
+    parent: role?.parent?.slug ?? '',
     links: (role?.links ?? []).filter((l) => l.from === role?.slug).map((l) => ({ to: l.to, type: l.type })),
   });
   const act = useAction();
   const set = (k: 'name' | 'slug' | 'area' | 'instruction' | 'setup_notes') => (e: Event) => setF({ ...f, [k]: (e.target as HTMLInputElement).value });
+  const parentChoices = [...others];
+  if (role?.parent && !parentChoices.some((o) => o.slug === role.parent!.slug)) {
+    parentChoices.push({ slug: role.parent.slug, name: `${role.parent.name} (archived)` });
+  }
+  const reportsHints = f.links.filter((l) => l.type === 'reports_to' && l.to && l.to !== f.parent);
   const save = (e: Event) => {
     e.preventDefault();
     void act.run(async () => {
       const body: Record<string, unknown> = role
-        ? { id: role.id, rev: role.rev, name: f.name, area: f.area, instruction: f.instruction, setup_notes: f.setup_notes, links: f.links.filter((l) => l.to) }
-        : { name: f.name, slug: f.slug || undefined, area: f.area, instruction: f.instruction, setup_notes: f.setup_notes, links: f.links.filter((l) => l.to) };
+        ? { id: role.id, rev: role.rev, name: f.name, area: f.area, instruction: f.instruction, setup_notes: f.setup_notes, parent: f.parent || null, links: f.links.filter((l) => l.to) }
+        : { name: f.name, slug: f.slug || undefined, area: f.area, instruction: f.instruction, setup_notes: f.setup_notes, parent: f.parent || null, links: f.links.filter((l) => l.to) };
       onSaved(await post<{ id: string }>('/roles', body));
     });
   };
@@ -170,12 +178,33 @@ function RoleForm({ role, others, onSaved }: { role?: RoleFull; others: { slug: 
       <Field label="Setup notes" hint="What to recreate on a new platform (for example a scheduled routine). Data, not an instruction.">
         <textarea value={f.setup_notes} onInput={set('setup_notes')} rows={3} />
       </Field>
+      <Field label="Reports to" hint="The reporting line. Optional; a role may have no manager. Existing reports-to links are separate and stay visible on the map.">
+        <select aria-label="Reports to" value={f.parent} onChange={(e) => setF({ ...f, parent: (e.target as HTMLSelectElement).value })}>
+          <option value="">No one</option>
+          {parentChoices.map((o) => (
+            <option key={o.slug} value={o.slug}>
+              {o.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {reportsHints.map((l) => (
+        <p class="muted small" key={l.to}>
+          This role still has a reports-to link to {l.to}, which is not the reporting line{f.parent ? ` (currently ${f.parent})` : ''}.
+          <Button
+            kind="quiet"
+            onClick={() => setF({ ...f, parent: l.to })}
+          >
+            Use as parent
+          </Button>
+        </p>
+      ))}
       <fieldset class="links">
         <legend>Links to other roles</legend>
         {f.links.map((l, i) => (
           <div class="row" key={i}>
             <select aria-label="Link type" value={l.type} onChange={(e) => setF({ ...f, links: f.links.map((x, j) => (j === i ? { ...x, type: (e.target as HTMLSelectElement).value } : x)) })}>
-              {LINK_TYPES.map((t) => (
+              {linkTypesFor(l.type).map((t) => (
                 <option key={t} value={t}>
                   {label(t)}
                 </option>

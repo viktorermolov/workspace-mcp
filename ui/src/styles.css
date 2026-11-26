@@ -829,11 +829,17 @@ table.diag tr.bad td {
 }
 
 /* ---------- map ---------- */
+.graph-wrap {
+  overflow: auto;
+  width: 100%;
+  max-width: 100%;
+}
 .graph {
   display: block;
-  width: 100%;
-  max-width: 420px;
   margin: 0 auto;
+}
+.graph-hit {
+  fill: transparent;
 }
 .graph-link {
   stroke: var(--accent);
@@ -855,6 +861,10 @@ table.diag tr.bad td {
   stroke: var(--accent);
   fill: var(--accent-soft);
 }
+.graph-node.archived {
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
 .graph-count {
   fill: var(--text);
   font: 600 14px var(--font);
@@ -862,6 +872,9 @@ table.diag tr.bad td {
 .graph-label {
   fill: var(--muted);
   font: 11px var(--font);
+}
+.graph-label.archived-label {
+  font-size: 9px;
 }
 .legend {
   text-align: center;
