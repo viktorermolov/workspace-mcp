@@ -4,9 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
 ### Added
 
+- Each OAuth connection has an allow-list of roles, set by the owner on the Connections screen. An agent write must name `claimed_role`; the server checks that the role exists, is not archived, and is on that connection's confirmed list. Several bots can share one connection and still sign their edits with their own role names.
+- A role may edit items that belong to it. The owner can mark selected roles as allowed to edit any item. The log and the Changes screen show who made a change and whose item it was.
+- Role checks start in warning mode after an upgrade: writes still succeed, and the response includes a warning. The owner turns on enforcement from Connections, after confirming each active connection's list (or with an explicit, recorded override). A list suggested from a connection's own history is a draft and has no effect until it is confirmed.
+- Projects can have an optional owning role (`owner_role`).
 - Routines are a first-class entity: name, owning role, schedule, timezone, status (`enabled` / `paused`), optional external platform id, and last run time and result. `save_routine` creates and updates them; `start` lists all routines and, for a given role, that role's routines; `get` and `search` cover them too. The server stores this information; it does not run the schedule.
+
+### Changed
+
+- `claimed_role` is required on every agent write once enforcement is on, including `save_routine`. On `claim_task` and `checkpoint`, `role` still names the item; using `role` as the author when `claimed_role` is omitted is deprecated and will be removed later. In warning mode the old calls still work and return a warning.
 
 ### Fixed
 
