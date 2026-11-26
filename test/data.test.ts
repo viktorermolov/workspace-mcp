@@ -320,6 +320,7 @@ describe('data safety', () => {
     await call(client, 'update_rules', { text: 'Be brief.' });
     const role = await call(client, 'save_role', { name: 'Writer', slug: 'writer', instruction: 'Draft posts.' });
     await call(client, 'save_role', { id: role.id, rev: role.rev, instruction: 'Draft and edit posts.' });
+    await call(client, 'save_routine', { name: 'Weekly draft', role: 'writer', schedule: '0 9 * * 1', timezone: 'UTC' });
     await call(client, 'save_project', { name: 'Blog', slug: 'blog' });
     await call(client, 'save_document', { title: 'Style guide', body: '# Style\nShort sentences.', attach_to: { type: 'project', id: 'blog' } });
     const t1 = await call(client, 'save_task', { title: 'Outline', role: 'writer', project: 'blog' });
@@ -333,7 +334,7 @@ describe('data safety', () => {
     const zip = new Uint8Array(await res.arrayBuffer());
     const files = unzipSync(zip);
     const names = Object.keys(files);
-    for (const n of ['manifest.json', 'workspace.json', 'rules.md', 'README.md', 'roles/writer.md', 'projects/blog.md']) assert.ok(names.includes(n), n);
+    for (const n of ['manifest.json', 'workspace.json', 'rules.md', 'README.md', 'roles/writer.md', 'projects/blog.md', 'routines/weekly-draft.md']) assert.ok(names.includes(n), n);
     assert.ok(names.some((n) => n.startsWith('documents/project-blog/')));
     assert.ok(names.some((n) => n.startsWith('tasks/outline-')));
     const all = Object.values(files).map((f) => Buffer.from(f).toString('utf8')).join('\n');
@@ -360,6 +361,7 @@ describe('data safety', () => {
     assert.ok(hit.results.length >= 1, 'search index rebuilt');
     const publish = s.data.open_tasks.find((t: any) => t.title === 'Publish');
     assert.ok(publish);
+    assert.ok(s.data.role_routines.some((r: { name: string; schedule: string }) => r.name === 'Weekly draft' && r.schedule === '0 9 * * 1'));
 
     // A second import into a non-empty workspace is refused.
     const again = await d.browser.fetch('/api/owner/import', { method: 'POST', body: zip, headers: { 'content-type': 'application/zip' } });

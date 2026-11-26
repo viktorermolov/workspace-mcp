@@ -8,6 +8,7 @@ import type { Config } from '../config.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
+import { saveRoutine } from '../domain/routines.ts';
 import { claimTask, commentTask, saveTask } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
 import { changes, ENTITY_TYPES, getEntity, search, type EntityType } from '../domain/views.ts';
@@ -34,7 +35,7 @@ const MAX_IMPORT_BYTES = 100 * 1024 * 1024;
 type Env = { Variables: { actor: Actor; userId: string } };
 
 const VERSIONED: VersionedType[] = ['rules', 'role', 'project', 'document'];
-const ARCHIVABLE: ArchivableType[] = ['role', 'project', 'document', 'task'];
+const ARCHIVABLE: ArchivableType[] = ['role', 'project', 'document', 'task', 'routine'];
 
 export function createOwnerApi(deps: OwnerApiDeps) {
   const { config, db, auth } = deps;
@@ -253,6 +254,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.post('/projects', async (c) => c.json(saveProject(db, actor(c), await body(c))));
   api.post('/documents', async (c) => c.json(saveDocument(db, actor(c), await body(c))));
   api.post('/tasks', async (c) => c.json(saveTask(db, actor(c), await body(c))));
+  api.post('/routines', async (c) => c.json(saveRoutine(db, actor(c), await body(c))));
   api.post('/tasks/:id/claim', async (c) => c.json(claimTask(db, actor(c), { id: c.req.param('id'), role: (await body<{ role?: string }>(c).catch(() => ({}) as { role?: string })).role })));
   api.post('/tasks/:id/comment', async (c) => c.json(commentTask(db, actor(c), { id: c.req.param('id'), body: String((await body<{ body?: string }>(c)).body ?? '') })));
   api.post('/archive', async (c) => {
