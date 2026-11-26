@@ -33,7 +33,7 @@ const ROUTES: Route[] = [
   ['/read/project/:id', (p) => <ReadItem key={`project/${p.id}`} type="project" id={p.id!} />],
   ['/read/document/:id', (p) => <ReadItem key={`document/${p.id}`} type="document" id={p.id!} />],
   ['/history/rules', () => <HistoryScreen type="rules" />],
-  ['/history/:type/:id', (p) => <HistoryScreen key={`${p.type}/${p.id}`} type={p.type as 'role' | 'project' | 'document'} id={p.id!} />],
+  ['/history/:type/:id', (p) => <HistoryScreen key={`${p.type}/${p.id}`} type={p.type as 'rules' | 'role' | 'project' | 'document'} id={p.id!} />],
   ['/changes', (_p, refresh) => <ChangesScreen onReviewed={refresh} />],
   ['/github', () => <GitHubScreen />],
   ['/log', () => <LogScreen key={location.search} />],

@@ -79,6 +79,7 @@ describe('role checks on writes', () => {
         name: string;
         roles: { slug: string; source: string }[];
         roles_confirmed: boolean;
+        roles_suggested_at: string | null;
       }[];
     }>('/api/owner/connections');
     const grok = list.connections.find((c) => c.client_id === clientId)!;
@@ -88,7 +89,29 @@ describe('role checks on writes', () => {
     assert.ok(grok.roles.every((r) => r.source === 'suggested'));
     assert.ok(!grok.roles.some((r) => r.slug === 'intern'), 'prefill must not include roles only seen on another connection');
     assert.deepEqual(otherConn.roles.map((r) => r.slug).sort(), ['intern']);
+    assert.equal(grok.roles_suggested_at, null, 'GET must not persist the suggestion');
+    assert.equal(otherConn.roles_suggested_at, null, 'GET must not persist the suggestion');
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM connection_role WHERE client_id = ?', clientId), undefined);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM connection_role WHERE client_id = ?', otherConn.client_id), undefined);
     otherClientId = otherConn.client_id;
+  });
+
+  it('logs saving a connection role list without confirming it', async () => {
+    await owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['lead'], confirm: false } });
+    const ev = get<{ actor_kind: string; data: string }>(
+      env.svc.db,
+      "SELECT actor_kind, data FROM event WHERE action = 'connection.roles_updated' AND entity_id = ? ORDER BY id DESC LIMIT 1",
+      clientId,
+    )!;
+    assert.equal(ev.actor_kind, 'owner');
+    const data = JSON.parse(ev.data) as { role_ids: string[]; confirmed: boolean };
+    assert.equal(data.confirmed, false);
+    assert.deepEqual(data.role_ids, [leadId]);
+    const grok = (
+      await owner.json<{ connections: { client_id: string; roles_confirmed: boolean; roles_suggested_at: string | null }[] }>('/api/owner/connections')
+    ).connections.find((c) => c.client_id === clientId)!;
+    assert.equal(grok.roles_confirmed, false);
+    assert.ok(grok.roles_suggested_at, 'saving a draft locks it so a later prefill cannot add removed roles');
   });
 
   it('refuses to turn on enforcement while an active connection has no confirmed list, unless the owner overrides', async () => {
