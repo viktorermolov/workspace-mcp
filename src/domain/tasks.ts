@@ -1,5 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
+import { assertCanEdit, withOwnerRole } from './access.ts';
 import { requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -165,7 +166,7 @@ function emitDependentsUnblocked(db: DB, actor: Actor, finishedId: string): void
     if (open.n === 0) {
       const t = get<TaskRow>(db, 'SELECT * FROM task WHERE id = ?', d.task_id);
       if (t && !FINISHED.includes(t.status)) {
-        recordEvent(db, actor, 'task', t.id, 'task.unblocked', `All dependencies of task "${t.title}" are finished`, { role_id: t.role_id });
+        recordEvent(db, actor, 'task', t.id, 'task.unblocked', `All dependencies of task "${t.title}" are finished`, withOwnerRole(db, t.role_id, { role_id: t.role_id }));
       }
     }
   }
@@ -222,18 +223,19 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
         }
         const t = requireTask(db, actor.memberId, id);
         indexTask(db, t);
-        recordEvent(db, actor, 'task', id, 'task.created', `Task "${t.title}" created${roleId ? ` for ${slugOf(db, 'role', roleId)}` : ''}`, {
+        recordEvent(db, actor, 'task', id, 'task.created', `Task "${t.title}" created${roleId ? ` for ${slugOf(db, 'role', roleId)}` : ''}`, withOwnerRole(db, t.role_id, {
           role_id: t.role_id,
           project_id: t.project_id,
           status: t.status,
           from_role: actor.role ?? null,
-        });
-        if (t.role_id) recordEvent(db, actor, 'task', id, 'task.assigned', `Task "${t.title}" assigned to ${slugOf(db, 'role', t.role_id)}`, { role_id: t.role_id, from_role: actor.role ?? null });
+        }));
+        if (t.role_id) recordEvent(db, actor, 'task', id, 'task.assigned', `Task "${t.title}" assigned to ${slugOf(db, 'role', t.role_id)}`, withOwnerRole(db, t.role_id, { role_id: t.role_id, from_role: actor.role ?? null }));
         return taskView(db, t);
       });
     }
 
     const t = requireTask(db, actor.memberId, input.id);
+    assertCanEdit(db, actor, t.role_id, { what: 'task' });
     checkRev('task', t.id, t.rev, input.rev);
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const sets: string[] = [];
@@ -283,13 +285,13 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     run(db, `UPDATE task SET ${sets.join(', ')} WHERE id = ?`, ...vals);
     const u = requireTask(db, actor.memberId, t.id);
     indexTask(db, u);
-    recordEvent(db, actor, 'task', t.id, 'task.updated', `Task "${u.title}" updated: ${Object.keys(changes).join(', ')}`, {
+    recordEvent(db, actor, 'task', t.id, 'task.updated', `Task "${u.title}" updated: ${Object.keys(changes).join(', ')}`, withOwnerRole(db, u.role_id, {
       role_id: u.role_id,
       project_id: u.project_id,
       changes,
-    });
+    }));
     if (changes.role_id && u.role_id) {
-      recordEvent(db, actor, 'task', t.id, 'task.assigned', `Task "${u.title}" assigned to ${slugOf(db, 'role', u.role_id)}`, { role_id: u.role_id, from_role: actor.role ?? null });
+      recordEvent(db, actor, 'task', t.id, 'task.assigned', `Task "${u.title}" assigned to ${slugOf(db, 'role', u.role_id)}`, withOwnerRole(db, u.role_id, { role_id: u.role_id, from_role: actor.role ?? null }));
     }
     if (changes.status && FINISHED.includes(u.status) && !FINISHED.includes(t.status)) emitDependentsUnblocked(db, actor, u.id);
     return taskView(db, u);
@@ -300,14 +302,15 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
 export function claimTask(db: DB, actor: Actor, input: { id: string; role?: string }) {
   return tx(db, () => {
     const t = requireTask(db, actor.memberId, input.id);
-    const role = input.role ? requireRole(db, actor.memberId, input.role) : undefined;
+    assertCanEdit(db, actor, t.role_id, { what: 'task' });
+    const assign = input.role ? requireRole(db, actor.memberId, input.role) : (actor.role ? requireRole(db, actor.memberId, actor.role) : undefined);
     const res = run(
       db,
       `UPDATE task SET status = 'in_progress', claimed_by = ?, claimed_role = ?, role_id = COALESCE(role_id, ?), rev = rev + 1, updated_at = ?
        WHERE id = ? AND status = 'open' AND claimed_by IS NULL AND archived_at IS NULL`,
       actor.connectionId ?? 'owner',
-      input.role ?? actor.role ?? null,
-      role?.id ?? null,
+      actor.role ?? input.role ?? null,
+      assign?.id ?? null,
       now(),
       t.id,
     );
@@ -318,7 +321,7 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
       });
     }
     const u = requireTask(db, actor.memberId, t.id);
-    recordEvent(db, { ...actor, role: input.role ?? actor.role }, 'task', t.id, 'task.claimed', `Task "${u.title}" claimed`, { role_id: u.role_id });
+    recordEvent(db, actor, 'task', t.id, 'task.claimed', `Task "${u.title}" claimed`, withOwnerRole(db, u.role_id, { role_id: u.role_id }));
     return taskView(db, u);
   });
 }
@@ -343,7 +346,7 @@ export function commentTask(db: DB, actor: Actor, input: { id: string; body: str
         actor.role ?? null,
         now(),
       );
-      recordEvent(db, actor, 'task', t.id, 'task.commented', `Comment on task "${t.title}"`, { role_id: t.role_id, comment_id: id, from_role: actor.role ?? null });
+      recordEvent(db, actor, 'task', t.id, 'task.commented', `Comment on task "${t.title}"`, withOwnerRole(db, t.role_id, { role_id: t.role_id, comment_id: id, from_role: actor.role ?? null }));
       return { comment_id: id, task_id: t.id };
     }),
   );
@@ -359,6 +362,7 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
   return tx(db, () =>
     idempotent(db, actor.memberId, input.idempotency_key, 'checkpoint', () => {
       const role = requireRole(db, actor.memberId, input.role);
+      assertCanEdit(db, actor, role.id, { what: 'checkpoint' });
       const project = input.project ? requireProject(db, actor.memberId, input.project) : undefined;
       const id = newId('chk');
       const at = now();
@@ -379,10 +383,10 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
         actor.role ?? role.slug,
         at,
       );
-      recordEvent(db, { ...actor, role: actor.role ?? role.slug }, 'checkpoint', id, 'checkpoint.created', `Checkpoint for ${role.slug}${project ? ` / ${project.slug}` : ''}`, {
+      recordEvent(db, actor, 'checkpoint', id, 'checkpoint.created', `Checkpoint for ${role.slug}${project ? ` / ${project.slug}` : ''}`, withOwnerRole(db, role.id, {
         role_id: role.id,
         project_id: project?.id ?? null,
-      });
+      }));
       return { id, role: role.slug, project: project?.slug ?? null, created_at: at };
     }),
   );

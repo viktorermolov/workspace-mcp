@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { all, get, now, run, type DB } from '../db/db.ts';
 
-/** Who is making a change. Agents are identified by their OAuth connection; the role is self-claimed. */
+/** Who is making a change. Agents are identified by their OAuth connection; the role is the one they passed as claimed_role and that the server accepted. */
 export interface Actor {
   kind: 'owner' | 'agent' | 'system';
   memberId: string;
