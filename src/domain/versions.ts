@@ -1,5 +1,6 @@
 import { diffLines } from 'diff';
 import { get, now, run, tx, type DB } from '../db/db.ts';
+import { assertCanEditEntity, entityOwnerRoleId, withOwnerRole } from './access.ts';
 import { addVersion, checkRev, currentVersionNumber, getVersion, indexEntity, listVersions, notFound, recordEvent, type Actor, type VersionedType } from './core.ts';
 import { findRules, indexProject, indexRole, logLabel, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
 
@@ -83,6 +84,7 @@ const entityTable: Record<Exclude<VersionedType, 'rules'>, string> = { role: 'ro
 export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string | undefined, toNumber: number, rev: number | undefined, note?: string) {
   return tx(db, () => {
     const id = versionedId(db, actor.memberId, type, ref);
+    assertCanEditEntity(db, actor, type, id);
     const target = getVersion(db, type, id, toNumber);
     const current =
       type === 'rules'
@@ -109,11 +111,12 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
     }
     const action = type === 'rules' ? 'rules.updated' : type === 'role' ? 'role.instruction_updated' : `${type}.updated`;
     const label = type === 'rules' ? (findRules(db, actor.memberId, id)?.title ?? 'Working rules') : logLabel(db, type, id);
-    recordEvent(db, actor, type, id, action, `${label} rolled back to version ${toNumber} (new version ${v.number})`, {
+    const owner = entityOwnerRoleId(db, actor.memberId, type, id);
+    recordEvent(db, actor, type, id, action, `${label} rolled back to version ${toNumber} (new version ${v.number})`, withOwnerRole(db, owner === 'rules' ? null : owner, {
       version: v.number,
       rollback_to: toNumber,
       changed: [type === 'role' ? 'instruction' : type === 'document' ? 'body' : type === 'project' ? 'description' : 'text'],
-    });
+    }));
     return { type, id, new_version: v.number, restored_from: toNumber };
   });
 }

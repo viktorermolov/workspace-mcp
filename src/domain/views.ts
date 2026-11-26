@@ -1,3 +1,4 @@
+import { editedWhoseLabel } from './access.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
 import { actorLabel, DomainError, ftsQuery, invalid, LIMITS, MAX_RESPONSE_CHARS, notFound, parseEvent, preview, type Actor } from './core.ts';
 import {
@@ -298,7 +299,21 @@ export function changes(db: DB, memberId: string, input: { cursor?: number; limi
   const more = rows.length > limit;
   const page = rows.slice(0, limit);
   return {
-    events: page.map((e) => ({ id: e.id, at: e.at, by: actorLabel(e), entity_type: e.entity_type, entity_id: e.entity_id, action: e.action, summary: e.summary })),
+    events: page.map((e) => {
+      const owner_role = (e.data?.owner_role as string | undefined) ?? null;
+      return {
+        id: e.id,
+        at: e.at,
+        by: actorLabel(e),
+        claimed_role: e.claimed_role,
+        owner_role,
+        whose: editedWhoseLabel(owner_role, e.claimed_role),
+        entity_type: e.entity_type,
+        entity_id: e.entity_id,
+        action: e.action,
+        summary: e.summary,
+      };
+    }),
     next_cursor: page.length ? page[page.length - 1].id : (input.cursor ?? 0),
     has_more: more,
   };

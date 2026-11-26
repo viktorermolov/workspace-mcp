@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import type { DB } from '../db/db.ts';
+import { assertStartRole, attachWarnings, resolveAgentActor, runWithWarnings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, type Actor } from '../domain/core.ts';
 import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '../domain/entities.ts';
 import { ROUTINE_STATUSES, saveRoutine } from '../domain/routines.ts';
@@ -89,6 +90,18 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
   const server = new McpServer({ name: SERVER_NAME, version, ...(sourceUrl ? { websiteUrl: sourceUrl } : {}) }, { instructions: SERVER_INSTRUCTIONS });
   const act = (role?: string): Actor => ({ ...actorOf(), role: role?.trim() || undefined });
 
+  function writeWrap<A>(claimedOf: (args: A) => { claimed?: string; synonym?: string }, fn: (args: A, actor: Actor) => unknown) {
+    return wrap((args: A) => {
+      const { value, warnings } = runWithWarnings(() => {
+        const { claimed, synonym } = claimedOf(args);
+        const actor = resolveAgentActor(db, actorOf(), claimed, { synonym });
+        return fn(args, actor);
+      });
+      return attachWarnings(value, warnings);
+    });
+  }
+  const claimed = <A extends { claimed_role?: string }>(args: A) => ({ claimed: args.claimed_role });
+
   server.registerTool(
     'start',
     {
@@ -104,7 +117,13 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       // confirm the first call of every session.
       annotations: { ...READ, idempotentHint: false, title: 'Start here' },
     },
-    wrap(({ role, project }) => startView(db, act(role), role, { project })),
+    wrap(({ role, project }) => {
+      const { value, warnings } = runWithWarnings(() => {
+        if (role?.trim()) assertStartRole(db, actorOf(), role.trim());
+        return startView(db, act(role), role, { project });
+      });
+      return attachWarnings(value, warnings);
+    }),
   );
 
   server.registerTool(
@@ -154,12 +173,12 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         setup_notes: z.string().max(LIMITS.text).optional().describe('What a new platform must recreate by hand: connectors, wake-up triggers. Structured schedules belong in save_routine.'),
         links: z.array(z.object({ to: id, type: z.string().min(1).max(100) })).max(50).optional(),
         note: note.optional(),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => saveRole(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveRole(db, actor, input)),
   );
 
   server.registerTool(
@@ -184,7 +203,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => saveRoutine(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveRoutine(db, actor, input)),
   );
 
   server.registerTool(
@@ -202,12 +221,13 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         state: z.string().max(LIMITS.text).optional(),
         repos: z.array(z.string().max(300)).max(20).optional().describe('Repository URLs or owner/name.'),
         note: note.optional(),
+        owner_role: z.string().max(200).nullable().optional().describe('Role that owns this project, or null to leave it shared.'),
         claimed_role: z.string().max(200).optional(),
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => saveProject(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveProject(db, actor, input)),
   );
 
   server.registerTool(
@@ -228,7 +248,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => saveDocument(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveDocument(db, actor, input)),
   );
 
   server.registerTool(
@@ -249,7 +269,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       }),
       annotations: WRITE_IDEMPOTENT,
     },
-    wrap(({ claimed_role, ...input }) => updateRules(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => updateRules(db, actor, input)),
   );
 
   server.registerTool(
@@ -276,7 +296,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => saveTask(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveTask(db, actor, input)),
   );
 
   server.registerTool(
@@ -284,10 +304,14 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Claim a task',
       description: 'Atomically take an open, unclaimed task and set it in_progress. Fails with a conflict if someone else got it first.',
-      inputSchema: z.object({ id, role: z.string().max(200).optional().describe('Your role.') }),
+      inputSchema: z.object({
+        id,
+        role: z.string().max(200).optional().describe('Role the task belongs to (slug or id). Using this as the author when claimed_role is omitted is deprecated.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+      }),
       annotations: WRITE,
     },
-    wrap(({ id: taskId, role }) => claimTask(db, act(role), { id: taskId, role })),
+    writeWrap((a) => ({ claimed: a.claimed_role, synonym: a.role }), ({ id: taskId, role }, actor) => claimTask(db, actor, { id: taskId, role })),
   );
 
   server.registerTool(
@@ -298,7 +322,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       inputSchema: z.object({ id, body: z.string().min(1).max(LIMITS.comment), claimed_role: z.string().max(200).optional(), idempotency_key: idem.optional() }),
       annotations: WRITE,
     },
-    wrap(({ claimed_role, ...input }) => commentTask(db, act(claimed_role), input)),
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => commentTask(db, actor, input)),
   );
 
   server.registerTool(
@@ -309,7 +333,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       inputSchema: z.object({ type: z.enum(ARCHIVABLE), id, restore: z.boolean().optional(), claimed_role: z.string().max(200).optional() }),
       annotations: WRITE_IDEMPOTENT,
     },
-    wrap(({ type, id: ref, restore, claimed_role }) => setArchived(db, act(claimed_role), type, ref, !restore)),
+    writeWrap(claimed, ({ type, id: ref, restore, claimed_role: _c }, actor) => setArchived(db, actor, type, ref, !restore)),
   );
 
   server.registerTool(
@@ -353,7 +377,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       inputSchema: z.object({ type: z.enum(VERSIONED), id: id.optional(), to_version: z.number().int().positive(), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
       annotations: WRITE,
     },
-    wrap(({ type, id: ref, to_version, rev: r, note: n, claimed_role }) => rollback(db, act(claimed_role), type, ref, to_version, r, n)),
+    writeWrap(claimed, ({ type, id: ref, to_version, rev: r, note: n }, actor) => rollback(db, actor, type, ref, to_version, r, n)),
   );
 
   server.registerTool(
@@ -362,16 +386,17 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       title: 'Write a checkpoint',
       description: 'Record, for your role (and optionally a project), what was done, where you stopped and what is next. The next session of this role sees it in start.',
       inputSchema: z.object({
-        role: z.string().min(1).max(200),
+        role: z.string().min(1).max(200).describe('Role this checkpoint belongs to (slug or id).'),
         project: z.string().max(200).optional(),
         done: z.string().max(LIMITS.text),
         stopped_at: z.string().max(LIMITS.text),
         next: z.string().max(LIMITS.text),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
     },
-    wrap((input) => writeCheckpoint(db, act(input.role), input)),
+    writeWrap((a) => ({ claimed: a.claimed_role, synonym: a.role }), (input, actor) => writeCheckpoint(db, actor, input)),
   );
 
   server.registerTool(
