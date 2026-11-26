@@ -26,7 +26,7 @@ const ROUTES: Route[] = [
   ['/roles/:id', (p) => <RoleScreen key={p.id} id={p.id!} />],
   ['/rules', () => <RulesScreen />],
   ['/history/rules', () => <HistoryScreen type="rules" />],
-  ['/history/:type/:id', (p) => <HistoryScreen key={`${p.type}/${p.id}`} type={p.type as 'role' | 'project' | 'document'} id={p.id!} />],
+  ['/history/:type/:id', (p) => <HistoryScreen key={`${p.type}/${p.id}`} type={p.type as 'rules' | 'role' | 'project' | 'document'} id={p.id!} />],
   ['/changes', (_p, refresh) => <ChangesScreen onReviewed={refresh} />],
   ['/github', () => <GitHubScreen />],
   ['/log', () => <LogScreen key={location.search} />],
