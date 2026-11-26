@@ -44,11 +44,11 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 
 ### `start`
 
-Input: `role` (optional, slug or id).
+Input: `role` (optional, slug or id), `project` (optional, slug or id).
 
 Returns two blocks:
 
-- `instructions`: `working_rules`, `working_rules_version` (the version-history number) and `working_rules_rev` (the conflict-check counter: pass this, not the version, to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`.
+- `instructions`: `working_rules`, `working_rules_version` (the version-history number) and `working_rules_rev` (the conflict-check counter: pass this, not the version, to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`. When a project is given, `project_rules` is also included: an array of that project's rules sets (`id`, `slug`, `title`, `text`, `version`, `rev`). They supplement the global working rules; they do not replace them. There is no separate "active" test set — attach a set to a `[TEST]` project and pass that project to `start`.
 - `data`: the `roles` (id, slug, name, area), `archived_roles` (id, slug, name, `archived: true`) when any exist, the `projects` with `focus` and `state`, a global `routines` list, and for the given role its links and setup notes, its `role_routines`, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; `null` on the first `start` of a connection with a given role, since there is no previous call: read earlier history with `changes`; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
 
 `start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles, 50 archived roles, 50 projects and 50 routines are listed (`more_roles`, `more_archived_roles`, `more_projects` and `more_routines` count the rest; find them with `search`, with `include_archived` for archived roles), and at most 100 links of the role (`more_links`). When a role is given, `role_routines` (and `more_role_routines`) lists that role's routines. Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
@@ -59,7 +59,7 @@ On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` ex
 
 ### `get`
 
-Input: `type` (an entity type), `id` (not needed for `rules`), and for tasks an optional `cursor`.
+Input: `type` (an entity type), `id` (not needed for the default working rules; pass id or slug for another rules set), and for tasks an optional `cursor`.
 
 Roles include their links and the current instruction; projects include open tasks and documents; routines include schedule, timezone, status, external platform id and last run; tasks include up to 100 dependencies and 100 subtasks (`more_dependencies` and `more_subtasks` count the rest) and the newest 10 comments (oldest first), with `comments_total` and `comments_cursor`: pass it as `cursor` for the 10 before them; documents include the current body.
 
@@ -97,9 +97,9 @@ Every change to the body creates a new version. Documents are found by full-text
 
 ### `update_rules`
 
-Input: `text`, `rev` (`working_rules_rev` from `start`, or `rev` from `get(rules)`; not `working_rules_version` or `version`; not needed for the very first text), `note`, `claimed_role`.
+Input: `text`, `rev` (`working_rules_rev` from `start`, or `rev` from `get(rules)`; not `working_rules_version` or `version`; not needed for the very first text of a set), `note`, `id`, `slug`, `title`, `project` (slug or id, or `null` to detach), `claimed_role`.
 
-Replaces the working rules shared by all roles and platforms and creates a new version. Saving the same text again is a no-op.
+Omit `id` and `slug` to update the default working rules, same as before: this replaces that set's text and creates a new version. Saving the same text again is a no-op. Pass the `slug` of an existing set to update it, or a new `slug` (and `text`) to create an additional titled set; `title` defaults to the slug, and `project` optionally scopes the set to a project. The default set stays global and cannot be attached to a project. Slugs are unique per member.
 
 ### `save_task`
 
@@ -125,7 +125,7 @@ Archived items are hidden from the main lists and kept with their history. `star
 
 ### `versions`
 
-Input: `type` (`rules`, `role`, `project` or `document`), `id` (not needed for rules), `action`:
+Input: `type` (`rules`, `role`, `project` or `document`), `id` (not needed for the default working rules; pass id or slug for another rules set), `action`:
 
 - `list` (default): versions, newest first, with number, author, time and note. A version made by `rollback` has `rollback_of`, the number of the version it restored; for other versions it is `null`. `limit` and `before` page through them.
 - `get`: the full text of version `number`.

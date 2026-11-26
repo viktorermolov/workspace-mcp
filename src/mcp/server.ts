@@ -94,14 +94,17 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Start here',
       description:
-        'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open tasks, last checkpoint and changes since your previous start. On an empty workspace it explains how to fill it.',
-      inputSchema: z.object({ role: z.string().max(200).optional().describe('Your role slug or id, if you have one.') }),
+        'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open tasks, last checkpoint and changes since your previous start. Pass an optional project to also receive that project\'s rules, which supplement the global working rules. On an empty workspace it explains how to fill it.',
+      inputSchema: z.object({
+        role: z.string().max(200).optional().describe('Your role slug or id, if you have one.'),
+        project: z.string().max(200).optional().describe('Optional project slug or id. When given, instructions also include that project\'s rules, which supplement the global working rules.'),
+      }),
       // Read-only for the workspace: the only write is this connection's "previous start" marker,
       // which changes no content. Marking start as a write would make platforms ask the owner to
       // confirm the first call of every session.
       annotations: { ...READ, idempotentHint: false, title: 'Start here' },
     },
-    wrap(({ role }) => startView(db, act(role), role)),
+    wrap(({ role, project }) => startView(db, act(role), role, { project })),
   );
 
   server.registerTool(
@@ -109,7 +112,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Get by id',
       description:
-        'Fetch one item by id (roles and projects also by slug). type "rules" needs no id. Tasks include the newest comments; pass comments_cursor as cursor for older ones. Projects include open tasks and documents. Routines include their schedule, timezone, status and last run.',
+        'Fetch one item by id (roles and projects also by slug). type "rules" needs no id (returns the default working rules); pass id or slug for another rules set. Tasks include the newest comments; pass comments_cursor as cursor for older ones. Projects include open tasks and documents. Routines include their schedule, timezone, status and last run.',
       inputSchema: z.object({ type: z.enum(ENTITY_TYPES), id: id.optional(), cursor: z.string().max(100).optional().describe('For tasks: comments_cursor from a previous get, to page to older comments.') }),
       annotations: READ,
     },
@@ -231,9 +234,19 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
   server.registerTool(
     'update_rules',
     {
-      title: 'Update the working rules',
-      description: 'Replace the working rules shared by all roles and platforms. Pass working_rules_rev from start, or rev from get(rules) — not working_rules_version / version, which is the version-history number. Creates a new version.',
-      inputSchema: z.object({ text: z.string().max(LIMITS.instruction), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
+      title: 'Update or create a rules set',
+      description:
+        'Replace the text of a rules set, or create an additional titled set. Omit id and slug to update the default working rules (same as before). Pass the slug of a new set (and text) to create it; title and optional project apply to that set. Project rules supplement the global working rules; there is no separate active test set — attach a set to a [TEST] project instead. The default set stays global and cannot be attached to a project. Pass working_rules_rev from start, or rev from get(rules) — not working_rules_version / version. The first text of a new set needs no rev.',
+      inputSchema: z.object({
+        text: z.string().max(LIMITS.instruction).optional(),
+        rev: rev.optional(),
+        note: note.optional(),
+        id: id.optional().describe('Rules set id. Omit together with slug to update the default working rules.'),
+        slug: z.string().max(60).optional().describe('Existing slug to update, or a new slug to create a set.'),
+        title: z.string().max(LIMITS.title).optional(),
+        project: z.string().max(200).nullable().optional().describe('Project slug or id to attach this set to, or null to detach. The default set cannot be attached to a project.'),
+        claimed_role: z.string().max(200).optional(),
+      }),
       annotations: WRITE_IDEMPOTENT,
     },
     wrap(({ claimed_role, ...input }) => updateRules(db, act(claimed_role), input)),
@@ -307,7 +320,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         'Versions of working rules, a role instruction, a project description or a document. action "list" (default) lists versions, "get" returns one version\'s text, "compare" shows a line-by-line diff between two versions (from=0 means empty).',
       inputSchema: z.object({
         type: z.enum(VERSIONED),
-        id: id.optional().describe('Not needed for rules.'),
+        id: id.optional().describe('Not needed for the default working rules; pass id or slug for another rules set.'),
         action: z.enum(['list', 'get', 'compare']).optional(),
         number: z.number().int().positive().optional().describe('For get.'),
         from: z.number().int().min(0).optional().describe('For compare.'),

@@ -1,7 +1,7 @@
 import { diffLines } from 'diff';
 import { get, now, run, tx, type DB } from '../db/db.ts';
 import { addVersion, checkRev, currentVersionNumber, getVersion, indexEntity, listVersions, notFound, recordEvent, type Actor, type VersionedType } from './core.ts';
-import { indexProject, indexRole, logLabel, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
+import { findRules, indexProject, indexRole, logLabel, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
 
 export interface DiffLine {
   op: '+' | '-' | ' ';
@@ -47,7 +47,11 @@ export function diffText(d: { lines: DiffLine[] }): string {
 
 /** Resolves a versioned entity reference to its internal id. */
 export function versionedId(db: DB, memberId: string, type: VersionedType, ref?: string): string {
-  if (type === 'rules') return memberId;
+  if (type === 'rules') {
+    const r = findRules(db, memberId, ref);
+    if (!r) throw notFound('working rules', ref ?? memberId);
+    return r.id;
+  }
   if (!ref) throw notFound(type, '(missing id)');
   if (type === 'role') return requireRole(db, memberId, ref).id;
   if (type === 'project') return requireProject(db, memberId, ref).id;
@@ -82,7 +86,7 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
     const target = getVersion(db, type, id, toNumber);
     const current =
       type === 'rules'
-        ? get<{ rev: number; current_version: number | null }>(db, 'SELECT rev, current_version FROM rules WHERE member_id = ?', id)!
+        ? get<{ rev: number; current_version: number | null }>(db, 'SELECT rev, current_version FROM rules WHERE id = ?', id)!
         : get<{ rev: number; current_version: number | null }>(db, `SELECT rev, current_version FROM ${entityTable[type]} WHERE id = ?`, id)!;
     const versionField = type === 'role' ? 'instruction_version' : type === 'project' ? 'description_version' : 'version';
     if (rev !== undefined) {
@@ -93,7 +97,7 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
       });
     }
     const v = addVersion(db, actor, type, id, target.body, note ?? `Rollback to version ${toNumber}`, target.id);
-    if (type === 'rules') run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE member_id = ?', now(), id);
+    if (type === 'rules') run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE id = ?', now(), id);
     else run(db, `UPDATE ${entityTable[type]} SET rev = rev + 1, updated_at = ? WHERE id = ?`, now(), id);
     if (type === 'document') {
       const d = requireDocument(db, actor.memberId, id);
@@ -104,7 +108,7 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
       indexProject(db, get<ProjectRow>(db, 'SELECT * FROM project WHERE id = ?', id)!);
     }
     const action = type === 'rules' ? 'rules.updated' : type === 'role' ? 'role.instruction_updated' : `${type}.updated`;
-    const label = type === 'rules' ? 'Working rules' : logLabel(db, type, id);
+    const label = type === 'rules' ? (findRules(db, actor.memberId, id)?.title ?? 'Working rules') : logLabel(db, type, id);
     recordEvent(db, actor, type, id, action, `${label} rolled back to version ${toNumber} (new version ${v.number})`, {
       version: v.number,
       rollback_to: toNumber,

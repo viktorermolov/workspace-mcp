@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { all, get, run, tx, type DB } from '../db/db.ts';
 import { currentBody, DomainError, indexEntity, slugify } from '../domain/core.ts';
-import { indexProject, indexRole, type DocumentRow, type ProjectRow, type RoleRow } from '../domain/entities.ts';
+import { indexProject, indexRole, type DocumentRow, type ProjectRow, type RoleRow, type RulesRow } from '../domain/entities.ts';
 import { indexRoutine, type RoutineRow } from '../domain/routines.ts';
 import { indexTask, type TaskRow } from '../domain/tasks.ts';
 import { VERSION } from '../version.ts';
@@ -23,11 +23,11 @@ const MAX_UNPACKED = 512 * 1024 * 1024;
 /** Tables in insert order (parents before children). `member` marks tables with a member_id column. */
 const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'version', member: true, order: 'id' },
-  { name: 'rules', member: true, order: 'member_id' },
   { name: 'role', member: true, order: 'created_at, id' },
   { name: 'role_link', member: true, order: 'created_at, id' },
   { name: 'routine', member: true, order: 'created_at, id' },
   { name: 'project', member: true, order: 'created_at, id' },
+  { name: 'rules', member: true, order: 'created_at, id' },
   { name: 'document', member: true, order: 'created_at, id' },
   { name: 'task', member: true, order: 'created_at, id' },
   { name: 'task_dependency', member: false, order: 'task_id, depends_on_id' },
@@ -80,8 +80,14 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
   for (const r of tables.role as unknown as RoleRow[]) slugOf.set(r.id, r.slug);
   for (const p of tables.project as unknown as ProjectRow[]) slugOf.set(p.id, p.slug);
 
-  const rules = get<{ current_version: number | null; updated_at: string }>(db, 'SELECT current_version, updated_at FROM rules WHERE member_id = ?', memberId);
-  files['rules.md'] = strToU8(frontMatter({ type: 'rules', updated_at: rules?.updated_at }) + currentBody(db, rules?.current_version));
+  const rulesSets = all<RulesRow>(db, 'SELECT * FROM rules WHERE member_id = ? ORDER BY is_default DESC, slug', memberId);
+  const defaultRules = rulesSets.find((r) => r.is_default === 1) ?? rulesSets[0];
+  if (defaultRules) {
+    files['rules.md'] = strToU8(
+      frontMatter({ type: 'rules', id: defaultRules.id, slug: defaultRules.slug, title: defaultRules.title, updated_at: defaultRules.updated_at }) +
+        currentBody(db, defaultRules.current_version),
+    );
+  }
 
   const used = new Set<string>();
   const unique = (p: string) => {
@@ -90,6 +96,21 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
     used.add(out);
     return out;
   };
+  for (const r of rulesSets) {
+    if (defaultRules && r.id === defaultRules.id) continue;
+    const projectSlug = r.project_id ? (slugOf.get(r.project_id) ?? r.project_id) : undefined;
+    files[unique(`rules/${safeName(r.slug, r.id)}.md`)] = strToU8(
+      frontMatter({
+        type: 'rules',
+        id: r.id,
+        slug: r.slug,
+        title: r.title,
+        project: projectSlug,
+        is_default: false,
+        updated_at: r.updated_at,
+      }) + currentBody(db, r.current_version),
+    );
+  }
   for (const r of tables.role as unknown as RoleRow[]) {
     const links = (tables.role_link as { from_role_id: string; to_role_id: string; type: string }[]).filter((l) => l.from_role_id === r.id).map((l) => `${l.type}: ${slugOf.get(l.to_role_id) ?? l.to_role_id}`);
     files[unique(`roles/${safeName(r.slug, r.id)}.md`)] = strToU8(
@@ -216,6 +237,7 @@ export function isWorkspaceEmpty(db: DB, memberId: string): boolean {
   for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint', 'routine']) {
     if (get(db, `SELECT 1 FROM ${t} WHERE member_id = ? LIMIT 1`, memberId)) return false;
   }
+  if (get(db, 'SELECT 1 FROM rules WHERE member_id = ? AND is_default = 0 LIMIT 1', memberId)) return false;
   return true;
 }
 
@@ -233,17 +255,44 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
       if (!Array.isArray(rows)) throw new DomainError('invalid', `workspace.json: ${t.name} is not a list`);
       const cols = (all<{ name: string }>(db, `PRAGMA table_info(${t.name})`)).map((c) => c.name);
       if (t.name === 'rules') {
-        const r = rows[0];
-        if (r) run(db, 'UPDATE rules SET current_version = ?, rev = ?, updated_at = ? WHERE member_id = ?', r.current_version ?? null, r.rev ?? 1, r.updated_at ?? new Date().toISOString(), memberId);
-        counts[t.name] = r ? 1 : 0;
+        const importedHaveIds = rows.some((row) => row && typeof row === 'object' && (row as { id?: unknown }).id);
+        if (!importedHaveIds) {
+          // Pre-titled-rules export: a single row keyed by member, no id. Update the
+          // auto-created default set; versions and events are remapped to its id below.
+          const r = rows[0] as Record<string, unknown> | undefined;
+          if (r) {
+            run(
+              db,
+              'UPDATE rules SET current_version = ?, rev = ?, updated_at = ? WHERE member_id = ? AND is_default = 1',
+              r.current_version ?? null,
+              r.rev ?? 1,
+              r.updated_at ?? new Date().toISOString(),
+              memberId,
+            );
+          }
+          counts[t.name] = r ? 1 : 0;
+          continue;
+        }
+        // New export: replace the placeholder default and keep the exported ids.
+        run(db, 'DELETE FROM rules WHERE member_id = ?', memberId);
+        for (const row of rows) {
+          const vals: Record<string, unknown> = { ...(row as Record<string, unknown>), member_id: memberId };
+          const use = cols.filter((c) => c in vals);
+          run(db, `INSERT INTO ${t.name} (${use.join(',')}) VALUES (${use.map(() => '?').join(',')})`, ...use.map((c) => (vals[c] === undefined ? null : vals[c])));
+        }
+        counts[t.name] = rows.length;
         continue;
       }
+      const defaultRulesId = get<{ id: string }>(db, 'SELECT id FROM rules WHERE member_id = ? AND is_default = 1', memberId)?.id;
+      const importedRulesHaveIds = (data.tables.rules ?? []).some((row: unknown) => row && typeof row === 'object' && (row as { id?: unknown }).id);
       for (const row of rows) {
         const vals: Record<string, unknown> = { ...row };
         if (t.member) vals.member_id = memberId;
-        // Working rules belong to the member, so their versions and log entries point at the
-        // member id, which differs between instances.
-        if ((t.name === 'version' || t.name === 'event') && vals.entity_type === 'rules') vals.entity_id = memberId;
+        // Old exports keyed rules versions and events by the source member id. Point them at
+        // this workspace's default rules id. New exports already use the rules row id.
+        if ((t.name === 'version' || t.name === 'event') && vals.entity_type === 'rules' && !importedRulesHaveIds && defaultRulesId) {
+          vals.entity_id = defaultRulesId;
+        }
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
         const use = cols.filter((c) => c in vals);
         run(db, `INSERT INTO ${t.name} (${use.join(',')}) VALUES (${use.map(() => '?').join(',')})`, ...use.map((c) => (vals[c] === undefined ? null : vals[c])));

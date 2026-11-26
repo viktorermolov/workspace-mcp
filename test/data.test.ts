@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, mock } from 'node:test';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createBackup, listBackups, pruneBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
-import { buildExport, readExport } from '../src/backup/export.ts';
+import { buildExport, importExport, readExport } from '../src/backup/export.ts';
 import { loadConfig } from '../src/config.ts';
 import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
-import { ensureOwnerMember, saveRole, updateRules } from '../src/domain/entities.ts';
+import { ensureOwnerMember, getRules, saveRole, updateRules } from '../src/domain/entities.ts';
 import { log } from '../src/util/log.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService } from './helpers/harness.ts';
 
@@ -288,7 +289,7 @@ describe('data safety', () => {
       const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(env.svc.db).id };
       updateRules(env.svc.db, owner, { text: 'Version one' });
       file = await createBackup(env.svc.db, env.config, 'manual');
-      const r1 = get<{ rev: number }>(env.svc.db, 'SELECT rev FROM rules')!.rev;
+      const r1 = get<{ rev: number }>(env.svc.db, 'SELECT rev FROM rules WHERE is_default = 1')!.rev;
       updateRules(env.svc.db, owner, { text: 'Version two', rev: r1 });
       assert.throws(() => openOffline(env.config.dbPath), DatabaseInUseError);
       await assert.rejects(restoreBackup(env.config, file), DatabaseInUseError);
@@ -299,7 +300,7 @@ describe('data safety', () => {
     const { saved } = await restoreBackup(env.config, file);
     assert.ok(saved && fs.existsSync(saved));
     const env2 = await startService({ dataDir: env.dataDir });
-    const rules = get<{ body: string }>(env2.svc.db, 'SELECT v.body FROM rules r JOIN version v ON v.id = r.current_version')!;
+    const rules = get<{ body: string }>(env2.svc.db, 'SELECT v.body FROM rules r JOIN version v ON v.id = r.current_version WHERE r.is_default = 1')!;
     assert.equal(rules.body, 'Version one');
     await env2.close();
   });
@@ -322,6 +323,7 @@ describe('data safety', () => {
     await call(client, 'save_role', { id: role.id, rev: role.rev, instruction: 'Draft and edit posts.' });
     await call(client, 'save_routine', { name: 'Weekly draft', role: 'writer', schedule: '0 9 * * 1', timezone: 'UTC' });
     await call(client, 'save_project', { name: 'Blog', slug: 'blog' });
+    await call(client, 'update_rules', { slug: 'blog-voice', title: 'Blog voice', project: 'blog', text: 'Write like a newsletter.' });
     await call(client, 'save_document', { title: 'Style guide', body: '# Style\nShort sentences.', attach_to: { type: 'project', id: 'blog' } });
     const t1 = await call(client, 'save_task', { title: 'Outline', role: 'writer', project: 'blog' });
     await call(client, 'save_task', { title: 'Publish', role: 'writer', project: 'blog', depends_on: [t1.id] });
@@ -334,7 +336,7 @@ describe('data safety', () => {
     const zip = new Uint8Array(await res.arrayBuffer());
     const files = unzipSync(zip);
     const names = Object.keys(files);
-    for (const n of ['manifest.json', 'workspace.json', 'rules.md', 'README.md', 'roles/writer.md', 'projects/blog.md', 'routines/weekly-draft.md']) assert.ok(names.includes(n), n);
+    for (const n of ['manifest.json', 'workspace.json', 'rules.md', 'rules/blog-voice.md', 'README.md', 'roles/writer.md', 'projects/blog.md', 'routines/weekly-draft.md']) assert.ok(names.includes(n), n);
     assert.ok(names.some((n) => n.startsWith('documents/project-blog/')));
     assert.ok(names.some((n) => n.startsWith('tasks/outline-')));
     const all = Object.values(files).map((f) => Buffer.from(f).toString('utf8')).join('\n');
@@ -351,6 +353,11 @@ describe('data safety', () => {
     const s = await call(agent.client, 'start', { role: 'writer' });
     assert.equal(s.instructions.working_rules, 'Be brief.');
     assert.equal(s.instructions.role_instruction, 'Draft and edit posts.');
+    const withProject = await call(agent.client, 'start', { role: 'writer', project: 'blog' });
+    assert.equal(withProject.instructions.working_rules, 'Be brief.');
+    assert.equal(withProject.instructions.project_rules.length, 1);
+    assert.equal(withProject.instructions.project_rules[0].slug, 'blog-voice');
+    assert.equal(withProject.instructions.project_rules[0].text, 'Write like a newsletter.');
     const versions = await call(agent.client, 'versions', { type: 'role', id: 'writer' });
     assert.equal(versions.versions.length, 2, 'history survives the move');
     const rulesHistory = await call(agent.client, 'versions', { type: 'rules' });
@@ -401,5 +408,93 @@ describe('data safety', () => {
     const anon = new Browser(env.base);
     assert.equal((await anon.fetch(`/api/owner/backups/${made.name}/download`)).status, 401);
     await env.close();
+  });
+
+  it('upgrades a single-row rules table to titled sets and remaps version and event ids', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsmcp-rules-mig-'));
+    const db = openDatabase(path.join(dir, 'workspace.sqlite'));
+    db.exec('CREATE TABLE IF NOT EXISTS app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+    for (const m of migrations.filter((mig) => mig.id <= 2)) {
+      db.exec(m.sql);
+      run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, new Date().toISOString());
+    }
+    const at = '2026-01-01T00:00:00.000Z';
+    run(db, "INSERT INTO member (id, user_id, name, is_owner, created_at) VALUES ('mem_legacy_49', NULL, 'Owner', 1, ?)", at);
+    run(db, "INSERT INTO rules (member_id, current_version, rev, updated_at) VALUES ('mem_legacy_49', NULL, 1, ?)", at);
+    run(
+      db,
+      "INSERT INTO version (member_id, entity_type, entity_id, number, body, actor_kind, created_at) VALUES ('mem_legacy_49', 'rules', 'mem_legacy_49', 1, 'Legacy working rules.', 'owner', ?)",
+      at,
+    );
+    const versionId = get<{ id: number }>(db, 'SELECT id FROM version WHERE entity_type = ? AND entity_id = ?', 'rules', 'mem_legacy_49')!.id;
+    run(db, 'UPDATE rules SET current_version = ? WHERE member_id = ?', versionId, 'mem_legacy_49');
+    run(
+      db,
+      "INSERT INTO event (member_id, at, actor_kind, entity_type, entity_id, action, summary) VALUES ('mem_legacy_49', ?, 'owner', 'rules', 'mem_legacy_49', 'rules.updated', 'Working rules updated to version 1')",
+      at,
+    );
+
+    const applied = runAppMigrations(db);
+    assert.equal(applied, 1);
+    const row = get<{ id: string; slug: string; title: string; is_default: number; project_id: string | null; member_id: string }>(
+      db,
+      'SELECT id, slug, title, is_default, project_id, member_id FROM rules WHERE member_id = ?',
+      'mem_legacy_49',
+    )!;
+    assert.ok(row.id.startsWith('rul_'));
+    assert.equal(row.slug, 'working-rules');
+    assert.equal(row.title, 'Working rules');
+    assert.equal(row.is_default, 1);
+    assert.equal(row.project_id, null);
+    assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM rules')!.n, 1);
+    assert.equal(get<{ entity_id: string }>(db, "SELECT entity_id FROM version WHERE entity_type = 'rules'")!.entity_id, row.id);
+    assert.equal(get<{ entity_id: string }>(db, "SELECT entity_id FROM event WHERE entity_type = 'rules'")!.entity_id, row.id);
+    // Triggers were recreated: updates to version and event still fail.
+    assert.throws(() => run(db, "UPDATE version SET body = 'nope' WHERE id = ?", versionId), /versions are immutable/);
+    const evId = get<{ id: number }>(db, "SELECT id FROM event WHERE entity_type = 'rules'")!.id;
+    assert.throws(() => run(db, "UPDATE event SET summary = 'nope' WHERE id = ?", evId), /the log is append-only/);
+    const view = getRules(db, 'mem_legacy_49');
+    assert.equal(view.text, 'Legacy working rules.');
+    assert.equal(view.version, 1);
+    db.close();
+  });
+
+  it('imports a pre-titled-rules export onto the destination default rules id', async () => {
+    const src = await startService();
+    const m = ensureOwnerMember(src.svc.db);
+    updateRules(src.svc.db, { kind: 'owner', memberId: m.id }, { text: 'Imported from an old export.' });
+    const { zip } = buildExport(src.svc.db, m.id);
+    await src.close();
+
+    const files = unzipSync(zip);
+    const ws = JSON.parse(Buffer.from(files['workspace.json']!).toString());
+    ws.tables.rules = (ws.tables.rules as Record<string, unknown>[]).map((r) => {
+      const { id: _id, slug: _slug, title: _title, project_id: _p, is_default: _d, created_at: _c, ...rest } = r;
+      return rest;
+    });
+    for (const row of [...(ws.tables.version as { entity_type: string; entity_id: string }[]), ...(ws.tables.event as { entity_type: string; entity_id: string }[])]) {
+      if (row.entity_type === 'rules') row.entity_id = 'mem_source_old';
+    }
+    const wsBytes = strToU8(JSON.stringify(ws));
+    const manifest = JSON.parse(Buffer.from(files['manifest.json']!).toString());
+    manifest.files['workspace.json'] = createHash('sha256').update(wsBytes).digest('hex');
+    const oldZip = zipSync({ ...files, 'workspace.json': wsBytes, 'manifest.json': strToU8(JSON.stringify(manifest, null, 2)) });
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      importExport(dst.svc.db, owner.id, oldZip);
+      const view = getRules(dst.svc.db, owner.id);
+      assert.equal(view.text, 'Imported from an old export.');
+      assert.ok(view.id.startsWith('rul_'));
+      const ver = get<{ entity_id: string }>(dst.svc.db, "SELECT entity_id FROM version WHERE entity_type = 'rules' LIMIT 1")!;
+      assert.equal(ver.entity_id, view.id);
+      assert.notEqual(ver.entity_id, owner.id);
+      assert.equal(get<{ n: number }>(dst.svc.db, "SELECT count(*) AS n FROM version WHERE entity_type = 'rules'")!.n, 1);
+      const ev = get<{ entity_id: string }>(dst.svc.db, "SELECT entity_id FROM event WHERE entity_type = 'rules' LIMIT 1")!;
+      assert.equal(ev.entity_id, view.id);
+    } finally {
+      await dst.close();
+    }
   });
 });

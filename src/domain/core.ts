@@ -210,8 +210,7 @@ export function addVersion(
     at,
   );
   const id = Number(res.lastInsertRowid);
-  const keyCol = type === 'rules' ? 'member_id' : 'id';
-  run(db, `UPDATE ${versionTable[type]} SET current_version = ? WHERE ${keyCol} = ?`, id, entityId);
+  run(db, `UPDATE ${versionTable[type]} SET current_version = ? WHERE id = ?`, id, entityId);
   return {
     id,
     entity_type: type,
