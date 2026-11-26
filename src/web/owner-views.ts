@@ -165,7 +165,7 @@ export function changeFeed(db: DB, memberId: string, limit = 200) {
       entity_id: e.entity_id,
       summary: e.summary,
       critical,
-      versioned: type ? { type, id: type === 'rules' ? null : e.entity_id, version } : null,
+      versioned: type ? { type, id: e.entity_id, version } : null,
       diff,
     };
   });

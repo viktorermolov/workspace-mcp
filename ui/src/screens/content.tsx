@@ -580,7 +580,7 @@ export function HistoryScreen({ type, id }: { type: VType; id?: string }) {
     });
   };
   const back = type === 'rules' ? '/rules' : type === 'role' ? `/roles/${enc(id!)}` : type === 'project' ? `/projects/${enc(id!)}` : `/documents/${enc(id!)}`;
-  const name = type === 'rules' ? 'Working rules' : (entity.data?.name ?? entity.data?.title ?? type);
+  const name = type === 'rules' ? (entity.data?.title ?? 'Working rules') : (entity.data?.name ?? entity.data?.title ?? type);
   const who = (v: VersionInfo) => (v.author?.connection ? `${v.author.connection}${v.author.role ? ` as @${v.author.role}` : ''}` : 'you');
   return (
     <Page title={`History: ${name}`} back={back}>
