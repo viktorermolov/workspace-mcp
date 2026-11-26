@@ -1224,6 +1224,7 @@ export function MoreScreen() {
   const act = useAction();
   const links: [string, string, string][] = [
     ['/rules', 'Working rules', 'Shared by every role'],
+    ['/read', 'Reading', 'Rendered rules, instructions and documents'],
     ['/roles', 'Roles', 'Who does what'],
     ['/projects', 'Projects and documents', 'Descriptions, specs, notes'],
     ['/github', 'GitHub issues', 'Read-only mirror'],

@@ -382,6 +382,82 @@ test('a temporary server error while loading shows a message and a way to try ag
   await expect(page).toHaveURL(/\/tasks$/);
 });
 
+test('reading pages, history and compare work at 390×844', async () => {
+  const previous = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto('/documents/new');
+  await page.getByLabel('Title').fill('Reading sample');
+  await page.getByLabel(/^Text/).fill(
+    [
+      '# Sample heading',
+      '',
+      'See [Example](https://example.com/ok) and [bad](javascript:alert(1)).',
+      '',
+      'An image: ![Diagram](https://example.com/pic.png)',
+      '',
+      '| Col | Val |',
+      '| --- | --- |',
+      '| A | 1 |',
+      '',
+      '```',
+      'const x = 1;',
+      '```',
+    ].join('\n'),
+  );
+  await page.getByRole('button', { name: 'Create document' }).click();
+  await expect(page.getByRole('heading', { name: 'Reading sample' })).toBeVisible();
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page).toHaveURL(/\/read\/document\//);
+  await expect(page.getByRole('heading', { name: 'Sample heading' })).toBeVisible();
+  const good = page.getByRole('link', { name: 'Example' });
+  await expect(good).toHaveAttribute('href', 'https://example.com/ok');
+  await expect(good).toHaveAttribute('rel', 'noopener noreferrer nofollow');
+  await expect(good).toHaveAttribute('target', '_blank');
+  const md = page.locator('.md').first();
+  await expect(md.getByRole('link', { name: 'bad' })).toHaveCount(0);
+  await expect(md.getByText('bad')).toBeVisible();
+  await expect(md.getByRole('img')).toHaveCount(0);
+  await expect(md.getByRole('link', { name: 'Diagram' })).toBeVisible();
+  await expect(md.locator('table')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await expect(page.locator('.read-layout')).toHaveCSS('display', 'block');
+
+  await page.goto('/read');
+  await expect(page.getByRole('heading', { name: 'Reading', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Working rules/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Reading sample/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Style guide/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Website/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Writer/ })).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+
+  await page.getByRole('link', { name: /Style guide/ }).click();
+  await expect(page).toHaveURL(/\/read\/document\//);
+  await expect(page.locator('.md').getByText('No jargon.')).toBeVisible();
+  const history = page.locator('#history');
+  await expect(history.getByRole('heading', { name: 'History' })).toBeVisible();
+  await expect(history.locator('.diff-line.del, .diff-line.add').first()).toBeVisible();
+  await history.getByRole('link', { name: 'Open', exact: true }).first().click();
+  await expect(page).toHaveURL(/[?&]v=/);
+  await expect(page.getByText(/You are viewing version/)).toBeVisible();
+  await page.getByRole('link', { name: 'Open the current version' }).click();
+  await expect(page).not.toHaveURL(/[?&]v=/);
+  await expect(page.locator('.md').getByText('No jargon.')).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+
+  await page.goto('/rules');
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page).toHaveURL(/\/read\/rules$/);
+  await expect(page.locator('.md').getByText('Write in English on GitHub.')).toBeVisible();
+  await page.getByRole('link', { name: 'Edit', exact: true }).click();
+  await expect(page).toHaveURL(/\/rules$/);
+
+  if (previous) await page.setViewportSize(previous);
+});
+
 test('navigation fits the screen and the page breaks no content security rule', async () => {
   await page.goto('/');
   if (isPhone()) {
