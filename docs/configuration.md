@@ -24,7 +24,7 @@ Workspace MCP reads its settings from environment variables once, at start. With
 | `TRUST_PROXY` | `false` | Set to `true` when the service is reached only through one reverse proxy or tunnel. The client address used for rate limits and diagnostics is then taken from `CF-Connecting-IP`, or else from the last entry of `X-Forwarded-For`. Leave it `false` when clients can reach the port directly, because they could set these headers themselves. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stdout and never contain tokens, codes or workspace content. |
 | `BACKUP_INTERVAL_HOURS` | `24` | Hours between automatic backups, `0` to `720`. `0` turns scheduled backups off. Otherwise the service also makes one at start when there is no backup yet. |
-| `BACKUP_KEEP` | `14` | Number of scheduled and manual backups to keep, `1` to `1000`. Pre-migration backups are kept separately. |
+| `BACKUP_KEEP` | `14` | Number of scheduled and manual backups to keep, `1` to `1000`. Pre-migration, pre-restore and pre-import backups are kept separately (the newest 3 of each). |
 | `GITHUB_SYNC_INTERVAL_MINUTES` | `15` | Minutes between GitHub issue syncs, `0` to `1440`. `0` keeps only the manual refresh. Has no effect until GitHub is connected in the web interface. |
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub REST API base. Change it only for GitHub Enterprise Server. |
 | `WEBHOOK_ALLOW_PRIVATE_ADDRESSES` | `false` | Allow webhooks to loopback, private, link-local and other non-public addresses. Keep it off unless the receiver really runs on your own network. |

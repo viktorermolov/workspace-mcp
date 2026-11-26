@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, mock } from 'node:test';
 import { strToU8, unzipSync, zipSync } from 'fflate';
-import { createBackup, listBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
+import { createBackup, listBackups, pruneBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
 import { buildExport, readExport } from '../src/backup/export.ts';
 import { loadConfig } from '../src/config.ts';
 import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
@@ -225,6 +225,29 @@ describe('data safety', () => {
     } finally {
       await env.close();
     }
+  });
+
+  it('keeps the newest pre-migration, pre-restore and pre-import backups out of the rotation', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsmcp-prune-'));
+    const config = loadConfig({ PUBLIC_URL: 'http://localhost:1', SECRET_KEY: Buffer.alloc(32, 3).toString('base64'), DATA_DIR: dir, LOG_LEVEL: 'error', BACKUP_KEEP: '1' });
+    const db = openDatabase(config.dbPath);
+    runAppMigrations(db);
+    const made: Record<string, string[]> = {};
+    try {
+      for (const reason of ['pre-migration', 'pre-restore', 'pre-import', 'manual', 'scheduled'] as const) {
+        for (let i = 0; i < 4; i++) (made[reason] ??= []).push(path.basename(await createBackup(db, config, reason)));
+      }
+    } finally {
+      db.close();
+    }
+    pruneBackups(config);
+    const left = listBackups(config);
+    for (const reason of ['pre-migration', 'pre-restore', 'pre-import']) {
+      // The newest three of each kind stay, whatever BACKUP_KEEP says.
+      assert.deepEqual(left.filter((b) => b.reason === reason).map((b) => b.name), made[reason]!.slice(1).reverse(), reason);
+    }
+    // The rotation keeps BACKUP_KEEP scheduled and manual backups: here only the newest one.
+    assert.deepEqual(left.filter((b) => b.reason === 'scheduled' || b.reason === 'manual').map((b) => b.name), [made.scheduled!.at(-1)]);
   });
 
   it('refuses to open a database upgraded by a newer release, so a rollback cannot damage it', async () => {
