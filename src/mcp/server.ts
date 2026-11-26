@@ -339,7 +339,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     'changes',
     {
       title: 'Changes by cursor',
-      description: 'Read the change log after a cursor (event id). Use next_cursor for the next page. Optionally filter by entity.',
+      description: 'Read the change log after a cursor (event id). While has_more is true, pass next_cursor for the next page. Optionally filter by entity, for example entity_type checkpoint to find earlier checkpoints.',
       inputSchema: z.object({
         cursor: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(200).optional(),

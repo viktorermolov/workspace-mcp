@@ -131,7 +131,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
   const offset = decodeCursor(input.cursor);
   const unsupported = (input.types ?? []).filter((t) => !(SEARCH_TYPES as readonly string[]).includes(t));
   if (unsupported.length) {
-    throw invalid(`search covers ${SEARCH_TYPES.join(', ')}; not ${unsupported.join(', ')}. Read working rules with get, and checkpoints with start (last_checkpoint) or get by id.`);
+    throw invalid(`search covers ${SEARCH_TYPES.join(', ')}; not ${unsupported.join(', ')}. Read working rules with get, and checkpoints with start (last_checkpoint), changes (entity_type checkpoint) or get by id.`);
   }
   const types: string[] = input.types?.length ? input.types : [...SEARCH_TYPES];
   const roleId = input.role ? findRole(db, memberId, input.role)?.id ?? '__none__' : undefined;

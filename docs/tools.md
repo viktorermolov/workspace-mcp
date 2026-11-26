@@ -66,7 +66,7 @@ Roles include their links and the current instruction; projects include open tas
 
 Input: `query` (optional full-text query), `types` (any of `role`, `project`, `document`, `task`, `issue`; default all of them), `status` (task statuses), `role`, `project`, `include_archived`, `limit`, `cursor`.
 
-Working rules and checkpoints are not searched, and asking for them is an error: read the rules with `get`, and checkpoints with `start` (`last_checkpoint`) or with `get` by id.
+Working rules and checkpoints are not searched, and asking for them is an error: read the rules with `get`, and checkpoints with `start` (`last_checkpoint`) or with `get` by id; `changes` with `entity_type: "checkpoint"` lists the ids of earlier ones.
 
 With a query, results are ranked by SQLite FTS5 relevance with a short snippet. `total` counts the matches; when `total_exact` is `false`, the search stopped early (the page was full, or a very common query hit the work limit per request) and `total` is a lower bound. Without a query, it lists items by most recent update, filtered by the other fields. Archived items are left out unless `include_archived` is true.
 
