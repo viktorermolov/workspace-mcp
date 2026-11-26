@@ -1,7 +1,7 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
 import { assertCanEdit, withOwnerRole } from './access.ts';
-import { requireProject, requireRole } from './entities.ts';
+import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -303,7 +303,11 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
   return tx(db, () => {
     const t = requireTask(db, actor.memberId, input.id);
     assertCanEdit(db, actor, t.role_id, { what: 'task' });
-    const assign = input.role ? requireRole(db, actor.memberId, input.role) : (actor.role ? requireRole(db, actor.memberId, actor.role) : undefined);
+    const assign = input.role
+      ? requireRole(db, actor.memberId, input.role)
+      : actor.role
+        ? findRole(db, actor.memberId, actor.role)
+        : undefined;
     const res = run(
       db,
       `UPDATE task SET status = 'in_progress', claimed_by = ?, claimed_role = ?, role_id = COALESCE(role_id, ?), rev = rev + 1, updated_at = ?
