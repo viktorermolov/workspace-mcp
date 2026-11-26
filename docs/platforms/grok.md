@@ -25,7 +25,7 @@ Checked on 25 November 2026.
 
 1. In Grok, open **Connectors**, add a custom connector, and enter the MCP address `https://<your address>/mcp`.
 2. Grok opens the consent screen of your workspace. Sign in with your passkey, name the connection (for example "Grok"), and choose **Approve**.
-3. Several Grok Bots can share that one connection. Each bot should pass its own role as `claimed_role` on every write. On the **Connections** screen, review the suggested list of roles for that connection (taken from its own history) and confirm the ones it may use.
+3. Several Grok Bots can share that one connection. Each bot should pass its own role as `claimed_role` on every write. On the **Connections** screen, review the suggested list of roles for that connection (taken from its own history) and confirm the ones it may use. If enforcement is already on, a new connection cannot write until you confirm its list.
 4. In a chat with the connector enabled, say: *"This is my workspace. Call `start` and continue from there."*
 
 ## If it fails
