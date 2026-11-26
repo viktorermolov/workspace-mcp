@@ -58,7 +58,11 @@ docker compose up -d
 curl -s http://127.0.0.1:8080/healthz
 ```
 
+The port is bound to 127.0.0.1 only. If you change `HOST_PORT` in `.env`, use the new port in the `curl` above.
+
 Publish the service at your hostname ([docs/deployment.md](docs/deployment.md)), then open `https://<your hostname>/setup` and enter the one-time code from `docker compose logs workspace` to register your passkey ([docs/first-setup.md](docs/first-setup.md)). Then add `https://<your hostname>/mcp` as a custom connector in your AI platform.
+
+To try it on your own computer before publishing, set `PUBLIC_URL=http://localhost:<port>` (with the same port as `HOST_PORT`, default 8080) and `TRUST_PROXY=false`, then run `docker compose up -d` again, open `http://localhost:<port>/setup` and enter the code from `docker compose logs workspace`: passkeys work on `localhost`. Agents reach `/mcp` only through OAuth, so `/mcp` answers 401 until a platform or OAuth client signs in. An AI platform on the internet cannot reach `localhost`, so connecting one needs the published hostname.
 
 To have an agent deploy it on a Raspberry Pi for you, give it the [Raspberry Pi runbook](docs/runbook-raspberry-pi.md).
 
