@@ -405,7 +405,16 @@ ALTER TABLE member ADD COLUMN role_enforcement TEXT NOT NULL DEFAULT 'warn'
 ALTER TABLE project ADD COLUMN owner_role_id TEXT REFERENCES role(id);
 `,
   },
-  // 5 is reserved for #55 (not on master yet). The runner does not require contiguous ids.
+  // After #61's `connection_roles` (id 4) on master.
+  {
+    id: 5,
+    name: 'role_parent',
+    sql: `
+ALTER TABLE role ADD COLUMN parent_id TEXT REFERENCES role(id);
+CREATE INDEX role_parent ON role (parent_id);
+CREATE INDEX event_member_action ON event (member_id, action, id);
+`,
+  },
   {
     id: 6,
     name: 'review-comments',
@@ -477,3 +486,4 @@ CREATE INDEX review_reply_comment ON review_reply (comment_id, created_at, id);
 `,
   },
 ];
+
