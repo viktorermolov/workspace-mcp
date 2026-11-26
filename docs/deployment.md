@@ -10,7 +10,7 @@ For a step-by-step deployment on a Raspberry Pi with Cloudflare Tunnel, written 
 
 ## 1. Get the source and build the image
 
-The image is built from this repository; it does not depend on any published image or package.
+The image is built from this repository; it does not depend on any published image or package. To run a released image instead of building, see [Published images](#published-images).
 
 ```sh
 git clone https://github.com/viktorermolov/workspace-mcp.git
@@ -162,7 +162,34 @@ If the newer release migrated the database, the older release refuses to start a
 
 ## Published images
 
-Release tags `vX.Y.Z` build images for `amd64` and `arm64` and push them to the GitHub Container Registry as `ghcr.io/viktorermolov/workspace-mcp:X.Y.Z`. Until a release exists, build from source as above. To use a published image, set `WORKSPACE_IMAGE=ghcr.io/viktorermolov/workspace-mcp:X.Y.Z` in `.env` and run `docker compose pull && docker compose up -d`.
+Each release `vX.Y.Z` publishes one multi-arch image (`linux/amd64` and `linux/arm64`) to the GitHub Container Registry, with a GitHub Release and its notes. Until the first release exists, build from source as above.
+
+| Tag | Points to |
+| --- | --- |
+| `X.Y.Z`, `vX.Y.Z` | That release; never moved or rebuilt. |
+| `latest` | The highest released version. A patch for an older line does not move it. |
+
+Prefer a version tag over `latest`, so an update happens only when you choose it; read the release notes first ([Versions and compatibility](../README.md#versions-and-compatibility)).
+
+Before an image is tagged, the release workflow checks that the tag is on a commit from `master`, runs the full CI on that commit, smoke-tests the exact image that is published on each architecture, and upgrades the previous release to it with data in place. Each release's multi-arch image (what a tag points to) is signed with [cosign](https://docs.sigstore.dev/) (keyless, by the release workflow), and each platform image carries an SBOM and build provenance. To verify a release before you run it:
+
+```sh
+cosign verify ghcr.io/viktorermolov/workspace-mcp:X.Y.Z \
+  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+docker buildx imagetools inspect ghcr.io/viktorermolov/workspace-mcp:X.Y.Z --format '{{ json .SBOM }}'
+```
+
+To run a published image, set `WORKSPACE_IMAGE=ghcr.io/viktorermolov/workspace-mcp:X.Y.Z` in `.env`, then:
+
+```sh
+docker compose pull workspace
+docker compose up -d --force-recreate workspace
+docker compose logs --tail 30 workspace # "listening"; a schema change logs "backup before migration"
+curl -s http://127.0.0.1:8080/healthz   # shows the new version
+```
+
+To update, change the version in `WORKSPACE_IMAGE` and run the same commands. To roll back, set the previous version again and run them; if the newer release migrated the database, the older one refuses to start, and you restore the newest `pre-migration` backup as described in [Undoing an upgrade](backups.md#undoing-an-upgrade).
 
 ## Running without Docker
 

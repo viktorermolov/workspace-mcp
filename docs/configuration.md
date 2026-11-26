@@ -47,7 +47,7 @@ These are read by `compose.yaml`, not by the service.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HOST_PORT` | `8080` | Port on `127.0.0.1` of the host where the service is published. |
-| `WORKSPACE_IMAGE` | `workspace-mcp:local` | Image name. `docker compose build` builds it from this repository. |
+| `WORKSPACE_IMAGE` | `workspace-mcp:local` | Image name. `docker compose build` builds it from this repository; set a released image such as `ghcr.io/viktorermolov/workspace-mcp:X.Y.Z` to run that instead ([published images](deployment.md#published-images)). |
 | `CLOUDFLARED_TOKEN` | empty | Token of a Cloudflare Tunnel, used only by the optional `cloudflared` service (`--profile tunnel`). |
 | `CLOUDFLARED_IMAGE` | `cloudflare/cloudflared:latest` | Image of the optional tunnel service. Pin a version tag here if you want controlled updates. |
 

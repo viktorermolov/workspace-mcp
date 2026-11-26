@@ -10,7 +10,7 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 - Open source under the [GNU Affero General Public License v3.0](LICENSE). No paid features, no telemetry, no external services or accounts.
 - One Docker container with SQLite. Runs on a Raspberry Pi 4.
 
-> **Status:** pre-release (0.1.0, unreleased). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
+> **Status:** pre-release (0.1.0, unreleased). While the version is 0.x, a minor version may change things without keeping compatibility; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
 
 ## What it stores
 
@@ -65,6 +65,16 @@ Publish the service at your hostname ([docs/deployment.md](docs/deployment.md)),
 To try it on your own computer before publishing, set `PUBLIC_URL=http://localhost:<port>` (`localhost`, not `127.0.0.1`: passkeys do not work on an IP address) (with the same port as `HOST_PORT`, default 8080) and `TRUST_PROXY=false`, then run `docker compose up -d` again, open `http://localhost:<port>/setup` and enter the code from `docker compose logs workspace`: passkeys work on `localhost`. Agents reach `/mcp` only through OAuth, so `/mcp` answers 401 until a platform or OAuth client signs in. An AI platform on the internet cannot reach `localhost`, so connecting one needs the published hostname. The trial passkey works only on `localhost`, and the trial owner stays in the data volume, so no new setup code is printed after you switch `PUBLIC_URL` to your hostname. Either start from an empty workspace with `docker compose down -v` (this deletes everything stored in the trial), or keep the data and sign in on the new hostname with a recovery code ([docs/first-setup.md](docs/first-setup.md#if-you-lose-your-passkey)).
 
 To have an agent deploy it on a Raspberry Pi for you, give it the [Raspberry Pi runbook](docs/runbook-raspberry-pi.md).
+
+## Versions and compatibility
+
+Versions follow [Semantic Versioning](https://semver.org/). Until 1.0:
+
+- **A minor version (0.1 → 0.2) may break compatibility**: configuration, MCP tools and their results, the owner API, the export format or the database can change in ways that need you to do something. The [changelog](CHANGELOG.md) says what and how; read it before such an update.
+- **A patch version (0.1.0 → 0.1.1) stays compatible** with the rest of its minor version: fixes only, no changes you need to act on.
+- **Upgrades go forward only.** Migrations run automatically at start, after a `pre-migration` backup. An older version refuses to open a database a newer one has migrated; going back means restoring that backup ([Undoing an upgrade](docs/backups.md#undoing-an-upgrade)).
+
+Each release is a GitHub Release with notes and a signed multi-arch image at `ghcr.io/viktorermolov/workspace-mcp` ([Published images](docs/deployment.md#published-images)).
 
 ## Documentation
 
