@@ -68,7 +68,7 @@ git log -1 --oneline
 
 Expected: the clone succeeds and the last line shows a commit. All later commands run in `~/workspace-mcp`.
 
-To deploy a specific release instead of the latest `master`, run `git checkout vX.Y.Z` now.
+To deploy a specific release instead of the latest `master`, run `git checkout vX.Y.Z` now. Once releases exist, prefer a release: it passed the full CI and an upgrade test before it was published ([Versions and compatibility](../README.md#versions-and-compatibility)).
 
 ## Step 4. Configure
 
@@ -100,6 +100,20 @@ docker image inspect workspace-mcp:local --format '{{.Architecture}}'
 ```
 
 Expected: the build ends without errors, and the architecture is `arm64` (or `amd64`).
+
+With a published release, you can use its signed image instead of building. Check the signature (needs [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)), point `.env` at the image and pull it:
+
+```sh
+VERSION=X.Y.Z
+cosign verify ghcr.io/viktorermolov/workspace-mcp:${VERSION} \
+  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/tags/v${VERSION} \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null && echo signature ok
+grep -q '^WORKSPACE_IMAGE=' .env || echo 'WORKSPACE_IMAGE=' >> .env
+sed -i "s|^WORKSPACE_IMAGE=.*|WORKSPACE_IMAGE=ghcr.io/viktorermolov/workspace-mcp:${VERSION}|" .env
+docker compose pull workspace
+```
+
+Expected: `signature ok` and the pull ends without errors. Then start the service as below.
 
 Start it and wait until the health check passes:
 
@@ -204,6 +218,18 @@ curl -s http://127.0.0.1:8080/healthz; echo
 
 Expected: a `listening` line in the log and the new version in the health check. If the release changes the database, the log first shows `backup before migration` with the name of the backup.
 
+With a published image (`WORKSPACE_IMAGE` set in `.env`), read the release notes first, check the new version's signature as in [Step 5](#step-5-build-and-start-the-service), then:
+
+```sh
+cd ~/workspace-mcp
+grep '^WORKSPACE_IMAGE=' .env                  # note the current version, for a rollback
+sed -i "s|^WORKSPACE_IMAGE=.*|WORKSPACE_IMAGE=ghcr.io/viktorermolov/workspace-mcp:X.Y.Z|" .env
+docker compose pull workspace
+docker compose up -d --force-recreate workspace
+docker compose logs --tail 30 workspace
+curl -s http://127.0.0.1:8080/healthz; echo
+```
+
 ## Rolling back
 
 ```sh
@@ -214,6 +240,8 @@ docker compose logs --tail 20 workspace
 ```
 
 Expected: the older version starts and answers `/healthz`.
+
+With a published image, set the previous version in `WORKSPACE_IMAGE` in `.env` instead of retagging, then run `docker compose up -d --force-recreate workspace`.
 
 If instead the log says `The database was upgraded by a newer release`, the update migrated the database. Restore the backup made before the migration:
 
