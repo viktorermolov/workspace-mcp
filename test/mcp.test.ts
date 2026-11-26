@@ -297,6 +297,12 @@ describe('MCP behaviour', () => {
     assert.equal(page1.has_more, true);
     const page2 = await call(a, 'changes', { cursor: page1.next_cursor, limit: 5 });
     assert.ok(page2.events[0].id > page1.events[4].id);
+    // The last page ends with has_more false and the id of its last event, to continue from later.
+    const all = await call(a, 'changes', { cursor: 0, limit: 200 });
+    assert.equal(all.has_more, false);
+    assert.equal(all.next_cursor, all.events.at(-1).id);
+    const none = await call(a, 'changes', { cursor: all.next_cursor });
+    assert.deepEqual([none.events.length, none.has_more, none.next_cursor], [0, false, all.next_cursor]);
     await a.close();
   });
 

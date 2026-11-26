@@ -13,7 +13,7 @@ A backup is made with SQLite's own online backup API, never by copying the live 
 
 | When | Reason in the file name | Kept |
 | --- | --- | --- |
-| Every `BACKUP_INTERVAL_HOURS` (default 24) | `scheduled` | the newest `BACKUP_KEEP` (default 14) scheduled and manual backups |
+| Every `BACKUP_INTERVAL_HOURS` (default 24), and at start when `DATA_DIR/backups/` holds no backup yet | `scheduled` | the newest `BACKUP_KEEP` (default 14) scheduled and manual backups |
 | **Back up now** in the web interface, or `cli backup` | `manual` | as above |
 | Before a migration of a database that holds data | `pre-migration` | the newest 3, separately from the rotation |
 | Before a restore | `pre-restore` | as above |

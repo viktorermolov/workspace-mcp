@@ -6,7 +6,7 @@ import type { ClientMetadataResourceFetch } from '@better-auth/oauth-provider';
 import { createAuth, migrateAuth, pendingAuthMigrations, type Auth } from './auth/auth.ts';
 import { expireUnusedClients } from './auth/connections.ts';
 import { hasOwner, issueCode } from './auth/setup.ts';
-import { createBackup, pruneBackups } from './backup/backup.ts';
+import { createBackup, listBackups, pruneBackups } from './backup/backup.ts';
 import type { Config } from './config.ts';
 import { hasUserTables, openDatabase, pendingAppMigrations, runAppMigrations, type DB } from './db/db.ts';
 import { clearEventHooks } from './domain/core.ts';
@@ -106,6 +106,14 @@ export async function createService(config: Config, opts: ServiceOptions = {}): 
         webhooks.start();
         every(60 * 60_000, () => expireUnusedClients(db, config.unusedClientTtlDays), 'expire-clients');
         if (config.backupIntervalHours > 0) {
+          // A new instance would otherwise wait a whole interval for its first copy.
+          if (!listBackups(config).length) {
+            try {
+              await createBackup(db, config, 'scheduled');
+            } catch (e) {
+              log.error('background job failed', { job: 'backup', error: errMessage(e) });
+            }
+          }
           every(config.backupIntervalHours * 3600_000, async () => {
             await createBackup(db, config, 'scheduled');
             pruneBackups(config);
