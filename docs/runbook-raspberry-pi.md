@@ -220,6 +220,8 @@ curl -s http://127.0.0.1:8080/healthz; echo
 
 Expected: a `listening` line in the log and the new version in the health check. If the release changes the database, the log first shows `backup before migration` with the name of the backup.
 
+After upgrading to 0.2.0 (or later, the first time role checks are present): open **Connections**, review each connection's suggested role list and confirm it, tick the roles that may edit any item, then turn on enforcement when you are ready. Role checks stay in warning mode until you do. See the 0.2.0 notes in [CHANGELOG.md](../CHANGELOG.md) and [security.md](security.md).
+
 With a published image (`WORKSPACE_IMAGE` set in `.env`), read the release notes first, check the new version's signature as in [Step 5](#step-5-build-and-start-the-service), then:
 
 ```sh

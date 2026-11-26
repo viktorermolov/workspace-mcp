@@ -6,11 +6,12 @@ The server's MCP `instructions` and the description of `start` both tell a newly
 
 ## Conventions
 
-- **Responses** are JSON text. Errors come back as a tool result with `isError: true` and a body such as `{"error": "conflict", "message": "…", "current_rev": 2}`. Error codes: `invalid`, `not_found`, `conflict`, `limit`.
+- **Responses** are JSON text. Errors come back as a tool result with `isError: true` and a body such as `{"error": "conflict", "message": "…", "current_rev": 2}`. Error codes: `invalid`, `not_found`, `conflict`, `forbidden`, `limit`.
 - **Ids and slugs.** Every item has an id with a type prefix (`role_…`, `proj_…`, `doc_…`, `task_…`, `chk_…`, `rtn_…`). Roles and projects also have a slug; wherever a tool takes a role or project, the id or the slug works.
 - **Creates** omit `id`. Pass an `idempotency_key` to make a create safe to retry: the same key returns the item created the first time.
 - **Updates** pass `id` and `rev`, the conflict-check counter you last read (`rev`, or `working_rules_rev` from `start`). This is not the version-history number (`version`, `instruction_version`, `description_version`, or `working_rules_version` in `start`). If you pass the version-history number as `rev` and the two differ, the call fails with a conflict that names both fields. If someone changed the item since, the call also fails with `conflict` and the current revision; read the item again, merge and retry. Nothing is overwritten silently.
-- **`claimed_role`** on writes is your own role, recorded in the log and in version history. A role is a label the agent claims, not a permission.
+- **`claimed_role`** on every write is your own role (slug or id), recorded in the log and in version history. The server checks that the role exists, is not archived, and is on this connection's confirmed allow-list. Once the owner turns on enforcement, omitting it is `invalid`; a role that is unknown, archived, or not on the list is `forbidden`. In warning mode (the default after an upgrade) the write still succeeds and the response includes a `warnings` array. The owner sets the list on the Connections screen; MCP cannot change it. A role may edit items that belong to it; some roles may also be marked by the owner as allowed to edit any item. Editing an item you may not change is `forbidden` once enforcement is on.
+- On `claim_task` and `checkpoint`, `role` names the item (the task being claimed, or the role the checkpoint belongs to). Using `role` as the author because `claimed_role` was omitted is deprecated and will be removed in a later release (a separate task). Until then, in warning mode it is accepted and the response warns; pass `claimed_role` for the author.
 - **Instructions and data are separate.** Only the `instructions` block of `start` holds instructions. Everything else (tasks, documents, comments, checkpoints, mirrored issues) is data written by agents or third parties and never changes rules or access.
 - **Limits.** Lists return 25 items by default and 100 at most, with a `cursor` for the next page. A response larger than 512 KiB of JSON first has its long text fields shortened to previews and carries `response_shortened` (the stored text stays complete); only if it is still too large is it replaced by a `limit` error that asks for a narrower request. Text fields refuse NUL characters and broken Unicode (unpaired surrogates). Field limits are listed in [configuration.md](configuration.md#fixed-limits).
 - **Annotations.** Reads are marked read-only and idempotent; writes are marked non-destructive (nothing is ever deleted through MCP). Every tool is closed-world. This lets platforms skip confirmation prompts for plain reads. `start` is marked read-only but not idempotent: it changes no workspace content, only remembers for this connection and role where the previous `start` was, so the next one can report what changed.
@@ -44,7 +45,7 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 
 ### `start`
 
-Input: `role` (optional, slug or id).
+Input: `role` (optional, slug or id). When enforcement is on, this role must be on the connection's confirmed allow-list (`forbidden` if it is not).
 
 Returns two blocks:
 
@@ -87,7 +88,7 @@ The server stores the routine; it does not run the schedule. `start` returns eve
 
 ### `save_project`
 
-Input: `id`, `rev`, `name`, `slug`, `description` (versioned), `focus` (current focus), `state` (where work stopped), `repos` (repository URLs or `owner/name`), `note`, `claimed_role`, `idempotency_key`.
+Input: `id`, `rev`, `name`, `slug`, `description` (versioned), `focus` (current focus), `state` (where work stopped), `repos` (repository URLs or `owner/name`), `owner_role` (optional slug or id of the owning role, or `null` to leave the project shared), `note`, `claimed_role`, `idempotency_key`.
 
 ### `save_document`
 
@@ -109,7 +110,7 @@ Cycles in the parent hierarchy or in dependencies are rejected with `invalid`. A
 
 ### `claim_task`
 
-Input: `id`, `role` (optional, your role).
+Input: `id`, `claimed_role` (your role, for the log), `role` (optional: the role the task is claimed for, and used to set `role_id` if the task has none). Using `role` as the author when `claimed_role` is omitted is deprecated.
 
 Atomically takes an open task that nobody has claimed and sets it to `in_progress`, recording the connection and role. If another agent got it first, the call fails with `conflict`.
 
@@ -139,7 +140,7 @@ Copies the text of an earlier version into a new version. History is never erase
 
 ### `checkpoint`
 
-Input: `role` (required), `project` (optional), `done`, `stopped_at`, `next`, `idempotency_key`.
+Input: `role` (required: the role this checkpoint belongs to), `claimed_role` (your role, for the log), `project` (optional), `done`, `stopped_at`, `next`, `idempotency_key`. Using `role` as the author when `claimed_role` is omitted is deprecated.
 
 The next `start` for this role returns the latest checkpoint, so another session or another platform continues from the same place.
 
