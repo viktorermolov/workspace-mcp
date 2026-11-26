@@ -543,9 +543,9 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
 
 // ---------- archive / restore / purge ----------
 
-export type ArchivableType = 'role' | 'project' | 'document' | 'task';
-const archTable: Record<ArchivableType, string> = { role: 'role', project: 'project', document: 'document', task: 'task' };
-const nameColumn: Record<ArchivableType, string> = { role: 'name', project: 'name', document: 'title', task: 'title' };
+export type ArchivableType = 'role' | 'project' | 'document' | 'task' | 'routine';
+const archTable: Record<ArchivableType, string> = { role: 'role', project: 'project', document: 'document', task: 'task', routine: 'routine' };
+const nameColumn: Record<ArchivableType, string> = { role: 'name', project: 'name', document: 'title', task: 'title', routine: 'name' };
 
 /** How the change log names an item, for example `Task "Fix login"`. */
 export function logLabel(db: DB, type: ArchivableType, id: string): string {
@@ -589,6 +589,8 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM task_dependency WHERE task_id = ? OR depends_on_id = ?', id, id);
         run(db, 'DELETE FROM task_comment WHERE task_id = ?', id);
         run(db, 'DELETE FROM task WHERE id = ?', id);
+      } else if (type === 'routine') {
+        run(db, 'DELETE FROM routine WHERE id = ?', id);
       } else if (type === 'document') {
         run(db, "DELETE FROM version WHERE entity_type = 'document' AND entity_id = ?", id);
         run(db, 'DELETE FROM document WHERE id = ?', id);
@@ -615,6 +617,8 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM role_link WHERE from_role_id = ? OR to_role_id = ?', id, id);
         run(db, 'DELETE FROM checkpoint WHERE role_id = ?', id);
         run(db, 'DELETE FROM webhook WHERE role_id = ?', id);
+        for (const rtn of all<{ id: string }>(db, 'SELECT id FROM routine WHERE role_id = ?', id)) unindexEntity(db, 'routine', rtn.id);
+        run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
         run(db, "DELETE FROM version WHERE entity_type = 'role' AND entity_id = ?", id);
         run(db, 'DELETE FROM role WHERE id = ?', id);

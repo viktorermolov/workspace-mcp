@@ -14,12 +14,13 @@ import {
   roleView,
   type DocumentRow,
 } from './entities.ts';
+import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
 
-export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue'] as const;
+export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue', 'routine'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 /** Types that `search` covers. Working rules and checkpoints are read with `get` and `start`. */
-export const SEARCH_TYPES = ['role', 'project', 'document', 'task', 'issue'] as const;
+export const SEARCH_TYPES = ['role', 'project', 'document', 'task', 'issue', 'routine'] as const;
 
 export function issueView(db: DB, memberId: string, id: string) {
   const i = get<Record<string, unknown>>(
@@ -79,6 +80,8 @@ export function getEntity(db: DB, memberId: string, type: EntityType, id?: strin
     }
     case 'issue':
       return issueView(db, memberId, need(id));
+    case 'routine':
+      return routineView(db, requireRoutine(db, memberId, need(id)));
     default:
       throw invalid(`unknown type ${type as string}`);
   }
@@ -233,6 +236,18 @@ function hydrate(db: DB, type: string, id: string, input: SearchInput, roleId?: 
     if (!statusOk(input, i.state)) return null;
     return { type, id, title: `${i.full_name}#${i.number} ${i.title}`, status: i.state, updated_at: i.updated_at };
   }
+  if (type === 'routine') {
+    const r = get<{ name: string; role_id: string; status: string; archived_at: string | null; updated_at: string }>(
+      db,
+      'SELECT name, role_id, status, archived_at, updated_at FROM routine WHERE id = ?',
+      id,
+    );
+    if (!r || (!input.include_archived && r.archived_at) || projectId) return null;
+    if (roleId && r.role_id !== roleId) return null;
+    if (!statusOk(input, r.status)) return null;
+    const role = get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', r.role_id)?.slug ?? null;
+    return { type, id, title: r.name, status: r.status, role, updated_at: r.updated_at };
+  }
   return null;
 }
 
@@ -254,6 +269,12 @@ function listType(db: DB, memberId: string, type: string, input: SearchInput, ro
     for (const r of all<{ id: string }>(db, `SELECT id FROM project WHERE member_id = ? ${arch}`, memberId)) ids.push({ id: r.id, type });
   } else if (type === 'issue') {
     for (const r of all<{ id: string }>(db, 'SELECT id FROM github_issue WHERE member_id = ? ORDER BY updated_at DESC LIMIT 2000', memberId)) ids.push({ id: r.id, type });
+  } else if (type === 'routine') {
+    const conds = ['member_id = ?'];
+    const vals: unknown[] = [memberId];
+    if (roleId) (conds.push('role_id = ?'), vals.push(roleId));
+    if (input.status?.length) (conds.push(`status IN (${input.status.map(() => '?').join(',')})`), vals.push(...input.status));
+    for (const r of all<{ id: string }>(db, `SELECT id FROM routine WHERE ${conds.join(' AND ')} ${arch} ORDER BY updated_at DESC LIMIT 2000`, ...vals)) ids.push({ id: r.id, type });
   }
   const out: Hit[] = [];
   for (const i of ids) {
@@ -309,10 +330,11 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     out.how_to_fill = [
       'This workspace is empty. Fill it from what you already know about the owner (ask the owner what is missing):',
       '1. update_rules: how to work with the owner, shared by all roles and platforms.',
-      '2. save_role for each role (for example an entry role that distributes work, development, promotion, personal assistant): name, area of responsibility, instruction, links to other roles, setup notes for things a new platform must recreate by hand (schedules, connectors, wake-up triggers).',
-      '3. save_project for each project: description, current focus, where work stopped, repository links.',
-      '4. save_document for decisions, research and notes worth keeping.',
-      '5. save_task for open work, with role and project.',
+      '2. save_role for each role (for example an entry role that distributes work, development, promotion, personal assistant): name, area of responsibility, instruction, links to other roles, setup notes for things a new platform must recreate by hand (connectors, wake-up triggers).',
+      '3. save_routine for each recurring job: name, owning role, schedule (cron or a short description), timezone, status (enabled or paused), and an optional external platform id.',
+      '4. save_project for each project: description, current focus, where work stopped, repository links.',
+      '5. save_document for decisions, research and notes worth keeping.',
+      '6. save_task for open work, with role and project.',
       'Then call start again with your role.',
     ].join('\n');
   }
@@ -358,6 +380,8 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     now(),
   );
 
+  const allRoutines = listRoutines(db, memberId);
+  const roleRoutines = role ? listRoutines(db, memberId, { roleId: role.id }) : [];
   const roleInstruction = role ? (role as { instruction?: string }).instruction || '(this role has no instruction yet)' : undefined;
   const cpPart = (v: unknown, n: number) => preview(v as string | null, n);
   // An overview with a fixed size: long fields are previews and long lists are cut, so start fits in
@@ -385,6 +409,8 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       ...(roles.length > START_LIST_MAX ? { more_roles: roles.length - START_LIST_MAX } : {}),
       projects: projects.slice(0, START_LIST_MAX).map((p) => ({ id: p.id, slug: p.slug, name: p.name, focus: preview(p.focus, pv), state: preview(p.state, pv) })),
       ...(projects.length > START_LIST_MAX ? { more_projects: projects.length - START_LIST_MAX } : {}),
+      routines: allRoutines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, pv)),
+      ...(allRoutines.length > START_LIST_MAX ? { more_routines: allRoutines.length - START_LIST_MAX } : {}),
       ...(role
         ? {
             role: { id: role.id, slug: role.slug, name: role.name, area: role.area, links: role.links.slice(0, 100), ...(role.links.length > 100 ? { more_links: role.links.length - 100 } : {}), setup_notes: preview(role.setup_notes, long), rev: role.rev },
@@ -392,6 +418,8 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
             last_checkpoint: checkpoint
               ? { ...(checkpoint as Record<string, unknown>), done: cpPart((checkpoint as Record<string, unknown>).done, long), stopped_at: cpPart((checkpoint as Record<string, unknown>).stopped_at, long), next: cpPart((checkpoint as Record<string, unknown>).next, long) }
               : null,
+            role_routines: roleRoutines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, long)),
+            ...(roleRoutines.length > START_LIST_MAX ? { more_role_routines: roleRoutines.length - START_LIST_MAX } : {}),
           }
         : {}),
       changes_since_previous_start: since,
