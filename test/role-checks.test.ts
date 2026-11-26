@@ -259,6 +259,19 @@ describe('role checks on writes', () => {
     assert.match(syn!.message, /will be removed/);
   });
 
+  it('in warning mode, claim_task with an unknown claimed_role and no role proceeds with a warning', async () => {
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+    const task = await call<{ id: string }>(agent, 'save_task', { title: 'Claim with unknown role', role: 'lead', claimed_role: 'lead' });
+    const out = await call<{ id: string; status: string; claimed_by: { role: string | null } | null; warnings?: Warning[] }>(
+      agent,
+      'claim_task',
+      { id: task.id, claimed_role: 'no-such-role' },
+    );
+    assert.equal(out.status, 'in_progress');
+    assert.ok(out.warnings?.some((w) => w.code === 'role_not_found'), 'expected a role_not_found warning');
+    assert.equal(out.claimed_by?.role, 'no-such-role');
+  });
+
   it('lets the owner write as before, and a role removed from the list is refused in enforce', async () => {
     const created = await owner.json<{ id: string; title: string }>('/api/owner/tasks', { json: { title: 'Owner task', role: 'lead' } });
     assert.equal(created.title, 'Owner task');
