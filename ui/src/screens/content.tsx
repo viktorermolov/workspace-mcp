@@ -662,6 +662,9 @@ interface ChangeItem {
   id: number;
   at: string;
   by: string;
+  claimed_role?: string | null;
+  owner_role?: string | null;
+  whose?: string | null;
   action: string;
   entity_type: string;
   entity_id: string | null;
@@ -732,7 +735,8 @@ export function ChangesScreen({ onReviewed }: { onReviewed?: () => void }) {
         <div class="change-head">
           <span>{href ? <a href={href}>{c.summary}</a> : c.summary}</span>
           <span class="small muted">
-            {c.by} · <Time at={c.at} />
+            {c.by}
+            {c.whose ? ` · ${c.whose}` : ''} · <Time at={c.at} />
           </span>
         </div>
         {c.diff && (
