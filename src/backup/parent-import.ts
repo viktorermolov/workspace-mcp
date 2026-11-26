@@ -1,4 +1,4 @@
-import { get, run, type DB } from '../db/db.ts';
+import { all, get, run, type DB } from '../db/db.ts';
 import { invalid } from '../domain/core.ts';
 
 /** A self-referential parent column applied on import in a second pass. */
@@ -12,7 +12,11 @@ export interface ParentLinkSpec {
   memberColumn?: string;
   /** Word used in error messages. Defaults to `table`. */
   label?: string;
-  /** If set, a parent chain longer than this many levels is `invalid`. */
+  /**
+   * If set, an imported parent link is `invalid` when the ancestor depth of the
+   * new parent (inclusive) plus the height of the child's subtree would exceed
+   * this many levels. Existing same-workspace parents are included in the walk.
+   */
   maxDepth?: number;
 }
 
@@ -20,9 +24,12 @@ export interface ParentLinkSpec {
  * Tables whose parent column cannot be inserted in `created_at` order because a
  * child may have been created before its parent. Import inserts these rows with
  * the parent cleared, then applies the links after every row of the table is in
- * place. `#55` can add `role` here with `maxDepth: 16`.
+ * place.
  */
-export const IMPORT_PARENT_SPECS: ParentLinkSpec[] = [{ table: 'task', label: 'task' }];
+export const IMPORT_PARENT_SPECS: ParentLinkSpec[] = [
+  { table: 'task', label: 'task' },
+  { table: 'role', label: 'role', maxDepth: 16 },
+];
 
 export function parentSpecFor(table: string): ParentLinkSpec | undefined {
   return IMPORT_PARENT_SPECS.find((s) => s.table === table);
@@ -58,33 +65,84 @@ export function intendedParent(row: Record<string, unknown>, spec: ParentLinkSpe
   return raw;
 }
 
+function resultingParentMap(
+  links: { id: string; parentId: string }[],
+  existing?: { id: string; parentId: string | null }[],
+): Map<string, string> {
+  const parentOf = new Map<string, string>();
+  for (const e of existing ?? []) {
+    if (e.parentId) parentOf.set(e.id, e.parentId);
+  }
+  for (const l of links) parentOf.set(l.id, l.parentId);
+  return parentOf;
+}
+
+function ancestorIds(parentOf: Map<string, string>, startId: string): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  let cur: string | undefined = startId;
+  while (cur) {
+    if (seen.has(cur)) return ids;
+    seen.add(cur);
+    ids.push(cur);
+    cur = parentOf.get(cur);
+  }
+  return ids;
+}
+
+/** Longest downward path in edges from `rootId` (0 for a leaf). */
+function subtreeHeight(parentOf: Map<string, string>, rootId: string): number {
+  const byParent = new Map<string, string[]>();
+  for (const [id, parentId] of parentOf) {
+    const list = byParent.get(parentId) ?? [];
+    list.push(id);
+    byParent.set(parentId, list);
+  }
+  let max = 0;
+  const walk = (id: string, depth: number, seen: Set<string>) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (depth > max) max = depth;
+    for (const child of byParent.get(id) ?? []) walk(child, depth + 1, seen);
+  };
+  walk(rootId, 0, new Set());
+  return max;
+}
+
 /**
  * Checks a parent map for missing ids, self-parents, cycles, and an optional depth cap.
  * `knownIds` are the ids in the import (or already accepted in the same workspace).
+ * `existing` are parent edges already in the workspace; imported `links` override them.
+ * When `maxDepth` is set, a link is rejected if the ancestor depth of the new parent
+ * (inclusive) plus the height of the child's subtree would exceed it.
  */
 export function validateParentGraph(
   links: { id: string; parentId: string }[],
   knownIds: Set<string>,
   spec: Pick<ParentLinkSpec, 'label' | 'maxDepth' | 'table'>,
+  existing?: { id: string; parentId: string | null }[],
 ): void {
   const label = spec.label ?? spec.table;
-  const parentOf = new Map(links.map((l) => [l.id, l.parentId]));
   for (const { id, parentId } of links) {
     if (id === parentId) throw invalid(`a ${label} cannot be its own parent`);
     if (!knownIds.has(parentId)) throw invalid(`import refers to a ${label} parent that is not in the import: ${parentId}`);
   }
-  for (const { id } of links) {
+  const parentOf = resultingParentMap(links, existing);
+  for (const id of parentOf.keys()) {
     const seen = new Set<string>();
     let cur: string | undefined = id;
-    let depth = 0;
     while (cur && parentOf.has(cur)) {
       if (seen.has(cur)) throw invalid(`import would create a cycle in the ${label} hierarchy`);
       seen.add(cur);
       cur = parentOf.get(cur);
-      depth++;
-      if (spec.maxDepth !== undefined && depth > spec.maxDepth) {
-        throw invalid(`a ${label} parent chain cannot be deeper than ${spec.maxDepth} levels`);
-      }
+    }
+  }
+  if (spec.maxDepth === undefined) return;
+  for (const { id, parentId } of links) {
+    const depth = ancestorIds(parentOf, parentId).length;
+    const height = subtreeHeight(parentOf, id);
+    if (depth + height > spec.maxDepth) {
+      throw invalid(`a ${label} parent chain cannot be deeper than ${spec.maxDepth} levels`);
     }
   }
 }
@@ -133,7 +191,13 @@ export function applyImportedParentLinks(
     knownIds.add(parentId);
   }
 
-  validateParentGraph(links, knownIds, spec);
+  const existingParents = all<{ id: string; parent_id: string | null }>(
+    db,
+    `SELECT ${idCol} AS id, ${parentCol} AS parent_id FROM ${table} WHERE ${memberCol} = ?`,
+    memberId,
+  ).map((r) => ({ id: r.id, parentId: r.parent_id }));
+
+  validateParentGraph(links, knownIds, spec, existingParents);
 
   for (const { id, parentId } of links) {
     const parent = get<{ member_id: string }>(

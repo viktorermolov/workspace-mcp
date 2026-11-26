@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
 - Saving a connection's role list without confirming it now records a log event, including when the list was already empty.
 - Import now inserts rows without a parent first and sets parent links in a second pass, so a task whose parent was created later imports successfully. A parent missing from the import or a cycle is rejected as invalid and the import is rolled back.
+- Import also applies a role's reporting-line parent in that second pass, including when the parent was created later. A missing parent, a cycle, a parent from another workspace, or a reporting line whose ancestor depth plus subtree height would exceed 16 is rejected and the import is rolled back.
 - The owner change feed now sets `versioned.id` to the rule set's id, so a History link for a named or project rules set opens that set instead of the default working rules.
 - Documentation now states that the deprecated `role` synonym on `claim_task` and `checkpoint` is accepted in both warning and enforce modes, and that a connection added after enforcement is on cannot write until the owner confirms its role list.
 
