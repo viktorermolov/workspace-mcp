@@ -60,6 +60,15 @@ Only the `instructions` block returned by `start` carries instructions. The serv
 
 The working rules returned by `start` tell agents not to write passwords, keys or tokens into the workspace. Content is stored in plain text in the database, is visible to every connection and is included in exports.
 
+### Render policy for stored Markdown
+
+The Reading pages in the owner interface display stored Markdown (rules, role instructions and setup notes, project descriptions, documents). That text is data, not instructions for the browser and not a way to run script:
+
+- The parser builds a tree and renders it only as interface elements. Text is always a child, never markup. Raw HTML in the source is shown as text.
+- Allowed link schemes are `http`, `https` and `mailto`, plus internal paths that start with `/` but not `//` or `/\`. The check runs after HTML entities and percent-escapes are decoded, after whitespace and control characters are stripped, and without regard to case. The same rule applies to reference definitions, autolinks, and the link used in place of an image. Other URLs are shown as text. External links open with `rel="noopener noreferrer nofollow"` and `target="_blank"`; internal links use the in-app router.
+- Images are not fetched (they become a link with the alt text). This also matches the Content Security Policy, which does not allow images from other origins.
+- These pages are served only to the signed-in owner, through the same session middleware as the rest of the web interface. There is no public route and no “share” link.
+
 ## Authentication
 
 ### Platforms: built-in OAuth 2.1 server
@@ -134,7 +143,7 @@ Rate limits are per client address and are kept in memory, so they reset on rest
 - All assets are served by the service itself. No CDN, fonts or scripts from other origins.
 - Content Security Policy: `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'self'`.
 - Also set: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`, a restrictive `Permissions-Policy`, and `Strict-Transport-Security` when `PUBLIC_URL` uses `https`.
-- Stored text, Markdown included, is shown as plain text through the interface framework's escaping. It is never inserted as HTML, so it cannot inject script into the interface.
+- Stored text is never inserted as HTML. The Reading pages parse Markdown into interface elements (Preact VNodes). Raw HTML in the text is shown as text. Links are allowed only for `http`, `https`, `mailto` and same-origin paths that start with `/` but not `//` or `/\`; the scheme is checked after decoding entities and percent-escapes and after stripping whitespace and control characters. Images are not loaded. These pages use the same owner session as the rest of the interface; there is no public reading route.
 - Pages carry `noindex, nofollow`.
 
 ## Logging, audit and privacy
@@ -153,7 +162,7 @@ Rate limits are per client address and are kept in memory, so they reset on rest
 | Prompt injection through a task, document, comment or mirrored issue | Instructions and data are separated in every response and the rules say content is data; no tool reaches outside the workspace; every change is logged and reversible | An agent may still follow injected text within the workspace. Review **Changes**, especially edits to rules and instructions. |
 | An agent damages or wipes content | Versions are immutable, rollback is one tap, MCP cannot delete permanently or edit history | Archived items and non-versioned fields (task status, comments) are restored by hand from the log or a backup. |
 | Cross-site request forgery against the owner session | Same-origin check on every owner change; `SameSite=Lax` session cookies; `frame-ancestors 'none'` | None known. |
-| Script injection into the web interface | Strict CSP without inline scripts; stored text is never rendered as HTML | None known. |
+| Script injection into the web interface | Strict CSP without inline scripts; Markdown is rendered only as interface elements, never by inserting HTML; link schemes are allow-listed after decoding; `scripts/check-tree.sh` rejects HTML insertion APIs in `ui/` | None known. |
 | SSRF through a webhook or a client metadata URL | `https` only, internal addresses refused at connection time, no redirects | Opt-in `WEBHOOK_ALLOW_PRIVATE_ADDRESSES` removes the webhook check. |
 | Brute force of the setup or recovery code | 80-bit codes, 30-minute lifetime, one use, 10 attempts per minute | Before first setup, anyone who reads the logs can take the instance. |
 | Theft of the database or a backup | Refresh tokens hashed; the token signing key and secrets encrypted with keys that are not stored | Workspace content is readable in plain text. |
