@@ -17,6 +17,7 @@ import {
   unindexEntity,
   type Actor,
 } from './core.ts';
+import { assertCanEdit, assertCanEditEntity, documentOwnerRoleId, ownerSlug, withOwnerRole } from './access.ts';
 
 // ---------- members ----------
 
@@ -27,6 +28,7 @@ export interface Member {
   is_owner: number;
   last_review_event_id: number;
   last_visit_at: string | null;
+  role_enforcement?: string;
 }
 
 export function ownerMember(db: DB): Member | undefined {
@@ -59,6 +61,7 @@ export function getRules(db: DB, memberId: string) {
 export function updateRules(db: DB, actor: Actor, input: { text: string; rev?: number; note?: string }) {
   checkLen('text', input.text, LIMITS.instruction);
   return tx(db, () => {
+    assertCanEdit(db, actor, null, { rules: true });
     const r = getRules(db, actor.memberId);
     // The first text needs no rev (there is nothing to overwrite); every later change does.
     if (r.version > 0 || input.rev !== undefined) {
@@ -88,6 +91,7 @@ export interface RoleRow {
   current_version: number | null;
   rev: number;
   archived_at: string | null;
+  edit_any: number;
   created_at: string;
   updated_at: string;
 }
@@ -132,6 +136,7 @@ export function roleView(db: DB, r: RoleRow, withInstruction = true) {
     links: roleLinks(db, r.id).map((l) => ({ id: l.id, from: l.from_slug, to: l.to_slug, type: l.type })),
     rev: r.rev,
     archived: !!r.archived_at,
+    edit_any: r.edit_any === 1,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -147,6 +152,8 @@ export interface SaveRoleInput {
   setup_notes?: string;
   links?: { to: string; type: string }[];
   note?: string;
+  /** Owner only. Agents cannot grant this to themselves. */
+  edit_any?: boolean;
   idempotency_key?: string;
 }
 
@@ -193,6 +200,9 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
   checkLen('instruction', input.instruction, LIMITS.instruction);
   checkLen('setup_notes', input.setup_notes, LIMITS.text);
   if (input.slug !== undefined && !/^[a-z0-9][a-z0-9-]{0,59}$/.test(input.slug)) throw invalid('slug must be lowercase letters, digits and dashes (max 60)');
+  if (input.edit_any !== undefined && actor.kind !== 'owner') {
+    throw invalid('edit_any can only be set by the owner');
+  }
   return tx(db, () => {
     if (!input.id) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_role', () => {
@@ -204,13 +214,14 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         const at = now();
         run(
           db,
-          'INSERT INTO role (id, member_id, slug, name, area, setup_notes, rev, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
+          'INSERT INTO role (id, member_id, slug, name, area, setup_notes, rev, edit_any, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?,?)',
           id,
           actor.memberId,
           slug,
           input.name.trim(),
           input.area ?? '',
           input.setup_notes ?? '',
+          actor.kind === 'owner' && input.edit_any ? 1 : 0,
           at,
           at,
         );
@@ -219,11 +230,12 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         if (input.links) setRoleLinks(db, actor, role, input.links);
         role = requireRole(db, actor.memberId, id);
         indexRole(db, role);
-        recordEvent(db, actor, 'role', id, 'role.created', `Role "${role.name}" created`, { slug });
+        recordEvent(db, actor, 'role', id, 'role.created', `Role "${role.name}" created`, withOwnerRole(db, id, { slug }));
         return roleView(db, role);
       });
     }
     const role = requireRole(db, actor.memberId, input.id);
+    assertCanEdit(db, actor, role.id, { what: 'role' });
     checkRev('role', role.slug, role.rev, input.rev, {
       version: currentVersionNumber(db, role.current_version),
       versionField: 'instruction_version',
@@ -231,6 +243,11 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
+    if (input.edit_any !== undefined && (input.edit_any ? 1 : 0) !== role.edit_any) {
+      sets.push('edit_any = ?');
+      vals.push(input.edit_any ? 1 : 0);
+      changed.push('edit_any');
+    }
     for (const f of ['name', 'area', 'setup_notes', 'slug'] as const) {
       const v = input[f];
       if (v !== undefined && v !== role[f]) {
@@ -262,13 +279,13 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     const updated = requireRole(db, actor.memberId, role.id);
     indexRole(db, updated);
     if (instructionVersion) {
-      recordEvent(db, actor, 'role', role.id, 'role.instruction_updated', `Instruction of role "${updated.name}" updated to version ${instructionVersion}`, {
+      recordEvent(db, actor, 'role', role.id, 'role.instruction_updated', `Instruction of role "${updated.name}" updated to version ${instructionVersion}`, withOwnerRole(db, role.id, {
         version: instructionVersion,
         changed,
         note: input.note ?? null,
-      });
+      }));
     } else {
-      recordEvent(db, actor, 'role', role.id, 'role.updated', `Role "${updated.name}" updated: ${changed.join(', ')}`, { changed });
+      recordEvent(db, actor, 'role', role.id, 'role.updated', `Role "${updated.name}" updated: ${changed.join(', ')}`, withOwnerRole(db, role.id, { changed }));
     }
     return roleView(db, updated);
   });
@@ -291,6 +308,7 @@ export interface ProjectRow {
   current_version: number | null;
   rev: number;
   archived_at: string | null;
+  owner_role_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -317,6 +335,8 @@ export function projectView(db: DB, p: ProjectRow, withDescription = true) {
     description_version: v?.number ?? 0,
     rev: p.rev,
     archived: !!p.archived_at,
+    owner_role: ownerSlug(db, p.owner_role_id),
+    owner_role_id: p.owner_role_id,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };
@@ -332,6 +352,7 @@ export interface SaveProjectInput {
   state?: string;
   repos?: string[];
   note?: string;
+  owner_role?: string | null;
   idempotency_key?: string;
 }
 
@@ -356,6 +377,22 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
   validateRepos(input.repos);
   if (input.slug !== undefined && !/^[a-z0-9][a-z0-9-]{0,59}$/.test(input.slug)) throw invalid('slug must be lowercase letters, digits and dashes (max 60)');
   return tx(db, () => {
+    const resolveOwner = (ref: string | null | undefined): string | null | undefined => {
+      if (ref === undefined) return undefined;
+      if (ref === null || ref === '') return null;
+      const r = requireRole(db, actor.memberId, ref);
+      if (r.archived_at) throw invalid(`role "${ref}" is archived; restore it before making it the project owner`);
+      return r.id;
+    };
+    const requestedOwner = resolveOwner(input.owner_role);
+    if (requestedOwner) {
+      // Setting a project owner to another role needs the same right as editing that role's items,
+      // or the acting role must be the owner being set.
+      const acting = actor.role ? findRole(db, actor.memberId, actor.role, false) : undefined;
+      if (actor.kind === 'agent' && acting?.id !== requestedOwner) {
+        assertCanEdit(db, actor, requestedOwner, { what: 'project' });
+      }
+    }
     if (!input.id) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_project', () => {
         if (!input.name?.trim()) throw invalid('name is required to create a project');
@@ -365,7 +402,7 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
         const at = now();
         run(
           db,
-          'INSERT INTO project (id, member_id, slug, name, focus, state, repos, rev, created_at, updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)',
+          'INSERT INTO project (id, member_id, slug, name, focus, state, repos, rev, owner_role_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,1,?,?,?)',
           id,
           actor.memberId,
           slug,
@@ -373,17 +410,19 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
           input.focus ?? '',
           input.state ?? '',
           JSON.stringify(input.repos ?? []),
+          requestedOwner ?? null,
           at,
           at,
         );
         if (input.description) addVersion(db, actor, 'project', id, input.description, input.note);
         const p = requireProject(db, actor.memberId, id);
         indexProject(db, p);
-        recordEvent(db, actor, 'project', id, 'project.created', `Project "${p.name}" created`, { slug });
+        recordEvent(db, actor, 'project', id, 'project.created', `Project "${p.name}" created`, withOwnerRole(db, p.owner_role_id, { slug }));
         return projectView(db, p);
       });
     }
     const p = requireProject(db, actor.memberId, input.id);
+    assertCanEdit(db, actor, p.owner_role_id, { what: 'project' });
     checkRev('project', p.slug, p.rev, input.rev, {
       version: currentVersionNumber(db, p.current_version),
       versionField: 'description_version',
@@ -409,6 +448,11 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
       vals.push(JSON.stringify(input.repos));
       changed.push('repos');
     }
+    if (requestedOwner !== undefined && requestedOwner !== p.owner_role_id) {
+      sets.push('owner_role_id = ?');
+      vals.push(requestedOwner);
+      changed.push('owner_role');
+    }
     let ver: number | undefined;
     if (input.description !== undefined && input.description !== currentBody(db, p.current_version)) {
       ver = addVersion(db, actor, 'project', p.id, input.description, input.note).number;
@@ -420,11 +464,11 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
     run(db, `UPDATE project SET ${sets.join(', ')} WHERE id = ?`, ...vals);
     const updated = requireProject(db, actor.memberId, p.id);
     indexProject(db, updated);
-    recordEvent(db, actor, 'project', p.id, 'project.updated', `Project "${updated.name}" updated: ${changed.join(', ')}`, {
+    recordEvent(db, actor, 'project', p.id, 'project.updated', `Project "${updated.name}" updated: ${changed.join(', ')}`, withOwnerRole(db, updated.owner_role_id, {
       changed,
       ...(ver ? { version: ver } : {}),
       ...(input.focus !== undefined ? { focus: updated.focus } : {}),
-    });
+    }));
     return projectView(db, updated);
   });
 }
@@ -501,6 +545,8 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_document', () => {
         if (!input.title?.trim()) throw invalid('title is required to create a document');
         const scope = resolveScope(db, actor.memberId, input.attach_to);
+        const createOwner = scope.type === 'role' ? scope.id : scope.type === 'project' ? documentOwnerRoleId(db, { scope_type: scope.type, scope_id: scope.id }) : null;
+        if (scope.type !== 'workspace') assertCanEdit(db, actor, createOwner, { what: 'document' });
         const id = newId('doc');
         const at = now();
         run(
@@ -518,11 +564,12 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
         addVersion(db, actor, 'document', id, input.body ?? '', input.note);
         const d = requireDocument(db, actor.memberId, id);
         indexEntity(db, actor.memberId, 'document', id, d.title, input.body ?? '');
-        recordEvent(db, actor, 'document', id, 'document.created', `Document "${d.title}" created`, { kind: d.kind, scope_type: d.scope_type, scope_id: d.scope_id });
+        recordEvent(db, actor, 'document', id, 'document.created', `Document "${d.title}" created`, withOwnerRole(db, documentOwnerRoleId(db, d), { kind: d.kind, scope_type: d.scope_type, scope_id: d.scope_id }));
         return documentView(db, d);
       });
     }
     const d = requireDocument(db, actor.memberId, input.id);
+    assertCanEdit(db, actor, documentOwnerRoleId(db, d), { what: 'document' });
     checkRev('document', d.id, d.rev, input.rev, {
       version: currentVersionNumber(db, d.current_version),
       versionField: 'version',
@@ -560,12 +607,12 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
     run(db, `UPDATE document SET ${sets.join(', ')} WHERE id = ?`, ...vals);
     const updated = requireDocument(db, actor.memberId, d.id);
     indexEntity(db, actor.memberId, 'document', d.id, updated.title, currentBody(db, updated.current_version));
-    recordEvent(db, actor, 'document', d.id, 'document.updated', `Document "${updated.title}" updated: ${changed.join(', ')}`, {
+    recordEvent(db, actor, 'document', d.id, 'document.updated', `Document "${updated.title}" updated: ${changed.join(', ')}`, withOwnerRole(db, documentOwnerRoleId(db, updated), {
       changed,
       ...(ver ? { version: ver } : {}),
       scope_type: updated.scope_type,
       scope_id: updated.scope_id,
-    });
+    }));
     return documentView(db, updated);
   });
 }
@@ -594,10 +641,12 @@ export function resolveEntityId(db: DB, memberId: string, type: ArchivableType, 
 export function setArchived(db: DB, actor: Actor, type: ArchivableType, ref: string, archived: boolean) {
   return tx(db, () => {
     const id = resolveEntityId(db, actor.memberId, type, ref);
+    assertCanEditEntity(db, actor, type, id);
     const row = get<{ archived_at: string | null }>(db, `SELECT archived_at FROM ${archTable[type]} WHERE id = ?`, id)!;
     if (!!row.archived_at === archived) return { type, id, archived, unchanged: true };
     run(db, `UPDATE ${archTable[type]} SET archived_at = ?, rev = rev + 1, updated_at = ? WHERE id = ?`, archived ? now() : null, now(), id);
-    recordEvent(db, actor, type, id, archived ? `${type}.archived` : `${type}.restored`, `${logLabel(db, type, id)} ${archived ? 'archived' : 'restored'}`);
+    const owner = type === 'role' ? id : type === 'project' ? (get<{ owner_role_id: string | null }>(db, 'SELECT owner_role_id FROM project WHERE id = ?', id)?.owner_role_id ?? null) : type === 'document' ? documentOwnerRoleId(db, get<{ scope_type: string; scope_id: string | null }>(db, 'SELECT scope_type, scope_id FROM document WHERE id = ?', id)!) : type === 'task' || type === 'routine' ? (get<{ role_id: string | null }>(db, `SELECT role_id FROM ${type} WHERE id = ?`, id)?.role_id ?? null) : null;
+    recordEvent(db, actor, type, id, archived ? `${type}.archived` : `${type}.restored`, `${logLabel(db, type, id)} ${archived ? 'archived' : 'restored'}`, withOwnerRole(db, owner));
     return { type, id, archived, unchanged: false };
   });
 }
@@ -649,6 +698,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         for (const rtn of all<{ id: string }>(db, 'SELECT id FROM routine WHERE role_id = ?', id)) unindexEntity(db, 'routine', rtn.id);
         run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
+        run(db, 'UPDATE project SET owner_role_id = NULL WHERE owner_role_id = ?', id);
         run(db, "DELETE FROM version WHERE entity_type = 'role' AND entity_id = ?", id);
         run(db, 'DELETE FROM role WHERE id = ?', id);
       }
