@@ -403,6 +403,31 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('says when a slug belongs to an archived role and lists archived roles in start', async () => {
+    const a = (await connectAgent(env, owner, 'Platform archived-slug')).client;
+    const role = await call(a, 'save_role', { name: 'Librarian', slug: 'librarian', area: 'Archives' });
+    await call(a, 'archive', { type: 'role', id: role.id });
+    const s = await call(a, 'start');
+    assert.ok(!s.data.roles.some((r: { slug: string }) => r.slug === 'librarian'));
+    const archived = s.data.archived_roles.find((r: { slug: string }) => r.slug === 'librarian');
+    assert.equal(archived.id, role.id);
+    assert.equal(archived.archived, true);
+    await assert.rejects(
+      call(a, 'save_role', { name: 'Librarian again', slug: 'librarian' }),
+      (e) => err(e).error === 'conflict' && /already exists and is archived/.test(err(e).message) && err(e).message.includes(role.id),
+    );
+    await assert.rejects(
+      call(a, 'start', { role: 'librarian' }),
+      (e) => err(e).error === 'not_found' && /is archived/.test(err(e).message),
+    );
+    const other = await call(a, 'save_role', { name: 'Cataloguer', slug: 'cataloguer' });
+    await assert.rejects(
+      call(a, 'save_role', { id: other.id, rev: other.rev, slug: 'librarian' }),
+      (e) => err(e).error === 'conflict' && /already exists and is archived/.test(err(e).message),
+    );
+    await a.close();
+  });
+
   it('records who did what: connection name and claimed role', async () => {
     const a = (await connectAgent(env, owner, 'Platform I')).client;
     await call(a, 'save_task', { title: 'Logged task', role: 'dev', claimed_role: 'lead' });
