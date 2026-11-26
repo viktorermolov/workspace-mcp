@@ -385,4 +385,24 @@ CREATE TRIGGER event_immutable_update BEFORE UPDATE ON event
 BEGIN SELECT RAISE(ABORT, 'the log is append-only'); END;
 `,
   },
+  // After #59's `titled-rules-sets` (id 3) on master. Never reuse id 2 or 3.
+  {
+    id: 4,
+    name: 'connection_roles',
+    sql: `
+ALTER TABLE connection ADD COLUMN roles_confirmed_at TEXT;
+ALTER TABLE connection ADD COLUMN roles_suggested_at TEXT;
+CREATE TABLE connection_role (
+  client_id TEXT NOT NULL REFERENCES connection(client_id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'owner' CHECK (source IN ('owner','suggested')),
+  PRIMARY KEY (client_id, role_id)
+);
+CREATE INDEX connection_role_role ON connection_role (role_id);
+ALTER TABLE role ADD COLUMN edit_any INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE member ADD COLUMN role_enforcement TEXT NOT NULL DEFAULT 'warn'
+  CHECK (role_enforcement IN ('warn','enforce'));
+ALTER TABLE project ADD COLUMN owner_role_id TEXT REFERENCES role(id);
+`,
+  },
 ];
