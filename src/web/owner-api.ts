@@ -8,10 +8,11 @@ import type { Config } from '../config.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
 import { setConnectionRoles, setEnforcement, setRoleEditAny, workspaceAccessSettings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
-import { memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
+import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
 import { claimTask, commentTask, saveTask } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
+import { createReviewComment, getReviewComment, listReviewComments, listSetupNotesHistory, replyReviewComment, reviewCounts, setReviewCommentStatus, type ReviewStatus } from '../domain/reviews.ts';
 import { changes, ENTITY_TYPES, getEntity, search, type EntityType } from '../domain/views.ts';
 import { log } from '../util/log.ts';
 import { changeFeed, mapView, taskTree } from './owner-views.ts';
@@ -223,7 +224,32 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.get('/entity/:type/:id?', (c) => {
     const type = c.req.param('type') as EntityType;
     if (!ENTITY_TYPES.includes(type)) throw new DomainError('invalid', 'unknown type');
-    return c.json(getEntity(db, actor(c).memberId, type, c.req.param('id'), { cursor: c.req.query('cursor') || undefined }));
+    const id = c.req.param('id');
+    const data = getEntity(db, actor(c).memberId, type, id, { cursor: c.req.query('cursor') || undefined });
+    // The default-rules response also lists every set, so the reading index needs no new route.
+    // MCP get(type: "rules") is unchanged: it uses getEntity directly.
+    if (type === 'rules' && !id) {
+      const memberId = actor(c).memberId;
+      const sets = listRules(db, memberId).map((r) => {
+        const project = r.project_id
+          ? get<{ slug: string; archived_at: string | null }>(db, 'SELECT slug, archived_at FROM project WHERE id = ?', r.project_id)
+          : undefined;
+        const v = r.current_version ? get<{ number: number }>(db, 'SELECT number FROM version WHERE id = ?', r.current_version) : undefined;
+        return {
+          id: r.id,
+          slug: r.slug,
+          title: r.title,
+          project: project?.slug ?? null,
+          project_id: r.project_id,
+          project_archived: project ? !!project.archived_at : false,
+          is_default: r.is_default === 1,
+          version: v?.number ?? 0,
+          updated_at: r.updated_at,
+        };
+      });
+      return c.json({ ...data, sets });
+    }
+    return c.json(data);
   });
   api.get('/search', (c) =>
     c.json(
@@ -284,6 +310,37 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.post('/routines', async (c) => c.json(saveRoutine(db, actor(c), await body(c))));
   api.post('/tasks/:id/claim', async (c) => c.json(claimTask(db, actor(c), { id: c.req.param('id'), role: (await body<{ role?: string }>(c).catch(() => ({}) as { role?: string })).role })));
   api.post('/tasks/:id/comment', async (c) => c.json(commentTask(db, actor(c), { id: c.req.param('id'), body: String((await body<{ body?: string }>(c)).body ?? '') })));
+  api.get('/reviews/counts', (c) => c.json(reviewCounts(db, actor(c).memberId)));
+  api.get('/reviews/:id', (c) => c.json(getReviewComment(db, actor(c).memberId, c.req.param('id'))));
+  api.get('/reviews', (c) => {
+    const q = c.req.query();
+    const status = q.status === 'all' ? 'all' : q.status ? (q.status.split(',') as ReviewStatus[]) : undefined;
+    const limit = q.limit ? Number(q.limit) : undefined;
+    const offset = q.offset ? Number(q.offset) : undefined;
+    const version_id = q.version_id ? Number(q.version_id) : undefined;
+    const version = q.version ? Number(q.version) : undefined;
+    return c.json(listReviewComments(db, actor(c).memberId, {
+      status,
+      target_type: q.target_type,
+      target_id: q.target_id,
+      field: q.field,
+      version_id: Number.isFinite(version_id) ? version_id : undefined,
+      version: Number.isFinite(version) ? version : undefined,
+      include_resolved: q.include_resolved === '1',
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+    }));
+  });
+  api.post('/reviews', async (c) => c.json(createReviewComment(db, actor(c), await body(c))));
+  api.post('/reviews/:id/reply', async (c) => {
+    const b = await body<{ body?: string; status?: ReviewStatus; rev?: number; expected_status?: ReviewStatus }>(c);
+    return c.json(replyReviewComment(db, actor(c), { id: c.req.param('id'), body: String(b.body ?? ''), status: b.status, rev: b.rev, expected_status: b.expected_status }));
+  });
+  api.post('/reviews/:id/status', async (c) => {
+    const b = await body<{ status?: ReviewStatus; rev?: number; expected_status?: ReviewStatus }>(c);
+    return c.json(setReviewCommentStatus(db, actor(c), { id: c.req.param('id'), status: b.status as ReviewStatus, rev: b.rev, expected_status: b.expected_status }));
+  });
+  api.get('/roles/:id/setup-notes-history', (c) => c.json({ history: listSetupNotesHistory(db, actor(c).memberId, c.req.param('id')), starts_at_upgrade: true }));
   api.post('/archive', async (c) => {
     const b = await body<{ type: ArchivableType; id: string; restore?: boolean }>(c);
     if (!ARCHIVABLE.includes(b.type)) throw new DomainError('invalid', 'unknown type');

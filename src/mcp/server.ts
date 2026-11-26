@@ -7,6 +7,7 @@ import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '.
 import { ROUTINE_STATUSES, saveRoutine } from '../domain/routines.ts';
 import { claimTask, commentTask, PRIORITIES, saveTask, TASK_STATUSES, writeCheckpoint } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
+import { replyReviewComment } from '../domain/reviews.ts';
 import { changes, ENTITY_TYPES, getEntity, search, SEARCH_TYPES, startView } from '../domain/views.ts';
 
 export const SERVER_NAME = 'workspace-mcp';
@@ -107,7 +108,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Start here',
       description:
-        'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open tasks, last checkpoint and changes since your previous start. Pass an optional project to also receive that project\'s rules, which supplement the global working rules. On an empty workspace it explains how to fill it.',
+        'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open review comments it is responsible for, open tasks, last checkpoint and changes since your previous start. Pass an optional project to also receive that project\'s rules, which supplement the global working rules. On an empty workspace it explains how to fill it.',
       inputSchema: z.object({
         role: z.string().max(200).optional().describe('Your role slug or id, if you have one.'),
         project: z.string().max(200).optional().describe('Optional project slug or id. When given, instructions also include that project\'s rules, which supplement the global working rules.'),
@@ -131,7 +132,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Get by id',
       description:
-        'Fetch one item by id (roles and projects also by slug). type "rules" needs no id (returns the default working rules); pass id or slug for another rules set. Tasks include the newest comments; pass comments_cursor as cursor for older ones. Projects include open tasks and documents. Routines include their schedule, timezone, status and last run.',
+        'Fetch one item by id (roles and projects also by slug). type "rules" needs no id (returns the default working rules); pass id or slug for another rules set. Tasks include the newest comments; pass comments_cursor as cursor for older ones. Projects include open tasks and documents. Roles, projects, documents and rules include open review comments. Routines include their schedule, timezone, status and last run. type review_comment returns one comment and its replies.',
       inputSchema: z.object({ type: z.enum(ENTITY_TYPES), id: id.optional(), cursor: z.string().max(100).optional().describe('For tasks: comments_cursor from a previous get, to page to older comments.') }),
       annotations: READ,
     },
@@ -145,8 +146,8 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       description: 'Full-text search across the workspace, or a filtered list by recent update when query is empty. While has_more is true, pass next_cursor for the next page.',
       inputSchema: z.object({
         query: z.string().max(500).optional(),
-        types: z.array(z.enum(SEARCH_TYPES)).max(10).optional().describe('Types to include (default all of them). Working rules and checkpoints are not searched: read them with get, or checkpoints with start. Routines are included.'),
-        status: z.array(z.enum(TASK_STATUSES)).max(6).optional().describe('Task statuses to include.'),
+        types: z.array(z.enum(SEARCH_TYPES)).max(10).optional().describe('Types to include (default all of them). Working rules and checkpoints are not searched: read them with get, or checkpoints with start. Routines and review comments are included.'),
+        status: z.array(z.string().max(40)).max(10).optional().describe('Statuses to include (task, issue, routine or review_comment).'),
         role: z.string().max(200).optional(),
         project: z.string().max(200).optional(),
         include_archived: z.boolean().optional(),
@@ -324,6 +325,26 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       annotations: WRITE,
     },
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => commentTask(db, actor, input)),
+  );
+
+  server.registerTool(
+    'reply_review_comment',
+    {
+      title: 'Reply to a review comment',
+      description:
+        'Reply to an owner review comment. You may set status to "answered" when you are the responsible role or a role allowed to edit any item. Only the owner can resolve a comment. Pass claimed_role (not role). Optional rev or expected_status checks for a conflict.',
+      inputSchema: z.object({
+        id,
+        body: z.string().min(1).max(LIMITS.comment),
+        status: z.enum(['answered']).optional().describe('Mark the comment answered when you are allowed to.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        rev: z.number().int().positive().optional().describe('The rev you last read; fails with conflict if it has changed.'),
+        expected_status: z.enum(['open', 'answered', 'resolved']).optional().describe('Fails with conflict if the comment is no longer in this status.'),
+        idempotency_key: idem.optional(),
+      }),
+      annotations: WRITE,
+    },
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => replyReviewComment(db, actor, input)),
   );
 
   server.registerTool(

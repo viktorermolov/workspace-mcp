@@ -17,6 +17,7 @@ import {
   unindexEntity,
   type Actor,
 } from './core.ts';
+import { purgeReviewData, recordSetupNotesChange, ensureSetupNotesHistory } from './reviews.ts';
 import { assertCanEdit, assertCanEditEntity, documentOwnerRoleId, ownerSlug, withOwnerRole } from './access.ts';
 
 // ---------- members ----------
@@ -343,8 +344,28 @@ function resolveParentId(db: DB, memberId: string, ref: string | null | undefine
   if (ref == null || ref === '') return null;
   const p = findRole(db, memberId, ref, true);
   if (!p) throw invalid(`parent role not found: ${ref}`);
-  if (p.archived_at) throw invalid(`parent role "${p.slug}" is archived and cannot be set as a parent`);
   return p.id;
+}
+
+/** Longest downward path in edges from `rootId` (0 for a leaf or a role not yet inserted). */
+function roleSubtreeHeight(db: DB, memberId: string, rootId: string): number {
+  const rows = all<{ id: string; parent_id: string | null }>(db, 'SELECT id, parent_id FROM role WHERE member_id = ?', memberId);
+  const byParent = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.parent_id) continue;
+    const list = byParent.get(r.parent_id) ?? [];
+    list.push(r.id);
+    byParent.set(r.parent_id, list);
+  }
+  let max = 0;
+  const walk = (id: string, depth: number, seen: Set<string>) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (depth > max) max = depth;
+    for (const child of byParent.get(id) ?? []) walk(child, depth + 1, seen);
+  };
+  walk(rootId, 0, new Set());
+  return max;
 }
 
 /** Walk ancestors of `startId` (inclusive) inside the current transaction, scoped to this workspace. */
@@ -376,7 +397,9 @@ function assertRoleParent(db: DB, memberId: string, roleId: string, parentId: st
   if (parent.archived_at) throw invalid(`parent role "${parent.slug}" is archived and cannot be set as a parent`);
   const { ids, hitCeiling } = roleAncestorChain(db, memberId, parentId);
   if (ids.includes(roleId)) throw invalid('this parent would create a cycle in the reporting tree');
-  if (hitCeiling || ids.length > MAX_ROLE_PARENT_DEPTH) {
+  const height = roleSubtreeHeight(db, memberId, roleId);
+  // ancestor depth of the new parent (ids.length, inclusive) + downward height of the moved subtree must be ≤ 16
+  if (hitCeiling || ids.length + height > MAX_ROLE_PARENT_DEPTH) {
     throw invalid(`a role parent chain cannot be deeper than ${MAX_ROLE_PARENT_DEPTH} levels`);
   }
 }
@@ -413,14 +436,10 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         const id = newId('role');
         const at = now();
         let parentId: string | null = null;
-        if (input.parent !== undefined) {
-          if (input.parent) {
-            assertCanEdit(db, actor, null, { parent: true });
-            parentId = resolveParentId(db, actor.memberId, input.parent);
-            if (parentId) assertRoleParent(db, actor.memberId, id, parentId);
-          } else {
-            assertCanEdit(db, actor, null, { parent: true });
-          }
+        if (input.parent) {
+          assertCanEdit(db, actor, null, { parent: true });
+          parentId = resolveParentId(db, actor.memberId, input.parent);
+          if (parentId) assertRoleParent(db, actor.memberId, id, parentId);
         }
         run(
           db,
@@ -436,6 +455,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
           at,
           at,
         );
+        if (input.setup_notes) ensureSetupNotesHistory(db, actor, id, input.setup_notes);
         let role = requireRole(db, actor.memberId, id);
         if (input.instruction) addVersion(db, actor, 'role', id, input.instruction, input.note);
         if (input.links) setRoleLinks(db, actor, role, input.links);
@@ -454,6 +474,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
+    let setupNotesPrevious: string | undefined;
     for (const f of ['name', 'area', 'setup_notes', 'slug'] as const) {
       const v = input[f];
       if (v !== undefined && v !== role[f]) {
@@ -462,6 +483,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
           if (other && other.id !== role.id) throw roleSlugTaken(other, v);
         }
         if (f === 'name' && !v.trim()) throw invalid('name must not be empty');
+        if (f === 'setup_notes') setupNotesPrevious = role.setup_notes;
         sets.push(`${f} = ?`);
         vals.push(v);
         changed.push(f);
@@ -499,6 +521,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     sets.push('rev = rev + 1', 'updated_at = ?');
     vals.push(now(), role.id);
     run(db, `UPDATE role SET ${sets.join(', ')} WHERE id = ?`, ...vals);
+    if (setupNotesPrevious !== undefined) recordSetupNotesChange(db, actor, role.id, setupNotesPrevious, input.setup_notes ?? '');
     const updated = requireRole(db, actor.memberId, role.id);
     indexRole(db, updated);
     if (instructionVersion) {
@@ -894,6 +917,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
       } else if (type === 'routine') {
         run(db, 'DELETE FROM routine WHERE id = ?', id);
       } else if (type === 'document') {
+        purgeReviewData(db, 'document', id);
         run(db, "DELETE FROM version WHERE entity_type = 'document' AND entity_id = ?", id);
         run(db, 'DELETE FROM document WHERE id = ?', id);
       } else if (type === 'project') {
@@ -908,6 +932,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         if (used.n > 0) throw invalid('the project still has tasks or documents; delete or move them first');
         run(db, 'UPDATE github_repo SET project_id = NULL WHERE project_id = ?', id);
         run(db, 'DELETE FROM checkpoint WHERE project_id = ?', id);
+        purgeReviewData(db, 'project', id);
         run(db, "DELETE FROM version WHERE entity_type = 'project' AND entity_id = ?", id);
         run(db, 'DELETE FROM project WHERE id = ?', id);
       } else {
@@ -929,6 +954,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
         run(db, 'UPDATE project SET owner_role_id = NULL WHERE owner_role_id = ?', id);
+        purgeReviewData(db, 'role', id);
         run(db, "DELETE FROM version WHERE entity_type = 'role' AND entity_id = ?", id);
         run(db, 'DELETE FROM role WHERE id = ?', id);
       }

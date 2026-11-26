@@ -5,6 +5,8 @@ import { match, navigate, onLinkClick, useLocation } from './router.ts';
 import { applyTheme, ConnectionsScreen, DataScreen, getTheme, GitHubScreen, LogScreen, MoreScreen, PasskeysScreen, WebhooksScreen } from './screens/admin.tsx';
 import { ConsentScreen, LoginScreen, SetupScreen } from './screens/auth.tsx';
 import { ChangesScreen, DocumentScreen, HistoryScreen, ProjectScreen, ProjectsScreen, RoleScreen, RolesScreen, RulesScreen } from './screens/content.tsx';
+import { ReadIndex, ReadItem } from './screens/read.tsx';
+import { ReviewsScreen } from './screens/reviews.tsx';
 import { MapScreen } from './screens/map.tsx';
 import { TaskScreen, TasksScreen } from './screens/tasks.tsx';
 import { Alert, Button } from './ui.tsx';
@@ -25,6 +27,13 @@ const ROUTES: Route[] = [
   ['/roles', () => <RolesScreen />],
   ['/roles/:id', (p) => <RoleScreen key={p.id} id={p.id!} />],
   ['/rules', () => <RulesScreen />],
+  ['/read', () => <ReadIndex />],
+  ['/read/rules', () => <ReadItem type="rules" />],
+  ['/read/rules/:id', (p) => <ReadItem key={`rules/${p.id}`} type="rules" id={p.id} />],
+  ['/read/role/:id', (p) => <ReadItem key={`role/${p.id}`} type="role" id={p.id!} />],
+  ['/read/project/:id', (p) => <ReadItem key={`project/${p.id}`} type="project" id={p.id!} />],
+  ['/read/document/:id', (p) => <ReadItem key={`document/${p.id}`} type="document" id={p.id!} />],
+  ['/reviews', () => <ReviewsScreen />],
   ['/history/rules', () => <HistoryScreen type="rules" />],
   ['/history/:type/:id', (p) => <HistoryScreen key={`${p.type}/${p.id}`} type={p.type as 'rules' | 'role' | 'project' | 'document'} id={p.id!} />],
   ['/changes', (_p, refresh) => <ChangesScreen onReviewed={refresh} />],
@@ -38,7 +47,7 @@ const ROUTES: Route[] = [
 ];
 
 const TABS: { href: string; label: string; icon: string; also?: string[] }[] = [
-  { href: '/', label: 'Map', icon: 'M12 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm-6 12a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm12 0a3 3 0 1 1 0 6 3 3 0 0 1 0-6ZM11 9h2v3l4 3-1.2 1.6L12 13.8l-3.8 2.8L7 15l4-3V9Z', also: ['/roles', '/rules'] },
+  { href: '/', label: 'Map', icon: 'M12 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm-6 12a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm12 0a3 3 0 1 1 0 6 3 3 0 0 1 0-6ZM11 9h2v3l4 3-1.2 1.6L12 13.8l-3.8 2.8L7 15l4-3V9Z', also: ['/roles', '/rules', '/read', '/reviews'] },
   { href: '/tasks', label: 'Tasks', icon: 'M4 5h3v3H4V5Zm5 .5h11v2H9v-2ZM4 10.5h3v3H4v-3Zm5 .5h11v2H9v-2Zm-5 5h3v3H4v-3Zm5 .5h11v2H9v-2Z' },
   { href: '/projects', label: 'Projects', icon: 'M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Zm2 2v10h14V8H5Z', also: ['/documents', '/history'] },
   { href: '/changes', label: 'Changes', icon: 'M12 3a9 9 0 1 1-9 9h2a7 7 0 1 0 2.05-4.95L9 9H3V3l2.64 2.64A8.97 8.97 0 0 1 12 3Zm-1 4h2v5l3.5 2.1-1 1.7L11 13V7Z' },
@@ -47,6 +56,8 @@ const TABS: { href: string; label: string; icon: string; also?: string[] }[] = [
 const SIDE_EXTRA = [
   ['/roles', 'Roles'],
   ['/rules', 'Working rules'],
+  ['/read', 'Reading'],
+  ['/reviews', 'Reviews'],
   ['/github', 'GitHub issues'],
   ['/connections', 'Connections'],
   ['/webhooks', 'Webhooks'],
@@ -73,10 +84,15 @@ function Shell({ path }: { path: string }) {
   const [bootError, setBootError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(0);
-  const refresh = () =>
+  const [answered, setAnswered] = useState(0);
+  const refresh = () => {
     api<{ items: unknown[]; has_more: boolean }>('/changes')
       .then((r) => setPending(r.has_more ? 100 : r.items.length))
       .catch(() => undefined);
+    api<{ answered: number }>('/reviews/counts')
+      .then((r) => setAnswered(r.answered))
+      .catch(() => undefined);
+  };
 
   useEffect(() => {
     setBootError(null);
@@ -135,6 +151,7 @@ function Shell({ path }: { path: string }) {
         {SIDE_EXTRA.map(([href, label]) => (
           <a key={href} href={href} class={path.startsWith(href!) ? 'on' : ''}>
             {label}
+            {href === '/reviews' && answered > 0 && <span class="count">{answered > 99 ? '99+' : answered}</span>}
           </a>
         ))}
         <a href="/more" class={path === '/more' ? 'on' : ''}>

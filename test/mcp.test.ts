@@ -273,7 +273,7 @@ describe('MCP behaviour', () => {
       );
     }
     // The owner interface uses the same search and gets a clear refusal too.
-    await assert.rejects(() => owner.json('/api/owner/search?type=checkpoint'), /search covers role, project, document, task, issue, routine; not checkpoint/);
+    await assert.rejects(() => owner.json('/api/owner/search?type=checkpoint'), /search covers role, project, document, task, issue, routine, review_comment; not checkpoint/);
     const viaOwner = await owner.json('/api/owner/search?type=');
     assert.ok(viaOwner.results.length > 0, 'an empty type filter lists every searchable type');
     const cps = await call(a, 'changes', { entity_type: 'checkpoint' });

@@ -278,6 +278,121 @@ async function approveAndCatchRedirect(name: string, redirect: string) {
   expect(url.searchParams.get('state')).toBe('st-1');
 }
 
+
+async function connectReviewsAgent(name: string): Promise<{ token: string; clientId: string }> {
+  const redirect = 'http://127.0.0.1:9/reviews-callback';
+  const platform = await request.newContext({ baseURL: server.base });
+  const meta = await (await platform.get('/.well-known/oauth-authorization-server')).json();
+  const reg = await platform.post(meta.registration_endpoint, {
+    data: { client_name: 'Reviews Agent', redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' },
+  });
+  expect(reg.ok(), `registration failed: ${reg.status()} ${await reg.text()}`).toBeTruthy();
+  const client = await reg.json();
+  const verifier = randomBytes(32).toString('base64url');
+  const u = new URL(meta.authorization_endpoint);
+  u.search = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: redirect,
+    code_challenge: createHash('sha256').update(verifier).digest('base64url'),
+    code_challenge_method: 'S256',
+    state: 'st-reviews',
+    scope: 'openid offline_access',
+    resource: `${server.base}/mcp`,
+  }).toString();
+  await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined);
+  await page.goto(u.toString());
+  await expect(page.getByRole('heading', { name: 'Connect a platform' })).toBeVisible();
+  await page.getByLabel('Name this connection').fill(name);
+  const back = page.waitForRequest((r) => r.url().startsWith(redirect));
+  await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
+  await page.getByRole('button', { name: 'Approve' }).click();
+  const url = new URL((await back).url());
+  await page.waitForURL((loc) => loc.href.startsWith(redirect), { timeout: 5_000 }).catch(() => undefined);
+  const code = url.searchParams.get('code');
+  expect(code).toBeTruthy();
+  const tok = await platform.post(meta.token_endpoint, {
+    form: {
+      grant_type: 'authorization_code',
+      code: code!,
+      redirect_uri: redirect,
+      client_id: client.client_id,
+      code_verifier: verifier,
+      resource: `${server.base}/mcp`,
+    },
+  });
+  expect(tok.ok(), `token failed: ${tok.status()} ${await tok.text()}`).toBeTruthy();
+  const tokens = await tok.json();
+  await platform.dispose();
+  return { token: tokens.access_token as string, clientId: client.client_id as string };
+}
+
+function parseMcpJson(raw: string): any {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) return JSON.parse(trimmed);
+  const data = trimmed
+    .split('\n')
+    .filter((l) => l.startsWith('data:'))
+    .map((l) => l.slice(5).trim())
+    .filter((l) => l && l !== '[DONE]')
+    .pop();
+  if (!data) throw new Error(`MCP response was not JSON: ${trimmed.slice(0, 400)}`);
+  return JSON.parse(data);
+}
+
+async function mcpCall(token: string, name: string, args: Record<string, unknown>) {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/json, text/event-stream',
+    'content-type': 'application/json',
+    'mcp-protocol-version': '2025-06-18',
+  };
+  const readBody = async (res: Response) => {
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('event-stream') || !res.body) return res.text();
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), Math.max(1, deadline - Date.now()))),
+      ]);
+      if (value) buf += dec.decode(value, { stream: !done });
+      if (done || buf.includes('\n\n')) break;
+    }
+    try {
+      await reader.cancel();
+    } catch {
+      /* already closed */
+    }
+    return buf;
+  };
+  const rpc = async (id: number | null, method: string, params?: unknown) => {
+    return fetch(`${server.base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', ...(id != null ? { id } : {}), method, params }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  };
+  const init = await rpc(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e-agent', version: '1.0.0' } });
+  const initText = await readBody(init);
+  expect(init.ok, `MCP initialize failed: ${init.status} ${initText}`).toBeTruthy();
+  const session = init.headers.get('mcp-session-id');
+  if (session) headers['mcp-session-id'] = session;
+  await rpc(null, 'notifications/initialized').catch(() => undefined);
+  const call = await rpc(2, 'tools/call', { name, arguments: args });
+  const raw = await readBody(call);
+  expect(call.ok, `MCP tools/call failed: ${call.status} ${raw}`).toBeTruthy();
+  const body = parseMcpJson(raw);
+  const result = body.result ?? body;
+  const text = (result.content as { type: string; text: string }[] | undefined)?.map((c) => c.text).join('') ?? JSON.stringify(result);
+  if (result.isError) throw new Error(text);
+  return JSON.parse(text);
+}
+
 test('an AI platform connects through the consent screen', async () => {
   const redirect = 'http://127.0.0.1:9/callback';
   const { url } = await newAuthorization(redirect);
@@ -380,6 +495,133 @@ test('a temporary server error while loading shows a message and a way to try ag
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible();
   await expect(page).toHaveURL(/\/tasks$/);
+});
+
+test('reading pages, history and compare work at 390×844', async () => {
+  const previous = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto('/documents/new');
+  await page.getByLabel('Title').fill('Reading sample');
+  await page.getByLabel(/^Text/).fill(
+    [
+      '# Sample heading',
+      '',
+      'See [Example](https://example.com/ok) and [bad](javascript:alert(1)).',
+      '',
+      'An image: ![Diagram](https://example.com/pic.png)',
+      '',
+      '| Col | Val |',
+      '| --- | --- |',
+      '| A | 1 |',
+      '',
+      '```',
+      'const x = 1;',
+      '```',
+    ].join('\n'),
+  );
+  await page.getByRole('button', { name: 'Create document' }).click();
+  await expect(page.getByRole('heading', { name: 'Reading sample' })).toBeVisible();
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page).toHaveURL(/\/read\/document\//);
+  await expect(page.getByRole('heading', { name: 'Sample heading' })).toBeVisible();
+  const good = page.getByRole('link', { name: 'Example' });
+  await expect(good).toHaveAttribute('href', 'https://example.com/ok');
+  await expect(good).toHaveAttribute('rel', 'noopener noreferrer nofollow');
+  await expect(good).toHaveAttribute('target', '_blank');
+  const md = page.locator('.md').first();
+  await expect(md.getByRole('link', { name: 'bad' })).toHaveCount(0);
+  await expect(md.getByText('bad')).toBeVisible();
+  await expect(md.getByRole('img')).toHaveCount(0);
+  await expect(md.getByRole('link', { name: 'Diagram' })).toBeVisible();
+  await expect(md.locator('table')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await expect(page.locator('.read-layout')).toHaveCSS('display', 'block');
+
+  await page.goto('/read');
+  await expect(page.getByRole('heading', { name: 'Reading', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Working rules/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Reading sample/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Style guide/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Website/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Writer/ })).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+
+  await page.getByRole('link', { name: /Style guide/ }).click();
+  await expect(page).toHaveURL(/\/read\/document\//);
+  await expect(page.locator('.md').getByText('No jargon.')).toBeVisible();
+  const history = page.locator('#history');
+  await expect(history.getByRole('heading', { name: 'History' })).toBeVisible();
+  await expect(history.locator('.diff-line.del, .diff-line.add').first()).toBeVisible();
+  await history.getByRole('link', { name: 'Open', exact: true }).first().click();
+  await expect(page).toHaveURL(/[?&]v=/);
+  await expect(page.getByText(/You are viewing version/)).toBeVisible();
+  await page.getByRole('link', { name: 'Open the current version' }).click();
+  await expect(page).not.toHaveURL(/[?&]v=/);
+  await expect(page.locator('.md').getByText('No jargon.')).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+
+  await page.goto('/rules');
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page).toHaveURL(/\/read\/rules$/);
+  await expect(page.locator('.md').getByText('Write in English on GitHub.')).toBeVisible();
+  await page.getByRole('link', { name: 'Edit', exact: true }).click();
+  await expect(page).toHaveURL(/\/rules$/);
+
+  if (previous) await page.setViewportSize(previous);
+});
+
+
+test('review comments work at 390×844', async () => {
+  test.setTimeout(90_000);
+  const previous = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto('/documents/new');
+  await page.getByLabel('Title').fill('Comments sample');
+  await page.getByLabel('Belongs to').selectOption({ label: 'role Writer' });
+  await page.getByLabel(/^Text/).fill('Please greet the reader by name.\n\nKeep the closing short.');
+  await page.getByRole('button', { name: 'Create document' }).click();
+  await expect(page.getByRole('heading', { name: 'Comments sample' })).toBeVisible();
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page).toHaveURL(/\/read\/document\//);
+  const block = page.locator('.md-commentable [data-lines]').filter({ hasText: 'Please greet the reader by name.' }).first();
+  await expect(block).toBeVisible();
+  await block.click();
+  await page.getByLabel('Your comment').fill('Please use the reader\'s name in the greeting.');
+  await page.getByRole('button', { name: 'Add comment' }).click();
+  await expect(page.locator('.review-card .review-body').getByText('Please use the reader\'s name in the greeting.')).toBeVisible();
+  await expect(page.locator('.review-card').getByText('open', { exact: true })).toBeVisible();
+
+  const id = await page.locator('.review-card').first().getAttribute('id');
+  expect(id).toBeTruthy();
+  const readUrl = page.url();
+  const { token } = await connectReviewsAgent('Comments bot');
+  const replied = await mcpCall(token, 'reply_review_comment', { id, body: 'Done — the greeting now uses the name.', status: 'answered', claimed_role: 'writer' });
+  expect(replied.status).toBe('answered');
+
+  await page.goto(readUrl);
+  await expect(page.locator('.review-card').getByText('answered', { exact: true })).toBeVisible();
+  await expect(page.locator('.review-card').getByText('Done — the greeting now uses the name.')).toBeVisible();
+
+  // Re-anchor runs on open and answered comments (resolved ones stay as they were).
+  await page.getByRole('link', { name: 'Edit', exact: true }).click();
+  await expect(page).toHaveURL(/\/documents\//);
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByLabel(/^Text/).fill('A completely different document with no overlapping sentences.');
+  await page.getByRole('button', { name: 'Save new version' }).click();
+  await page.getByRole('link', { name: 'Read', exact: true }).click();
+  await expect(page.locator('.review-card').getByText('outdated')).toBeVisible();
+  await expect(page.locator('.review-card').getByText('answered', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'All' }).click();
+  await page.locator('.review-card').getByRole('button', { name: 'Resolve' }).click();
+  await expect(page.locator('.review-card').getByText('resolved', { exact: true })).toBeVisible();
+  await expect(page.locator('.review-card').getByText('outdated')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+
+  if (previous) await page.setViewportSize(previous);
 });
 
 test('navigation fits the screen and the page breaks no content security rule', async () => {

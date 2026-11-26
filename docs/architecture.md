@@ -47,7 +47,7 @@ Workspace MCP is a modular monolith: one Node.js process, one SQLite file, one c
 | `src/config.ts` | Environment variables, validation, keys derived from `SECRET_KEY` with HKDF. |
 | `src/cli.ts`, `bin/` | Offline administration: version, backups, restore, verify, export, import, recovery code. |
 | `src/db/` | Opening the database (WAL, foreign keys, exclusive lock) and the numbered migrations. |
-| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
+| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `reviews.ts` (owner review comments, replies, re-anchoring, setup-notes history), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
 | `src/mcp/` | The MCP server and its 16 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
 | `src/auth/` | better-auth setup (`auth.ts`), connections and revocation (`connections.ts`), OAuth diagnostics (`diagnostics.ts`), setup and recovery codes (`setup.ts`). |
 | `src/web/` | The HTTP app with security headers and rate limits (`app.ts`), the owner API (`owner-api.ts`) and its read models (`owner-views.ts`). |
@@ -72,6 +72,8 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `project` (optional `owner_role_id`) | Projects with a versioned description, current state (focus, where work stopped) and repository links. |
 | `document` | Markdown documents attached to the workspace, a project or a role; versioned. |
 | `version` | Immutable versions of rules, role instructions, project descriptions and documents: number, body, author (connection, claimed role or owner), time, note. |
+| `setup_notes_history` | Append-only history of a role's setup notes, written with `saveRole`. Immutable; deleted only under `purge_guard`. History starts at the upgrade that added the table. |
+| `review_comment`, `review_reply` | Owner review comments on a versioned field or on setup notes, with original and current anchors (`exact`, `moved`, `outdated`, or `none`), status (`open`, `answered`, `resolved`), and replies. |
 | `task`, `task_dependency`, `task_comment` | Tasks with status, role, project, parent, dependencies, priority, due date, result, blocking reason; comments. |
 | `checkpoint` | What an agent did, where it stopped and what is next, per role and project. |
 | `routine` | A recurring job owned by a role: name, schedule, timezone, status (`enabled` / `paused`), optional external platform id, last run time and result. The server stores this; it does not run the schedule. |
@@ -92,7 +94,7 @@ better-auth keeps its own tables (users, sessions, passkeys, OAuth clients, toke
 
 ### One transaction per change
 
-Every write in `src/domain` runs in one SQLite transaction that updates the row, adds a version when the item is versioned, updates the search index, appends to `event`, and queues webhook deliveries through event hooks. Either all of it happens or none does, so the log and history never disagree with the data.
+Every write in `src/domain` runs in one SQLite transaction that updates the row, adds a version when the item is versioned, remaps open review comments onto the new text, updates the search index, appends to `event`, and queues webhook deliveries through event hooks. Either all of it happens or none does, so the log and history never disagree with the data.
 
 ### Versions and conflicts
 
