@@ -12,8 +12,12 @@ import { log } from '../util/log.ts';
 
 export type BackupReason = 'scheduled' | 'manual' | 'pre-migration' | 'pre-restore' | 'pre-import';
 const NAME = /^workspace-(\d{8}T\d{6}(?:\d{3})?Z)-([a-z-]+)\.sqlite$/;
-/** Pre-migration snapshots are kept separately from the rotation so an upgrade can always be undone. */
-const KEEP_PRE_MIGRATION = 3;
+/**
+ * Safety copies made before a migration, a restore or an import are kept apart from the rotation,
+ * the newest few of each kind, so an upgrade, a restore or an import can always be undone.
+ */
+const KEEP_SAFETY = 3;
+const SAFETY_REASONS: readonly string[] = ['pre-migration', 'pre-restore', 'pre-import'];
 
 export interface BackupInfo {
   name: string;
@@ -51,13 +55,13 @@ export function listBackups(config: Config): BackupInfo[] {
     .sort((a, b) => b.name.localeCompare(a.name));
 }
 
-/** Keeps the newest BACKUP_KEEP rotating backups and the newest few pre-migration ones. */
+/** Keeps the newest BACKUP_KEEP rotating (scheduled and manual) backups and the newest few safety copies of each kind. */
 export function pruneBackups(config: Config): string[] {
   const list = listBackups(config);
   const removed: string[] = [];
-  const rotating = list.filter((b) => b.reason !== 'pre-migration');
-  const pre = list.filter((b) => b.reason === 'pre-migration');
-  for (const b of [...rotating.slice(config.backupKeep), ...pre.slice(KEEP_PRE_MIGRATION)]) {
+  const rotating = list.filter((b) => !SAFETY_REASONS.includes(b.reason));
+  const safety = SAFETY_REASONS.flatMap((reason) => list.filter((b) => b.reason === reason).slice(KEEP_SAFETY));
+  for (const b of [...rotating.slice(config.backupKeep), ...safety]) {
     fs.rmSync(path.join(config.backupDir, b.name), { force: true });
     removed.push(b.name);
   }

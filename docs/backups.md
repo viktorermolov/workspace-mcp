@@ -15,9 +15,9 @@ A backup is made with SQLite's own online backup API, never by copying the live 
 | --- | --- | --- |
 | Every `BACKUP_INTERVAL_HOURS` (default 24), and at start when `DATA_DIR/backups/` holds no backup yet | `scheduled` | the newest `BACKUP_KEEP` (default 14) scheduled and manual backups |
 | **Back up now** in the web interface, or `cli backup` | `manual` | as above |
-| Before a migration of a database that holds data | `pre-migration` | the newest 3, separately from the rotation |
-| Before a restore | `pre-restore` | as above |
-| Before an import | `pre-import` | as above |
+| Before a migration of a database that holds data | `pre-migration` | the newest 3 `pre-migration` backups, separately from the rotation |
+| Before a restore | `pre-restore` | the newest 3 `pre-restore` backups, separately from the rotation |
+| Before an import | `pre-import` | the newest 3 `pre-import` backups, separately from the rotation |
 
 Files are named `workspace-<UTC timestamp>-<reason>.sqlite` and live in `DATA_DIR/backups/`. The web interface (**More → Export and backups**) lists them and lets you download each one.
 
@@ -69,7 +69,7 @@ A release that changes the database schema makes a `pre-migration` backup before
 2. Restore the newest `pre-migration` backup with `cli restore`.
 3. Start the service.
 
-Changes made after the upgrade are in the `pre-restore` backup that the restore creates; they are not lost, but they are not merged back automatically.
+Changes made after the upgrade are in the `pre-restore` backup that the restore creates; they are not lost, but they are not merged back automatically. The newest 3 `pre-restore` backups are kept outside the `BACKUP_KEEP` rotation, so newer scheduled backups do not remove it.
 
 ## Export
 
