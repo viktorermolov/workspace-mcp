@@ -209,6 +209,7 @@ describe('data safety', () => {
       rename.mock.restore();
       assert.ok(errors.mock.calls.some((c) => c.arguments[0] === 'background job failed' && c.arguments[1]?.job === 'backup' && /disk full \(test\)/.test(String(c.arguments[1]?.error))));
       assert.equal(listBackups(env.config).length, 0);
+      assert.deepEqual(fs.readdirSync(env.config.backupDir), [], 'a failed backup leaves no partial file behind');
       const res = await fetch(`${env.base}/healthz`);
       assert.equal(res.status, 200);
     } finally {

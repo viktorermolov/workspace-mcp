@@ -100,8 +100,18 @@ export async function backupTo(db: DB, dest: string): Promise<void> {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const tmp = `${dest}.partial`;
   fs.rmSync(tmp, { force: true });
-  await backup(db, tmp);
-  fs.renameSync(tmp, dest);
+  try {
+    await backup(db, tmp);
+    fs.renameSync(tmp, dest);
+  } catch (e) {
+    // Leave nothing behind (a full disk would fill up with partial copies), and report the original error.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // The original error matters more than a failed cleanup.
+    }
+    throw e;
+  }
 }
 
 export function hasUserTables(db: DB): boolean {
