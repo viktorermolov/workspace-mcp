@@ -1,4 +1,5 @@
 import { all, get, type DB } from '../db/db.ts';
+import { editedWhoseLabel } from '../domain/access.ts';
 import { actorLabel, parseEvent, type VersionedType } from '../domain/core.ts';
 import { listRoles, roleLinks } from '../domain/entities.ts';
 import { lastCheckpoint, taskSummary, type TaskRow } from '../domain/tasks.ts';
@@ -151,10 +152,14 @@ export function changeFeed(db: DB, memberId: string, limit = 200) {
       }
     }
     const critical = e.action === 'rules.updated' || e.action === 'role.instruction_updated';
+    const owner_role = (e.data?.owner_role as string | undefined) ?? null;
     return {
       id: e.id,
       at: e.at,
       by: actorLabel(e),
+      claimed_role: e.claimed_role,
+      owner_role,
+      whose: editedWhoseLabel(owner_role, e.claimed_role),
       action: e.action,
       entity_type: e.entity_type,
       entity_id: e.entity_id,

@@ -6,6 +6,7 @@ import { listDiag, recordDiag } from '../auth/diagnostics.ts';
 import { issueCode } from '../auth/setup.ts';
 import type { Config } from '../config.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
+import { setConnectionRoles, setEnforcement, setRoleEditAny, workspaceAccessSettings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
@@ -114,7 +115,33 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   });
 
   // ---------- connections ----------
-  api.get('/connections', (c) => c.json({ connections: listConnections(db), pending_clients: listUnapprovedClients(db) }));
+  api.get('/connections', (c) =>
+    c.json({
+      connections: listConnections(db),
+      pending_clients: listUnapprovedClients(db),
+      ...workspaceAccessSettings(db, actor(c).memberId),
+    }),
+  );
+  api.post('/connections/:id/roles', async (c) => {
+    const b = await body<{ roles?: unknown; confirm?: boolean }>(c);
+    const roles = Array.isArray(b.roles) ? b.roles.map((r) => String(r)) : null;
+    if (!roles) throw new DomainError('invalid', 'roles must be an array of role slugs or ids');
+    setConnectionRoles(db, actor(c), c.req.param('id'), roles, b.confirm !== false);
+    return c.json({ ok: true, ...workspaceAccessSettings(db, actor(c).memberId), connection: { client_id: c.req.param('id'), ...listConnections(db).find((x) => x.client_id === c.req.param('id')) } });
+  });
+  api.post('/settings/role-enforcement', async (c) => {
+    const b = await body<{ mode?: string; override?: boolean }>(c);
+    const mode = b.mode === 'enforce' ? 'enforce' : b.mode === 'warn' ? 'warn' : null;
+    if (!mode) throw new DomainError('invalid', 'mode must be warn or enforce');
+    const out = setEnforcement(db, actor(c), mode, { override: !!b.override });
+    return c.json({ ok: true, ...out, ...workspaceAccessSettings(db, actor(c).memberId) });
+  });
+  api.post('/roles/:id/edit-any', async (c) => {
+    const b = await body<{ edit_any?: boolean }>(c);
+    if (typeof b.edit_any !== 'boolean') throw new DomainError('invalid', 'edit_any must be a boolean');
+    setRoleEditAny(db, actor(c), c.req.param('id'), b.edit_any);
+    return c.json({ ok: true, ...workspaceAccessSettings(db, actor(c).memberId) });
+  });
   api.post('/connections/:id/revoke', (c) => c.json({ revoked: revokeConnection(db, actor(c), c.req.param('id')) }));
   api.post('/connections/:id/rename', async (c) => {
     const b = await body<{ name?: string }>(c);
@@ -218,7 +245,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.get('/log/latest', (c) => {
     const limit = Math.min(Number(c.req.query('limit') ?? 100) || 100, 200);
     const before = Number(c.req.query('before') ?? 0) || Number.MAX_SAFE_INTEGER;
-    return c.json({ events: all(db, 'SELECT id, at, actor_kind, connection_name, claimed_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND id < ? ORDER BY id DESC LIMIT ?', actor(c).memberId, before, limit) });
+    return c.json({ events: all(db, "SELECT id, at, actor_kind, connection_name, claimed_role, json_extract(data, '$.owner_role') AS owner_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND id < ? ORDER BY id DESC LIMIT ?", actor(c).memberId, before, limit) });
   });
   api.get('/changes', (c) => c.json(changeFeed(db, actor(c).memberId)));
   api.post('/changes/reviewed', async (c) => {

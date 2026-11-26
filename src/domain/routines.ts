@@ -1,5 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
+import { assertCanEdit, withOwnerRole } from './access.ts';
 import { requireRole } from './entities.ts';
 
 export const ROUTINE_STATUSES = ['enabled', 'paused'] as const;
@@ -138,6 +139,7 @@ export function saveRoutine(db: DB, actor: Actor, input: SaveRoutineInput) {
         if (!input.role?.trim()) throw invalid('role is required to create a routine');
         if (!input.schedule?.trim()) throw invalid('schedule is required to create a routine');
         const role = requireActiveRole(db, actor.memberId, input.role);
+        assertCanEdit(db, actor, role.id, { what: 'routine' });
         const tz = input.timezone?.trim() || 'UTC';
         assertTimeZone(tz);
         const id = newId('rtn');
@@ -161,11 +163,12 @@ export function saveRoutine(db: DB, actor: Actor, input: SaveRoutineInput) {
         );
         const row = requireRoutine(db, actor.memberId, id);
         indexRoutine(db, row);
-        recordEvent(db, actor, 'routine', id, 'routine.created', `Routine "${row.name}" created`, { role: role.slug, status: row.status });
+        recordEvent(db, actor, 'routine', id, 'routine.created', `Routine "${row.name}" created`, withOwnerRole(db, role.id, { role: role.slug, status: row.status }));
         return routineView(db, row);
       });
     }
     const row = requireRoutine(db, actor.memberId, input.id);
+    assertCanEdit(db, actor, row.role_id, { what: 'routine' });
     checkRev('routine', row.id, row.rev, input.rev);
     const changed: string[] = [];
     const sets: string[] = [];
@@ -178,6 +181,7 @@ export function saveRoutine(db: DB, actor: Actor, input: SaveRoutineInput) {
     }
     if (input.role !== undefined) {
       const role = requireActiveRole(db, actor.memberId, input.role);
+      assertCanEdit(db, actor, role.id, { what: 'routine' });
       if (role.id !== row.role_id) {
         sets.push('role_id = ?');
         vals.push(role.id);
@@ -221,7 +225,7 @@ export function saveRoutine(db: DB, actor: Actor, input: SaveRoutineInput) {
     run(db, `UPDATE routine SET ${sets.join(', ')} WHERE id = ?`, ...vals);
     const updated = requireRoutine(db, actor.memberId, row.id);
     indexRoutine(db, updated);
-    recordEvent(db, actor, 'routine', updated.id, 'routine.updated', `Routine "${updated.name}" updated: ${changed.join(', ')}`, { changed });
+    recordEvent(db, actor, 'routine', updated.id, 'routine.updated', `Routine "${updated.name}" updated: ${changed.join(', ')}`, withOwnerRole(db, updated.role_id, { changed }));
     return routineView(db, updated);
   });
 }
