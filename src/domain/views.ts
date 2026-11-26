@@ -17,13 +17,15 @@ import {
   rulesView,
   type DocumentRow,
 } from './entities.ts';
+import { getReviewComment, listReviewSearch, openReviewComments, searchReviewHits, startReviewComments } from './reviews.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
+
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
 
-export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue', 'routine'] as const;
+export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue', 'routine', 'review_comment'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 /** Types that `search` covers. Working rules and checkpoints are read with `get` and `start`. */
-export const SEARCH_TYPES = ['role', 'project', 'document', 'task', 'issue', 'routine'] as const;
+export const SEARCH_TYPES = ['role', 'project', 'document', 'task', 'issue', 'routine', 'review_comment'] as const;
 
 export function issueView(db: DB, memberId: string, id: string) {
   const i = get<Record<string, unknown>>(
@@ -56,10 +58,16 @@ export function issueView(db: DB, memberId: string, id: string) {
 
 export function getEntity(db: DB, memberId: string, type: EntityType, id?: string, opts: { cursor?: string } = {}) {
   switch (type) {
-    case 'rules':
-      return getRules(db, memberId, id);
-    case 'role':
-      return roleView(db, requireRole(db, memberId, need(id)));
+    case 'rules': {
+      const rules = getRules(db, memberId, id);
+      return { ...rules, ...openReviewComments(db, memberId, 'rules', rules.id) };
+    }
+    case 'role': {
+      const role = roleView(db, requireRole(db, memberId, need(id)));
+      return { ...role, ...openReviewComments(db, memberId, 'role', role.id) };
+    }
+    case 'review_comment':
+      return getReviewComment(db, memberId, need(id));
     case 'project': {
       const p = requireProject(db, memberId, need(id));
       const tasks = all<TaskRow>(
@@ -70,10 +78,12 @@ export function getEntity(db: DB, memberId: string, type: EntityType, id?: strin
       const docs = all<DocumentRow>(db, "SELECT * FROM document WHERE scope_type = 'project' AND scope_id = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 50", p.id).map(
         (d) => documentView(db, d, false),
       );
-      return { ...projectView(db, p), open_tasks: tasks, documents: docs };
+      return { ...projectView(db, p), open_tasks: tasks, documents: docs, ...openReviewComments(db, memberId, 'project', p.id) };
     }
-    case 'document':
-      return documentView(db, requireDocument(db, memberId, need(id)));
+    case 'document': {
+      const doc = documentView(db, requireDocument(db, memberId, need(id)));
+      return { ...doc, ...openReviewComments(db, memberId, 'document', doc.id) };
+    }
     case 'task':
       return taskView(db, requireTask(db, memberId, need(id)), { comments: true, commentsBefore: opts.cursor });
     case 'checkpoint': {
@@ -251,6 +261,9 @@ function hydrate(db: DB, type: string, id: string, input: SearchInput, roleId?: 
     const role = get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', r.role_id)?.slug ?? null;
     return { type, id, title: r.name, status: r.status, role, updated_at: r.updated_at };
   }
+  if (type === 'review_comment') {
+    return searchReviewHits(db, get<{ member_id: string }>(db, 'SELECT member_id FROM review_comment WHERE id = ?', id)?.member_id ?? '', id, input, roleId);
+  }
   return null;
 }
 
@@ -278,6 +291,8 @@ function listType(db: DB, memberId: string, type: string, input: SearchInput, ro
     if (roleId) (conds.push('role_id = ?'), vals.push(roleId));
     if (input.status?.length) (conds.push(`status IN (${input.status.map(() => '?').join(',')})`), vals.push(...input.status));
     for (const r of all<{ id: string }>(db, `SELECT id FROM routine WHERE ${conds.join(' AND ')} ${arch} ORDER BY updated_at DESC LIMIT 2000`, ...vals)) ids.push({ id: r.id, type });
+  } else if (type === 'review_comment') {
+    return listReviewSearch(db, memberId, input, roleId);
   }
   const out: Hit[] = [];
   for (const i of ids) {
@@ -421,7 +436,8 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   // one response. Everything is one get or search away. Text that escapes badly in JSON (many quotes,
   // newlines or control characters) can still overflow; then the overview shrinks, and as a last
   // resort the instructions are shortened with an explicit note to read them in full.
-  const build = (pv: number, long: number, instr: number | null) => ({
+  const commentsFor = (pv: number, mode: 'full' | 'ids') => (role ? startReviewComments(db, memberId, role.id, pv, mode) : {});
+  const build = (pv: number, long: number, instr: number | null, comments: 'full' | 'ids' = 'full') => ({
     instructions: {
       working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text || '(no working rules yet)', instr),
       working_rules_version: rules.version,
@@ -476,17 +492,20 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
         : {}),
       changes_since_previous_start: since,
       latest_event_id: latest,
+      ...commentsFor(long, comments),
     },
   });
   const BUDGET = opts.budget ?? MAX_RESPONSE_CHARS - 16 * 1024;
   const fits = (v: unknown) => JSON.stringify(v, null, 1).length <= BUDGET;
-  let result = build(LIMITS.preview, 4000, null);
+  let result = build(LIMITS.preview, 4000, null, 'full');
   if (fits(result)) return result;
-  result = build(100, 500, null);
+  result = build(100, 500, null, 'full');
   if (fits(result)) return result;
   for (const n of [50_000, 20_000, 5_000, 1_000]) {
-    result = build(100, 500, n);
+    result = build(100, 500, n, 'full');
     if (fits(result)) return result;
   }
+  result = build(100, 500, 1_000, 'ids');
+  if (fits(result)) return result;
   return result;
 }

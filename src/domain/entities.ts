@@ -17,6 +17,7 @@ import {
   unindexEntity,
   type Actor,
 } from './core.ts';
+import { purgeReviewData, recordSetupNotesChange, ensureSetupNotesHistory } from './reviews.ts';
 import { assertCanEdit, assertCanEditEntity, documentOwnerRoleId, ownerSlug, withOwnerRole } from './access.ts';
 
 // ---------- members ----------
@@ -454,6 +455,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
           at,
           at,
         );
+        if (input.setup_notes) ensureSetupNotesHistory(db, actor, id, input.setup_notes);
         let role = requireRole(db, actor.memberId, id);
         if (input.instruction) addVersion(db, actor, 'role', id, input.instruction, input.note);
         if (input.links) setRoleLinks(db, actor, role, input.links);
@@ -472,6 +474,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
+    let setupNotesPrevious: string | undefined;
     for (const f of ['name', 'area', 'setup_notes', 'slug'] as const) {
       const v = input[f];
       if (v !== undefined && v !== role[f]) {
@@ -480,6 +483,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
           if (other && other.id !== role.id) throw roleSlugTaken(other, v);
         }
         if (f === 'name' && !v.trim()) throw invalid('name must not be empty');
+        if (f === 'setup_notes') setupNotesPrevious = role.setup_notes;
         sets.push(`${f} = ?`);
         vals.push(v);
         changed.push(f);
@@ -517,6 +521,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
     sets.push('rev = rev + 1', 'updated_at = ?');
     vals.push(now(), role.id);
     run(db, `UPDATE role SET ${sets.join(', ')} WHERE id = ?`, ...vals);
+    if (setupNotesPrevious !== undefined) recordSetupNotesChange(db, actor, role.id, setupNotesPrevious, input.setup_notes ?? '');
     const updated = requireRole(db, actor.memberId, role.id);
     indexRole(db, updated);
     if (instructionVersion) {
@@ -912,6 +917,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
       } else if (type === 'routine') {
         run(db, 'DELETE FROM routine WHERE id = ?', id);
       } else if (type === 'document') {
+        purgeReviewData(db, 'document', id);
         run(db, "DELETE FROM version WHERE entity_type = 'document' AND entity_id = ?", id);
         run(db, 'DELETE FROM document WHERE id = ?', id);
       } else if (type === 'project') {
@@ -926,6 +932,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         if (used.n > 0) throw invalid('the project still has tasks or documents; delete or move them first');
         run(db, 'UPDATE github_repo SET project_id = NULL WHERE project_id = ?', id);
         run(db, 'DELETE FROM checkpoint WHERE project_id = ?', id);
+        purgeReviewData(db, 'project', id);
         run(db, "DELETE FROM version WHERE entity_type = 'project' AND entity_id = ?", id);
         run(db, 'DELETE FROM project WHERE id = ?', id);
       } else {
@@ -947,6 +954,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
         run(db, 'UPDATE project SET owner_role_id = NULL WHERE owner_role_id = ?', id);
+        purgeReviewData(db, 'role', id);
         run(db, "DELETE FROM version WHERE entity_type = 'role' AND entity_id = ?", id);
         run(db, 'DELETE FROM role WHERE id = ?', id);
       }

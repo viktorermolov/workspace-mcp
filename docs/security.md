@@ -67,6 +67,7 @@ The Reading pages in the owner interface display stored Markdown (rules, role in
 - The parser builds a tree and renders it only as interface elements. Text is always a child, never markup. Raw HTML in the source is shown as text.
 - Allowed link schemes are `http`, `https` and `mailto`, plus internal paths that start with `/` but not `//` or `/\`. The check runs after HTML entities and percent-escapes are decoded, after whitespace and control characters are stripped, and without regard to case. The same rule applies to reference definitions, autolinks, and the link used in place of an image. Other URLs are shown as text. External links open with `rel="noopener noreferrer nofollow"` and `target="_blank"`; internal links use the in-app router.
 - Images are not fetched (they become a link with the alt text). This also matches the Content Security Policy, which does not allow images from other origins.
+- Searches for a closing delimiter (for example a matching backtick run, a link destination or an autolink) are capped at 2,048 characters or the end of the line. Constructs that do not close within that cap are rendered as plain text. This keeps parsing linear in the length of the document.
 - These pages are served only to the signed-in owner, through the same session middleware as the rest of the web interface. There is no public route and no “share” link.
 
 ## Authentication
