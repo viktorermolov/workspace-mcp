@@ -107,7 +107,7 @@ docker compose run --rm workspace cli check-export /data/workspace-export.zip
 
 ## Import
 
-Import goes into an **empty** workspace only (no roles, projects, documents, tasks or working rules), so it can never mix two workspaces. It verifies the checksums in the manifest, refuses a format version newer than it knows, and makes a `pre-import` backup first.
+Import goes into an **empty** workspace only (no roles, projects, documents, tasks, working rules, or a GitHub mirror), so it can never mix two workspaces. It verifies the checksums in the manifest, refuses a format version newer than it knows, and makes a `pre-import` backup first. The search index is rebuilt from the imported current state, including mirrored GitHub issues: a later incremental sync would not reindex issues it skips as unchanged.
 
 - In the web interface: on **More → Export and backups**, **Import** appears while the workspace is empty. Upload the zip (up to 100 MB).
 - Offline: copy the zip into the volume, then `cli import`:
@@ -119,7 +119,7 @@ docker compose run --rm workspace cli import /data/import.zip
 docker compose start workspace
 ```
 
-After an import, connect the AI platforms again and, if you use them, reconnect GitHub (the token does not travel in an export; selected repositories, default roles, assigners and issue labels do) and recreate webhooks.
+After an import, connect the AI platforms again and, if you use them, reconnect GitHub (the token does not travel in an export; selected repositories, default roles, assigners and issue labels do, and imported issues are already in the search index) and recreate webhooks.
 
 ## Moving to another machine
 

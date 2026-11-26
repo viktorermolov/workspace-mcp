@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { unzipSync } from 'fflate';
+import { strToU8, unzipSync, zipSync } from 'fflate';
 import { after, before, describe, it } from 'node:test';
 import { createBackup, restoreBackup } from '../src/backup/backup.ts';
+import { buildExport, importExport, isWorkspaceEmpty } from '../src/backup/export.ts';
 import { all, get, openDatabase, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
+import { DomainError } from '../src/domain/core.ts';
+import { ensureOwnerMember } from '../src/domain/entities.ts';
+import { search } from '../src/domain/views.ts';
 import { call, connectAgent, registerOwner, startService, ToolError, type Browser, type TestEnv } from './helpers/harness.ts';
 
 const TOKEN = 'ghp_fake_token_for_tests_only';
@@ -467,6 +472,13 @@ describe('export, import and backup of issue roles', () => {
       );
       assert.equal(get<{ role_id: string | null }>(dst.svc.db, 'SELECT role_id FROM github_issue WHERE id = ?', issue55)!.role_id, internId);
       assert.equal(get<{ n: number }>(dst.svc.db, 'SELECT count(*) AS n FROM github_config')!.n, 0, 'zip import does not restore the token');
+      const memberId = ensureOwnerMember(dst.svc.db).id;
+      assert.equal(get<{ n: number }>(dst.svc.db, "SELECT count(*) AS n FROM search_fts WHERE entity_type = 'issue' AND member_id = ?", memberId)!.n, 2);
+      const found = search(dst.svc.db, memberId, { query: 'Tree map' });
+      assert.ok(
+        found.results.some((r) => r.type === 'issue' && r.id === issue55),
+        'imported issues must be in the search index; a later incremental sync would skip unchanged rows',
+      );
     } finally {
       await dst.close();
     }
@@ -497,6 +509,120 @@ describe('export, import and backup of issue roles', () => {
       assert.equal(get<{ login: string }>(dest.svc.db, 'SELECT login FROM github_config')!.login, login);
     } finally {
       await dest.close();
+    }
+  });
+
+  function rewriteWorkspace(zip: Uint8Array, mutate: (ws: { tables: Record<string, Record<string, unknown>[]> }) => void): Uint8Array {
+    const files = unzipSync(zip);
+    const ws = JSON.parse(Buffer.from(files['workspace.json']!).toString()) as { tables: Record<string, Record<string, unknown>[]> };
+    mutate(ws);
+    const wsBytes = strToU8(JSON.stringify(ws));
+    const manifest = JSON.parse(Buffer.from(files['manifest.json']!).toString()) as { files: Record<string, string> };
+    manifest.files['workspace.json'] = createHash('sha256').update(wsBytes).digest('hex');
+    return zipSync({ ...files, 'workspace.json': wsBytes, 'manifest.json': strToU8(JSON.stringify(manifest, null, 2)) });
+  }
+
+  it('indexes imported github issues so search finds them after a zip import', async () => {
+    const src = await startService({ env: { GITHUB_API_URL: 'https://github.test/api' }, fetchImpl: fakeGithub(repos) as typeof fetch });
+    const seeded = await seed(src);
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await src.close();
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      importExport(dst.svc.db, owner.id, zip);
+      assert.equal(get<{ n: number }>(dst.svc.db, "SELECT count(*) AS n FROM search_fts WHERE entity_type = 'issue' AND member_id = ?", owner.id)!.n, 2);
+      const found = search(dst.svc.db, owner.id, { query: 'Tree map' });
+      assert.ok(found.results.some((r) => r.type === 'issue' && r.id === seeded.issue55));
+      const closed = search(dst.svc.db, owner.id, { query: 'Closed already' });
+      assert.ok(closed.results.some((r) => r.type === 'issue' && r.title?.includes('Closed already')));
+    } finally {
+      await dst.close();
+    }
+  });
+
+  it('treats a workspace that has only a GitHub mirror as non-empty and refuses a second import cleanly', async () => {
+    const src = await startService({ env: { GITHUB_API_URL: 'https://github.test/api' }, fetchImpl: fakeGithub(repos) as typeof fetch });
+    await seed(src);
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await src.close();
+
+    const dest = await startService({ env: { GITHUB_API_URL: 'https://github.test/api' }, fetchImpl: fakeGithub(repos) as typeof fetch });
+    try {
+      const ownerBrowser = (await registerOwner(dest)).browser;
+      const memberId = ensureOwnerMember(dest.svc.db).id;
+      assert.equal(isWorkspaceEmpty(dest.svc.db, memberId), true);
+      await ownerBrowser.json('/api/owner/github/token', { json: { token: TOKEN } });
+      await ownerBrowser.json('/api/owner/github/repos', { json: { full_name: 'team/one' } });
+      const sync = await ownerBrowser.json('/api/owner/github/sync', { method: 'POST', json: {} });
+      assert.equal(sync.ok, true, sync.message);
+      assert.ok(get(dest.svc.db, 'SELECT 1 FROM github_repo WHERE member_id = ?', memberId));
+      assert.ok(get(dest.svc.db, 'SELECT 1 FROM github_issue WHERE member_id = ?', memberId));
+      assert.equal(isWorkspaceEmpty(dest.svc.db, memberId), false, 'a GitHub mirror alone makes the workspace non-empty');
+
+      assert.throws(() => importExport(dest.svc.db, memberId, zip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'conflict');
+        assert.match(e.message, /empty workspace/i);
+        assert.doesNotMatch(e.message, /UNIQUE constraint/i);
+        return true;
+      });
+      const viaApi = await ownerBrowser.fetch('/api/owner/import', { method: 'POST', body: new Uint8Array(zip) as Uint8Array<ArrayBuffer>, headers: { 'content-type': 'application/zip' } });
+      assert.equal(viaApi.status, 409, await viaApi.clone().text());
+      const body = (await viaApi.json()) as { error?: string; message?: string };
+      assert.equal(body.error, 'conflict');
+      assert.doesNotMatch(String(body.message), /UNIQUE constraint/i);
+    } finally {
+      await dest.close();
+    }
+  });
+
+  it('rejects a dangling issue role_id, default_role_id or assigner role with a DomainError', async () => {
+    const src = await startService({ env: { GITHUB_API_URL: 'https://github.test/api' }, fetchImpl: fakeGithub(repos) as typeof fetch });
+    await seed(src);
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await src.close();
+
+    const cases: { field: string; mutate: (ws: { tables: Record<string, Record<string, unknown>[]> }) => void }[] = [
+      {
+        field: 'github_issue.role_id',
+        mutate: (ws) => {
+          ws.tables.github_issue![0]!.role_id = 'rol_not_in_export';
+        },
+      },
+      {
+        field: 'github_repo.default_role_id',
+        mutate: (ws) => {
+          ws.tables.github_repo![0]!.default_role_id = 'rol_not_in_export';
+        },
+      },
+      {
+        field: 'github_repo_assigner.role_id',
+        mutate: (ws) => {
+          ws.tables.github_repo_assigner![0]!.role_id = 'rol_not_in_export';
+        },
+      },
+    ];
+
+    for (const c of cases) {
+      const dst = await startService();
+      try {
+        const owner = ensureOwnerMember(dst.svc.db);
+        const bad = rewriteWorkspace(zip, c.mutate);
+        assert.throws(() => importExport(dst.svc.db, owner.id, bad), (e: unknown) => {
+          assert.ok(e instanceof DomainError, `${c.field}: expected DomainError, got ${e}`);
+          assert.equal(e.code, 'invalid');
+          assert.match(e.message, new RegExp(c.field.replace('.', '\\.')));
+          assert.match(e.message, /not in the import/);
+          assert.match(e.message, /rol_not_in_export/);
+          assert.doesNotMatch(e.message, /FOREIGN KEY constraint/i);
+          return true;
+        });
+        assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true, `${c.field}: a failed import must roll back`);
+      } finally {
+        await dst.close();
+      }
     }
   });
 });

@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Zip import now rebuilds the search index for mirrored GitHub issues (title, body, and `full_name#number`), so `search` finds them after a move. A later incremental sync would skip unchanged issues using the imported `since` / `sync_cursor`.
+- A workspace that already has a GitHub mirror (`github_repo`, `github_issue`, or `github_repo_assigner`) is no longer treated as empty, so a second import is refused with the usual conflict message instead of a unique-constraint error.
+- Import of a GitHub default role, assigner role, or issue role that is not in the import is rejected with a clear error and rolled back, rather than failing with a raw foreign-key constraint.
 - Re-anchoring a review comment on repeated lines no longer jumps up to 20 lines away: context is compared the way it is stored (including the separating newline), a fuzzy tie picks the hit nearest the old line, and a unique occurrence outside the window is accepted when at least one adjacent line matches.
 - A unique hit outside the re-anchor window is no longer rejected just because the quoted paragraph is longer than 500 characters or only one neighbouring line moved with the block: `ctx_after` is stored after the truncated quote, and the far-hit check compares only the adjacent line on each side.
 - Review comment quotes no longer keep a trailing `\r` on CRLF text, so editing the commented line keeps the same anchor as on LF text.
