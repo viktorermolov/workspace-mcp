@@ -356,7 +356,9 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   if (opts.project && !projectRow) throw notFound('project', opts.project);
   const projectRules = projectRow ? listRules(db, memberId, { projectId: projectRow.id }).map((r) => rulesView(db, r)) : undefined;
   const roles = listRoles(db, memberId);
-  const archivedRoles = listRoles(db, memberId, true).filter((r) => r.archived_at);
+  const allRoles = listRoles(db, memberId, true);
+  const archivedRoles = allRoles.filter((r) => r.archived_at);
+  const roleSlugById = new Map(allRoles.map((r) => [r.id, r.slug]));
   const projects = listProjects(db, memberId);
   const empty = roles.length === 0 && projects.length === 0 && !rules.text && !get(db, 'SELECT 1 FROM task WHERE member_id = ? LIMIT 1', memberId);
   const out: Record<string, unknown> = {};
@@ -465,7 +467,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     },
     data: {
       ...out,
-      roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area, pv) })),
+      roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area, pv), parent: r.parent_id ? (roleSlugById.get(r.parent_id) ?? null) : null })),
       ...(roles.length > START_LIST_MAX ? { more_roles: roles.length - START_LIST_MAX } : {}),
       ...(archivedRoles.length
         ? {
@@ -479,7 +481,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       ...(allRoutines.length > START_LIST_MAX ? { more_routines: allRoutines.length - START_LIST_MAX } : {}),
       ...(role
         ? {
-            role: { id: role.id, slug: role.slug, name: role.name, area: role.area, links: role.links.slice(0, 100), ...(role.links.length > 100 ? { more_links: role.links.length - 100 } : {}), setup_notes: preview(role.setup_notes, long), rev: role.rev },
+            role: { id: role.id, slug: role.slug, name: role.name, area: role.area, parent: role.parent, links: role.links.slice(0, 100), ...(role.links.length > 100 ? { more_links: role.links.length - 100 } : {}), setup_notes: preview(role.setup_notes, long), rev: role.rev },
             open_tasks: roleTasks,
             last_checkpoint: checkpoint
               ? { ...(checkpoint as Record<string, unknown>), done: cpPart((checkpoint as Record<string, unknown>).done, long), stopped_at: cpPart((checkpoint as Record<string, unknown>).stopped_at, long), next: cpPart((checkpoint as Record<string, unknown>).next, long) }

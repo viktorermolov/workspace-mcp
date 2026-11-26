@@ -110,6 +110,71 @@ test('owner creates roles, a project and a task', async () => {
   await expect(page.getByText('Draft the intro')).toBeVisible();
 });
 
+test('the map lays a parent and child out as a tree, including at 390×844', async () => {
+  await page.goto('/roles/writer');
+  await expect(page.getByRole('heading', { name: 'Writer' })).toBeVisible();
+  await page.getByLabel('Reports to').selectOption({ label: 'Editor' });
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByLabel('Reports to')).toHaveValue('editor');
+
+  const routineRes = await page.evaluate(async () => {
+    const r = await fetch('/api/owner/routines', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Morning check', role: 'writer', schedule: 'weekdays 9am', timezone: 'UTC' }),
+    });
+    return { ok: r.ok, status: r.status, text: await r.text() };
+  });
+  expect(routineRes.ok, `create routine: ${routineRes.status} ${routineRes.text}`).toBeTruthy();
+
+  await go('Map');
+  const graph = page.locator('svg.graph');
+  await expect(graph).toBeVisible();
+  await expect(graph).toHaveAttribute('data-layout', 'tree');
+  await expect(page.locator('.card').filter({ hasText: 'Writer' }).getByText('Morning check')).toBeVisible();
+
+  const pos = await graph.evaluate((svg) => {
+    const out: Record<string, { x: number; y: number }> = {};
+    for (const a of svg.querySelectorAll('a')) {
+      const name = a.querySelector('.graph-label')?.textContent?.trim() ?? '';
+      const c = a.querySelector('circle');
+      if (c && name) out[name] = { x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')) };
+    }
+    return out;
+  });
+  expect(pos.Writer && pos.Editor, 'both roles are in the tree').toBeTruthy();
+  expect(pos.Writer.y, 'child sits below its parent, not on a circle').toBeGreaterThan(pos.Editor.y);
+
+  const prev = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(graph).toBeVisible();
+  const overflow = await page.evaluate(() => ({
+    doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    body: document.body.scrollWidth - document.body.clientWidth,
+  }));
+  expect(overflow.doc).toBeLessThanOrEqual(1);
+  expect(overflow.body).toBeLessThanOrEqual(1);
+
+  const wrap = page.locator('.graph-wrap');
+  await expect(wrap).toBeVisible();
+  const overflowX = await wrap.evaluate((el) => getComputedStyle(el).overflowX);
+  expect(['auto', 'scroll', 'overlay']).toContain(overflowX);
+
+  const taps = await graph.locator('a').evaluateAll((els) =>
+    els.map((el) => {
+      const b = el.getBoundingClientRect();
+      return { w: b.width, h: b.height };
+    }),
+  );
+  expect(taps.length).toBeGreaterThan(0);
+  for (const t of taps) {
+    expect(t.w).toBeGreaterThanOrEqual(44);
+    expect(t.h).toBeGreaterThanOrEqual(44);
+  }
+
+  if (prev) await page.setViewportSize(prev);
+});
+
 test('the task list shows what a task waits for under any filter, and Back keeps the filter', async () => {
   await page.goto('/tasks/new');
   await page.getByLabel('Title').fill('Review the intro');

@@ -8,7 +8,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createBackup, listBackups, pruneBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
 import { buildExport, importExport, isWorkspaceEmpty, readExport } from '../src/backup/export.ts';
 import { loadConfig } from '../src/config.ts';
-import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
+import { all, DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
 import { DomainError } from '../src/domain/core.ts';
 import { ensureOwnerMember, getRules, saveRole, updateRules } from '../src/domain/entities.ts';
@@ -28,6 +28,25 @@ function withTaskParents(zip: Uint8Array, parents: Record<string, string | null>
   const manifest = JSON.parse(Buffer.from(files['manifest.json']!).toString()) as { files: Record<string, string> };
   manifest.files['workspace.json'] = createHash('sha256').update(wsBytes).digest('hex');
   return zipSync({ ...files, 'workspace.json': wsBytes, 'manifest.json': strToU8(JSON.stringify(manifest, null, 2)) });
+}
+
+
+function rewriteWorkspaceJson(zip: Uint8Array, mutate: (ws: any, files: Record<string, Uint8Array>) => void): Uint8Array {
+  const files = unzipSync(zip);
+  const ws = JSON.parse(Buffer.from(files['workspace.json']!).toString());
+  mutate(ws, files);
+  const wsBytes = strToU8(JSON.stringify(ws));
+  const manifest = JSON.parse(Buffer.from(files['manifest.json']!).toString()) as { files: Record<string, string> };
+  manifest.files['workspace.json'] = createHash('sha256').update(wsBytes).digest('hex');
+  return zipSync({ ...files, 'workspace.json': wsBytes, 'manifest.json': strToU8(JSON.stringify(manifest, null, 2)) });
+}
+
+function withRoleParents(zip: Uint8Array, parents: Record<string, string | null>): Uint8Array {
+  return rewriteWorkspaceJson(zip, (ws) => {
+    for (const row of ws.tables.role as { id: string; parent_id: string | null }[]) {
+      if (row.id in parents) row.parent_id = parents[row.id]!;
+    }
+  });
 }
 
 describe('data safety', () => {
@@ -451,8 +470,8 @@ describe('data safety', () => {
     );
 
     const applied = runAppMigrations(db);
-    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4, review-comments is 6).
-    assert.equal(applied, 3);
+    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4, role_parent is 5, review-comments is 6).
+    assert.equal(applied, 4);
     const row = get<{ id: string; slug: string; title: string; is_default: number; project_id: string | null; member_id: string }>(
       db,
       'SELECT id, slug, title, is_default, project_id, member_id FROM rules WHERE member_id = ?',
@@ -570,6 +589,151 @@ describe('data safety', () => {
         return true;
       });
       assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true);
+    } finally {
+      await dst.close();
+    }
+  });
+
+  it('imports role parents from a backup regardless of row order', async () => {
+    const src = await startService();
+    const { browser } = await registerOwner(src);
+    const child = await browser.json<{ id: string; rev: number }>('/api/owner/roles', { json: { name: 'Writer', slug: 'writer' } });
+    const parent = await browser.json<{ id: string }>('/api/owner/roles', { json: { name: 'Manager', slug: 'manager' } });
+    await browser.json('/api/owner/roles', { json: { id: child.id, rev: child.rev, parent: 'manager' } });
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await src.close();
+
+    const reversed = rewriteWorkspaceJson(zip, (ws) => {
+      ws.tables.role = [...ws.tables.role].reverse();
+    });
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      importExport(dst.svc.db, owner.id, reversed);
+      const imported = get<{ parent_id: string | null; slug: string }>(dst.svc.db, 'SELECT parent_id, slug FROM role WHERE id = ?', child.id)!;
+      assert.equal(imported.slug, 'writer');
+      assert.equal(imported.parent_id, parent.id);
+      assert.ok(get(dst.svc.db, 'SELECT 1 FROM role WHERE id = ?', parent.id));
+    } finally {
+      await dst.close();
+    }
+  });
+
+  it('rejects an import when role parents form a cycle, point outside the import or another workspace, or exceed depth 16', async () => {
+    const src = await startService();
+    const memberId = ensureOwnerMember(src.svc.db).id;
+    const { browser } = await registerOwner(src);
+    const a = await browser.json<{ id: string; rev: number }>('/api/owner/roles', { json: { name: 'Role A', slug: 'role-a' } });
+    const b = await browser.json<{ id: string; rev: number }>('/api/owner/roles', { json: { name: 'Role B', slug: 'role-b' } });
+    await browser.json('/api/owner/roles', { json: { id: a.id, rev: a.rev, parent: 'role-b' } });
+    const { zip } = buildExport(src.svc.db, memberId);
+    await src.close();
+
+    const cycleZip = withRoleParents(zip, { [a.id]: b.id, [b.id]: a.id });
+    const missingZip = withRoleParents(zip, { [a.id]: 'rol_not_in_export' });
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      assert.throws(() => importExport(dst.svc.db, owner.id, cycleZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /cycle/i);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true, 'a failed import must roll back');
+
+      assert.throws(() => importExport(dst.svc.db, owner.id, missingZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /not in the import/i);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true);
+
+      const at = '2026-01-01T00:00:00.000Z';
+      run(dst.svc.db, "INSERT INTO member (id, user_id, name, is_owner, created_at) VALUES ('mem_foreign', NULL, 'Other', 0, ?)", at);
+      run(
+        dst.svc.db,
+        `INSERT INTO role (id, member_id, slug, name, area, setup_notes, rev, edit_any, created_at, updated_at)
+         VALUES ('rol_foreign', 'mem_foreign', 'foreign', 'Foreign', '', '', 1, 0, ?, ?)`,
+        at,
+        at,
+      );
+      const foreignZip = withRoleParents(zip, { [a.id]: 'rol_foreign' });
+      assert.throws(() => importExport(dst.svc.db, owner.id, foreignZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /another workspace/);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true);
+    } finally {
+      await dst.close();
+    }
+
+    const deepSrc = await startService();
+    const deepBrowser = (await registerOwner(deepSrc)).browser;
+    const makeChain = async (prefix: string) => {
+      let prev: string | null = null;
+      let rootId = '';
+      let leafId = '';
+      for (let i = 0; i < 10; i++) {
+        const slug = `${prefix}${String(i).padStart(2, '0')}`;
+        const role = await deepBrowser.json<{ id: string }>('/api/owner/roles', { json: { name: `${prefix} ${i}`, slug, parent: prev } });
+        if (i === 0) rootId = role.id;
+        leafId = role.id;
+        prev = slug;
+      }
+      return { rootId, leafId };
+    };
+    const chainA = await makeChain('a');
+    const chainB = await makeChain('b');
+    const deepZip = withRoleParents(buildExport(deepSrc.svc.db, ensureOwnerMember(deepSrc.svc.db).id).zip, {
+      [chainA.rootId]: chainB.leafId,
+    });
+    await deepSrc.close();
+
+    const deepDst = await startService();
+    try {
+      const owner = ensureOwnerMember(deepDst.svc.db);
+      assert.throws(() => importExport(deepDst.svc.db, owner.id, deepZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /deeper than 16/);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(deepDst.svc.db, owner.id), true);
+    } finally {
+      await deepDst.close();
+    }
+  });
+
+  it('imports a 0.2.0-shaped backup whose roles have no parent field', async () => {
+    const src = await startService();
+    const { browser } = await registerOwner(src);
+    await browser.json('/api/owner/roles', { json: { name: 'Writer', slug: 'writer' } });
+    await browser.json('/api/owner/roles', { json: { name: 'Manager', slug: 'manager' } });
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await src.close();
+
+    const oldZip = rewriteWorkspaceJson(zip, (ws) => {
+      for (const row of ws.tables.role as Record<string, unknown>[]) delete row.parent_id;
+    });
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      importExport(dst.svc.db, owner.id, oldZip);
+      const rows = all<{ slug: string; parent_id: string | null }>(dst.svc.db, 'SELECT slug, parent_id FROM role ORDER BY slug');
+      assert.deepEqual(
+        rows.map((r) => [r.slug, r.parent_id]),
+        [
+          ['manager', null],
+          ['writer', null],
+        ],
+      );
     } finally {
       await dst.close();
     }

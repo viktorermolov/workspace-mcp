@@ -68,7 +68,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | --- | --- |
 | `member` | The owner (and, later, others). Linked to the better-auth user that holds the passkeys. Holds `role_enforcement` (`warn` or `enforce`). |
 | `rules` | The working rules of a member: one versioned text. |
-| `role`, `role_link` | Roles with area, instruction (versioned), setup notes and optional webhook; typed links between roles. A role may be marked `edit_any` by the owner. |
+| `role`, `role_link` | Roles with area, instruction (versioned), setup notes, optional webhook, and an optional `parent_id` (the reporting line; a forest of roots). Typed links between roles. A role may be marked `edit_any` by the owner. Existing `reports_to` links are not converted to `parent_id`. |
 | `project` (optional `owner_role_id`) | Projects with a versioned description, current state (focus, where work stopped) and repository links. |
 | `document` | Markdown documents attached to the workspace, a project or a role; versioned. |
 | `version` | Immutable versions of rules, role instructions, project descriptions and documents: number, body, author (connection, claimed role or owner), time, note. |
@@ -126,7 +126,7 @@ A scheduler (and the manual refresh) lists issues of the selected repositories w
 
 ### Backups, export and import
 
-Backups use SQLite's online backup API, never a file copy of the live database. Restore is offline: the running service holds an exclusive lock on the file, so the CLI refuses to restore or import under it. Before applying migrations to a database with data, the service makes a `pre-migration` backup; a database migrated by a newer release refuses to start on an older one with a clear message. The export is a versioned zip with readable `.md` files, a JSON file with structure, links and full history, and a manifest with checksums. Import inserts rows in table order, then applies self-referential parent links (`task.parent_id` today) in a second pass so a child created before its parent still imports; a missing parent or a cycle is rejected and the import is rolled back. See [backups.md](backups.md).
+Backups use SQLite's online backup API, never a file copy of the live database. Restore is offline: the running service holds an exclusive lock on the file, so the CLI refuses to restore or import under it. Before applying migrations to a database with data, the service makes a `pre-migration` backup; a database migrated by a newer release refuses to start on an older one with a clear message. The export is a versioned zip with readable `.md` files, a JSON file with structure, links and full history, and a manifest with checksums. Import inserts rows in table order, then applies self-referential parent links (`task.parent_id` and `role.parent_id`) in a second pass so a child created before its parent still imports; a missing parent, a cycle, or a role reporting line whose ancestor depth plus subtree height would exceed 16 is rejected and the import is rolled back. See [backups.md](backups.md).
 
 ### Background jobs
 

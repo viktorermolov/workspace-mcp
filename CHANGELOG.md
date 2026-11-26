@@ -6,16 +6,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A role can have an optional "reports to" parent (`parent_id`). The Map page lays roles out as a reporting tree instead of a circle: solid lines are reporting and declared links, dashed lines are recorded interactions. Node cards list open tasks and routines.
 - Review comments on reading pages (`/reviews`, and a pane on `/read/…`): the owner comments on a block, a bot replies with `reply_review_comment`, and the comment can be marked answered or resolved. Comments re-anchor when a new version is saved (exact quote, line map, then a fuzzy window), or become `outdated`. `setup_notes` has an append-only history starting at this upgrade; comments on that field point at a history row. `start` lists the 10 oldest open comments a role is responsible for; `get` and `search` cover `review_comment`. A `review.commented` webhook is sent to every active role with `edit_any` (and to the responsible role for other targets); if there is no such role, nothing is sent. The comments migration is id 6. Re-anchoring stays within the 500 ms write-lock budget even when a short quote repeats through a 200k document. Forbidden status changes write a `role_check` audit row (a `rejected` row is recorded after the transaction so it survives the rollback).
 - A Reading section in the owner interface renders working rules, other rules sets, role instructions and setup notes, project descriptions and documents as Markdown (`/read`, `/read/rules`, `/read/rules/:id`, `/read/role/:id`, `/read/project/:id`, `/read/document/:id`, and `?v=N` for an older version). History and compare reuse the existing version APIs. Each edit screen has a Read link, and each reading page has an Edit link. The pages are owner-only; there is no public share route. The default `GET /entity/rules` response now also lists every rules set (`sets`) so the index can group them; there is no new owner route.
 - A built-in Markdown parser (`ui/src/markdown.ts`) turns text into Preact elements only. Raw HTML is shown as text, images become links, and only `http`, `https`, `mailto` and same-origin `/` paths are clickable. `scripts/check-tree.sh` fails if the interface uses `innerHTML` or similar insertion APIs.
 
+### Changed
+
+- The Map page no longer uses a circular layout or hides the graph when there are more than 16 roles; the tree scrolls inside its own container.
+
 ### Fixed
 
+- A rejected role check is still recorded in the owner diagnostics after the write transaction is rolled back.
+- Saving a role no longer fails when its existing parent is archived and is not being changed. An archived parent is rejected only when the parent actually changes.
+- Reparenting a role is rejected when the new parent's ancestor depth plus the height of the moved subtree would exceed 16 levels.
+- The Map no longer draws an agent that claimed the role "owner" as the owner; only a real owner session or owner connection is shown as owner.
+- `save_role` no longer runs the reporting-line permission check when `parent` is omitted or is `null` and unchanged.
 - In warning mode, `claim_task` with an unknown `claimed_role` and no `role` now proceeds with a warning instead of failing with `not_found`.
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
 - Saving a connection's role list without confirming it now records a log event, including when the list was already empty.
 - Import now inserts rows without a parent first and sets parent links in a second pass, so a task whose parent was created later imports successfully. A parent missing from the import or a cycle is rejected as invalid and the import is rolled back.
+- Import also applies a role's reporting-line parent in that second pass, including when the parent was created later. A missing parent, a cycle, a parent from another workspace, or a reporting line whose ancestor depth plus subtree height would exceed 16 is rejected and the import is rolled back.
 - The owner change feed now sets `versioned.id` to the rule set's id, so a History link for a named or project rules set opens that set instead of the default working rules.
 - Documentation now states that the deprecated `role` synonym on `claim_task` and `checkpoint` is accepted in both warning and enforce modes, and that a connection added after enforcement is on cannot write until the owner confirms its role list.
 

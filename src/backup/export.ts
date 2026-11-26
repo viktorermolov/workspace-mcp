@@ -121,7 +121,7 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
   for (const r of tables.role as unknown as RoleRow[]) {
     const links = (tables.role_link as { from_role_id: string; to_role_id: string; type: string }[]).filter((l) => l.from_role_id === r.id).map((l) => `${l.type}: ${slugOf.get(l.to_role_id) ?? l.to_role_id}`);
     files[unique(`roles/${safeName(r.slug, r.id)}.md`)] = strToU8(
-      frontMatter({ type: 'role', id: r.id, slug: r.slug, name: r.name, area: r.area, links: links.length ? links : undefined, edit_any: r.edit_any === 1 || undefined, archived_at: r.archived_at, updated_at: r.updated_at }) +
+      frontMatter({ type: 'role', id: r.id, slug: r.slug, name: r.name, area: r.area, parent: r.parent_id ? slugOf.get(r.parent_id) : undefined, links: links.length ? links : undefined, edit_any: r.edit_any === 1 || undefined, archived_at: r.archived_at, updated_at: r.updated_at }) +
         currentBody(db, r.current_version) +
         (r.setup_notes ? `\n\n## Setup notes\n\n${r.setup_notes}\n` : ''),
     );

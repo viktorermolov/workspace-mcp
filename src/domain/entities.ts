@@ -227,6 +227,7 @@ export interface RoleRow {
   current_version: number | null;
   rev: number;
   edit_any: number;
+  parent_id: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -270,6 +271,7 @@ export function roleView(db: DB, r: RoleRow, withInstruction = true) {
     ...(withInstruction ? { instruction: currentBody(db, r.current_version) } : {}),
     instruction_version: v?.number ?? 0,
     links: roleLinks(db, r.id).map((l) => ({ id: l.id, from: l.from_slug, to: l.to_slug, type: l.type })),
+    parent: r.parent_id ? parentRef(db, r.parent_id) : null,
     edit_any: r.edit_any === 1,
     rev: r.rev,
     archived: !!r.archived_at,
@@ -287,6 +289,7 @@ export interface SaveRoleInput {
   instruction?: string;
   setup_notes?: string;
   links?: { to: string; type: string }[];
+  parent?: string | null;
   note?: string;
   edit_any?: boolean;
   idempotency_key?: string;
@@ -329,6 +332,91 @@ function roleSlugTaken(existing: RoleRow, slug: string): DomainError {
   return new DomainError('conflict', `a role with slug "${slug}" already exists`);
 }
 
+
+export const MAX_ROLE_PARENT_DEPTH = 16;
+
+function parentRef(db: DB, id: string): { id: string; slug: string; name: string } | null {
+  const p = get<{ id: string; slug: string; name: string }>(db, 'SELECT id, slug, name FROM role WHERE id = ?', id);
+  return p ?? null;
+}
+
+function resolveParentId(db: DB, memberId: string, ref: string | null | undefined): string | null {
+  if (ref == null || ref === '') return null;
+  const p = findRole(db, memberId, ref, true);
+  if (!p) throw invalid(`parent role not found: ${ref}`);
+  return p.id;
+}
+
+/** Longest downward path in edges from `rootId` (0 for a leaf or a role not yet inserted). */
+function roleSubtreeHeight(db: DB, memberId: string, rootId: string): number {
+  const rows = all<{ id: string; parent_id: string | null }>(db, 'SELECT id, parent_id FROM role WHERE member_id = ?', memberId);
+  const byParent = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.parent_id) continue;
+    const list = byParent.get(r.parent_id) ?? [];
+    list.push(r.id);
+    byParent.set(r.parent_id, list);
+  }
+  let max = 0;
+  const walk = (id: string, depth: number, seen: Set<string>) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (depth > max) max = depth;
+    for (const child of byParent.get(id) ?? []) walk(child, depth + 1, seen);
+  };
+  walk(rootId, 0, new Set());
+  return max;
+}
+
+/** Walk ancestors of `startId` (inclusive) inside the current transaction, scoped to this workspace. */
+function roleAncestorChain(db: DB, memberId: string, startId: string): { ids: string[]; hitCeiling: boolean } {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  let cur: string | null = startId;
+  while (cur) {
+    if (seen.has(cur)) return { ids, hitCeiling: false };
+    seen.add(cur);
+    ids.push(cur);
+    if (ids.length > MAX_ROLE_PARENT_DEPTH) return { ids, hitCeiling: true };
+    const row: { parent_id: string | null } | undefined = get(db, 'SELECT parent_id FROM role WHERE id = ? AND member_id = ?', cur, memberId);
+    if (!row) break;
+    cur = row.parent_id;
+  }
+  return { ids, hitCeiling: false };
+}
+
+function assertRoleParent(db: DB, memberId: string, roleId: string, parentId: string): void {
+  if (roleId === parentId) throw invalid('a role cannot be its own parent');
+  const parent = get<{ member_id: string; archived_at: string | null; slug: string }>(
+    db,
+    'SELECT member_id, archived_at, slug FROM role WHERE id = ?',
+    parentId,
+  );
+  if (!parent) throw invalid(`parent role not found: ${parentId}`);
+  if (parent.member_id !== memberId) throw invalid('a role parent must belong to the same workspace');
+  if (parent.archived_at) throw invalid(`parent role "${parent.slug}" is archived and cannot be set as a parent`);
+  const { ids, hitCeiling } = roleAncestorChain(db, memberId, parentId);
+  if (ids.includes(roleId)) throw invalid('this parent would create a cycle in the reporting tree');
+  const height = roleSubtreeHeight(db, memberId, roleId);
+  // ancestor depth of the new parent (ids.length, inclusive) + downward height of the moved subtree must be ≤ 16
+  if (hitCeiling || ids.length + height > MAX_ROLE_PARENT_DEPTH) {
+    throw invalid(`a role parent chain cannot be deeper than ${MAX_ROLE_PARENT_DEPTH} levels`);
+  }
+}
+
+function parentEventData(db: DB, fromId: string | null, toId: string | null): { parent_from: string | null; parent_to: string | null } {
+  return {
+    parent_from: fromId ? (get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', fromId)?.slug ?? fromId) : null,
+    parent_to: toId ? (get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', toId)?.slug ?? toId) : null,
+  };
+}
+
+function parentSummary(name: string, fromSlug: string | null, toSlug: string | null): string {
+  if (toSlug && fromSlug) return `Role "${name}" reports to ${toSlug} (was ${fromSlug})`;
+  if (toSlug) return `Role "${name}" reports to ${toSlug}`;
+  return `Role "${name}" no longer reports to ${fromSlug}`;
+}
+
 export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
   checkLen('name', input.name, LIMITS.title);
   checkLen('area', input.area, LIMITS.shortText);
@@ -347,9 +435,15 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         if (taken) throw roleSlugTaken(taken, slug);
         const id = newId('role');
         const at = now();
+        let parentId: string | null = null;
+        if (input.parent) {
+          assertCanEdit(db, actor, null, { parent: true });
+          parentId = resolveParentId(db, actor.memberId, input.parent);
+          if (parentId) assertRoleParent(db, actor.memberId, id, parentId);
+        }
         run(
           db,
-          'INSERT INTO role (id, member_id, slug, name, area, setup_notes, rev, edit_any, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?,?)',
+          'INSERT INTO role (id, member_id, slug, name, area, setup_notes, rev, edit_any, parent_id, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?,?,?)',
           id,
           actor.memberId,
           slug,
@@ -357,6 +451,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
           input.area ?? '',
           input.setup_notes ?? '',
           actor.kind === 'owner' && input.edit_any ? 1 : 0,
+          parentId,
           at,
           at,
         );
@@ -410,6 +505,18 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       const after = JSON.stringify(roleLinks(db, role.id).filter((l) => l.from_role_id === role.id).map((l) => [l.to_slug, l.type]));
       if (before !== after) changed.push('links');
     }
+    let parentFromTo: { parent_from: string | null; parent_to: string | null } | undefined;
+    if (input.parent !== undefined) {
+      const nextParent = resolveParentId(db, actor.memberId, input.parent);
+      if (nextParent !== (role.parent_id ?? null)) {
+        assertCanEdit(db, actor, null, { parent: true });
+        if (nextParent) assertRoleParent(db, actor.memberId, role.id, nextParent);
+        sets.push('parent_id = ?');
+        vals.push(nextParent);
+        changed.push('parent');
+        parentFromTo = parentEventData(db, role.parent_id, nextParent);
+      }
+    }
     if (changed.length === 0) return { ...roleView(db, role), unchanged: true };
     sets.push('rev = rev + 1', 'updated_at = ?');
     vals.push(now(), role.id);
@@ -422,9 +529,12 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         version: instructionVersion,
         changed,
         note: input.note ?? null,
+        ...parentFromTo,
       }));
+    } else if (parentFromTo && changed.length === 1 && changed[0] === 'parent') {
+      recordEvent(db, actor, 'role', role.id, 'role.updated', parentSummary(updated.name, parentFromTo.parent_from, parentFromTo.parent_to), withOwnerRole(db, role.id, { changed, ...parentFromTo }));
     } else {
-      recordEvent(db, actor, 'role', role.id, 'role.updated', `Role "${updated.name}" updated: ${changed.join(', ')}`, withOwnerRole(db, role.id, { changed }));
+      recordEvent(db, actor, 'role', role.id, 'role.updated', `Role "${updated.name}" updated: ${changed.join(', ')}`, withOwnerRole(db, role.id, { changed, ...parentFromTo }));
     }
     return roleView(db, updated);
   });
@@ -833,6 +943,10 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
           id,
         )!;
         if (used.n > 0) throw invalid('the role still has tasks or documents; delete or move them first');
+        const childSlugs = all<{ slug: string }>(db, 'SELECT slug FROM role WHERE parent_id = ? ORDER BY slug', id).map((c) => c.slug);
+        if (childSlugs.length > 0) {
+          throw invalid(`the role still has reporting children (${childSlugs.join(', ')}); clear or reassign their parent first`);
+        }
         run(db, 'DELETE FROM role_link WHERE from_role_id = ? OR to_role_id = ?', id, id);
         run(db, 'DELETE FROM checkpoint WHERE role_id = ?', id);
         run(db, 'DELETE FROM webhook WHERE role_id = ?', id);

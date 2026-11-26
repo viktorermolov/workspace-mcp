@@ -213,20 +213,23 @@ export function assertCanEdit(
   db: DB,
   actor: Actor,
   ownerRoleId: string | null | undefined,
-  opts?: { rules?: boolean; what?: string },
+  opts?: { rules?: boolean; parent?: boolean; what?: string },
 ): void {
   if (actor.kind !== 'agent') return;
   const mode = getEnforcement(db, actor.memberId);
 
-  if (opts?.rules) {
+  if (opts?.rules || opts?.parent) {
     if (actorHasEditAny(db, actor)) return;
-    const message = 'working rules can only be changed by a role the owner has marked as allowed to edit any item, or by the owner';
+    const message = opts.parent
+      ? 'the reporting line can only be changed by a role the owner has marked as allowed to edit any item, or by the owner'
+      : 'working rules can only be changed by a role the owner has marked as allowed to edit any item, or by the owner';
+    const reason = opts.parent ? 'edit_parent' : 'edit_rules';
     if (mode === 'enforce') {
-      auditRoleCheck(db, actor, 'rejected', { reason: 'edit_rules', claimed_role: actor.role ?? null });
+      auditRoleCheck(db, actor, 'rejected', { reason, claimed_role: actor.role ?? null });
       throw new DomainError('forbidden', message);
     }
     addWarning({ code: 'edit_others', message });
-    auditRoleCheck(db, actor, 'warning', { reason: 'edit_rules', claimed_role: actor.role ?? null });
+    auditRoleCheck(db, actor, 'warning', { reason, claimed_role: actor.role ?? null });
     return;
   }
 
