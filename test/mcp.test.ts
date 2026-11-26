@@ -369,6 +369,30 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('names roles, projects and the working rules in rollback log entries', async () => {
+    const a = (await connectAgent(env, owner, 'Platform RB2')).client;
+    const summaryOf = (id: string) => get<{ summary: string }>(env.svc.db, 'SELECT summary FROM event WHERE entity_id = ? ORDER BY id DESC LIMIT 1', id)!.summary;
+
+    let r = await call(a, 'save_role', { name: 'Rollback role', slug: 'rollback-role', instruction: 'One' });
+    r = await call(a, 'save_role', { id: r.id, rev: r.rev, instruction: 'Two' });
+    const rr = await call(a, 'rollback', { type: 'role', id: r.id, to_version: 1, rev: r.rev });
+    assert.equal(summaryOf(rr.id), `Role "Rollback role" rolled back to version 1 (new version ${rr.new_version})`);
+
+    let p = await call(a, 'save_project', { name: 'Rollback project', slug: 'rollback-project', description: 'One' });
+    p = await call(a, 'save_project', { id: p.id, rev: p.rev, description: 'Two' });
+    const pr = await call(a, 'rollback', { type: 'project', id: p.id, to_version: 1, rev: p.rev });
+    assert.equal(summaryOf(pr.id), `Project "Rollback project" rolled back to version 1 (new version ${pr.new_version})`);
+
+    let rules = await call(a, 'get', { type: 'rules' });
+    rules = await call(a, 'update_rules', { text: 'Rollback rules one.', rev: rules.rev });
+    rules = await call(a, 'update_rules', { text: 'Rollback rules two.', rev: rules.rev });
+    const history = await call(a, 'versions', { type: 'rules' });
+    const target = Math.max(...history.versions.map((v: { number: number }) => v.number)) - 1;
+    const back = await call(a, 'rollback', { type: 'rules', to_version: target, rev: rules.rev });
+    assert.equal(summaryOf(back.id), `Working rules rolled back to version ${target} (new version ${back.new_version})`);
+    await a.close();
+  });
+
   it('marks a matched phrase in a search snippet once', async () => {
     const a = (await connectAgent(env, owner, 'Platform S')).client;
     await call(a, 'save_document', { title: 'Snippet check', body: 'Notes for [TEST] Арина 25.11 meeting, and alpha beta gamma.' });

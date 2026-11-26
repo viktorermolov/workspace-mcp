@@ -218,6 +218,26 @@ describe('data safety', () => {
     }
   });
 
+  it('makes no extra backup at start when a pre-migration backup was just made', async () => {
+    const first = await startService();
+    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(first.svc.db).id };
+    saveRole(first.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Before the upgrade.' });
+    const dataDir = first.dataDir;
+    await first.close();
+    let env: Awaited<ReturnType<typeof startService>> | undefined;
+
+    const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: notes table', sql: 'CREATE TABLE fixture_note (body TEXT);' };
+    migrations.push(fixture);
+    try {
+      // Scheduled backups on: the pre-migration backup counts as the first one.
+      env = await startService({ dataDir, jobs: true });
+      assert.deepEqual(listBackups(env.config).map((b) => b.reason), ['pre-migration']);
+    } finally {
+      migrations.splice(migrations.indexOf(fixture), 1);
+      await env?.close();
+    }
+  });
+
   it('makes no backup at start when scheduled backups are off', async () => {
     const env = await startService({ jobs: true, env: { BACKUP_INTERVAL_HOURS: '0' } });
     try {
