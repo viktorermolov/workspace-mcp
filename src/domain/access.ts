@@ -285,6 +285,37 @@ export function assertCanEditEntity(db: DB, actor: Actor, type: string, id: stri
   assertCanEdit(db, actor, owner, { what: type });
 }
 
+/**
+ * Whether this actor may change the role label on issues of a mirrored repository.
+ * The label itself grants no rights; this check does not look at github_issue.role_id.
+ * An archived role in the assigner list does not grant the right.
+ */
+export function isRepoRoleAssigner(db: DB, actor: Actor, repoId: number): boolean {
+  if (actor.kind !== 'agent' || !actor.role) return false;
+  const r = roleByRef(db, actor.memberId, actor.role, false);
+  if (!r) return false;
+  return !!get(db, 'SELECT 1 FROM github_repo_assigner WHERE repo_id = ? AND role_id = ?', repoId, r.id);
+}
+
+/**
+ * Owner always may. An agent may if it has edit_any or is an assigner of this repository.
+ * In warn mode a failure is a warning and the write may proceed; in enforce it is forbidden.
+ * Call after resolveAgentActor. Being an assigner does not bypass the connection allow-list.
+ */
+export function assertCanSetIssueRole(db: DB, actor: Actor, repoId: number): void {
+  if (actor.kind !== 'agent') return;
+  const mode = getEnforcement(db, actor.memberId);
+  if (actorHasEditAny(db, actor) || isRepoRoleAssigner(db, actor, repoId)) return;
+  const message =
+    "only the owner, a role marked as allowed to edit any item, or a role the owner has allowed to assign issue roles on this repository may change the issue's role";
+  if (mode === 'enforce') {
+    auditRoleCheck(db, actor, 'rejected', { reason: 'issue_role_forbidden', claimed_role: actor.role ?? null, repo_id: repoId });
+    throw new DomainError('forbidden', message);
+  }
+  addWarning({ code: 'issue_role_forbidden', message });
+  auditRoleCheck(db, actor, 'warning', { reason: 'issue_role_forbidden', claimed_role: actor.role ?? null, repo_id: repoId });
+}
+
 export function unconfirmedActiveConnections(db: DB, memberId: string): { client_id: string; name: string }[] {
   return all<{ client_id: string; name: string }>(
     db,

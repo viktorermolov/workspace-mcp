@@ -487,6 +487,33 @@ test('log shows owner actions and the theme can be switched', async () => {
   await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
 });
 
+test('the GitHub screen default role and assigners fit a 390×844 phone', async () => {
+  const prev = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  try {
+    await go('More');
+    await page.getByRole('link', { name: /GitHub issues/ }).click();
+    await expect(page.getByRole('heading', { name: 'GitHub issues' })).toBeVisible();
+    await page.getByLabel('Personal access token').fill(server.githubToken);
+    await page.getByRole('button', { name: 'Connect' }).click();
+    await expect(page.getByText(/Connected as/)).toBeVisible();
+    await page.getByLabel('Repository').selectOption('example/site');
+    await page.getByLabel('Default role').last().selectOption('writer');
+    await page.getByRole('checkbox', { name: /Editor/ }).last().check();
+    await page.getByRole('button', { name: 'Add repository' }).click();
+    await expect(page.getByText('example/site')).toBeVisible();
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(await overflow()).toBeLessThanOrEqual(1);
+    const heights = await page.locator('.github-screen .touch-target, .github-screen label.touch-row, .github-add .touch-target, .github-add label.touch-row').evaluateAll((els) =>
+      els.map((el) => (el as HTMLElement).getBoundingClientRect().height),
+    );
+    expect(heights.length).toBeGreaterThan(0);
+    for (const h of heights) expect(h).toBeGreaterThanOrEqual(44);
+  } finally {
+    if (prev) await page.setViewportSize(prev);
+  }
+});
+
 test('a temporary server error while loading shows a message and a way to try again', async () => {
   await page.route('**/api/owner/me', (r) => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"unavailable","message":"Service is restarting"}' }));
   await page.goto('/tasks');

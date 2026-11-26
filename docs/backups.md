@@ -88,7 +88,7 @@ tasks/<title>-<id>.md  each task with its fields, comments and result
 
 The Markdown files have YAML front matter with ids, links and times, so the folder opens in Obsidian or any editor. `workspace.json` is the complete data and is what import reads.
 
-An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, no GitHub token or mirrored issues.
+An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, and no GitHub token (`github_config`). The local GitHub mirror (`github_repo`, including `default_role_id`; `github_repo_assigner`; and `github_issue`, including the role label) is included so those settings and labels survive a move.
 
 Make an export in the web interface (**Download export**) or offline:
 
@@ -107,7 +107,7 @@ docker compose run --rm workspace cli check-export /data/workspace-export.zip
 
 ## Import
 
-Import goes into an **empty** workspace only (no roles, projects, documents, tasks or working rules), so it can never mix two workspaces. It verifies the checksums in the manifest, refuses a format version newer than it knows, and makes a `pre-import` backup first.
+Import goes into an **empty** workspace only (no roles, projects, documents, tasks, working rules, or a GitHub mirror), so it can never mix two workspaces. It verifies the checksums in the manifest, refuses a format version newer than it knows, and makes a `pre-import` backup first. The search index is rebuilt from the imported current state, including mirrored GitHub issues: a later incremental sync would not reindex issues it skips as unchanged.
 
 - In the web interface: on **More → Export and backups**, **Import** appears while the workspace is empty. Upload the zip (up to 100 MB).
 - Offline: copy the zip into the volume, then `cli import`:
@@ -119,7 +119,7 @@ docker compose run --rm workspace cli import /data/import.zip
 docker compose start workspace
 ```
 
-After an import, connect the AI platforms again and, if you use them, reconnect GitHub and recreate webhooks: none of these travel in an export.
+After an import, connect the AI platforms again and, if you use them, reconnect GitHub (the token does not travel in an export; selected repositories, default roles, assigners and issue labels do, and imported issues are already in the search index) and recreate webhooks.
 
 ## Moving to another machine
 

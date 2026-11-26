@@ -485,5 +485,19 @@ CREATE TABLE review_reply (
 CREATE INDEX review_reply_comment ON review_reply (comment_id, created_at, id);
 `,
   },
+  // After #61's `connection_roles` (id 4) on master. 5 (role_parent, #79) and
+  // 6 (review-comments, #87) have landed; this entry stays as id 7 (do not renumber).
+  {
+    id: 7,
+    name: 'github-issue-roles',
+    sql: `
+ALTER TABLE github_repo ADD COLUMN default_role_id TEXT REFERENCES role(id) ON DELETE SET NULL;
+CREATE TABLE github_repo_assigner (
+  repo_id INTEGER NOT NULL REFERENCES github_repo(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
+  PRIMARY KEY (repo_id, role_id)
+);
+CREATE INDEX github_repo_assigner_role ON github_repo_assigner (role_id);
+`,
+  },
 ];
-

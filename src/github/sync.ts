@@ -1,7 +1,9 @@
 import type { Config } from '../config.ts';
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
-import { DomainError, indexEntity, recordEvent, unindexEntity, type Actor } from '../domain/core.ts';
-import { ownerMember, requireProject, requireRole } from '../domain/entities.ts';
+import { assertCanSetIssueRole } from '../domain/access.ts';
+import { DomainError, indexEntity, invalid, notFound, recordEvent, unindexEntity, type Actor } from '../domain/core.ts';
+import { findRole, ownerMember, requireProject } from '../domain/entities.ts';
+import { issueView } from '../domain/views.ts';
 import { decryptSecret, encryptSecret } from '../util/crypto.ts';
 import { errMessage, log } from '../util/log.ts';
 
@@ -33,6 +35,151 @@ export class GithubError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/** An existing, non-archived role. Used for issue labels, default roles and assigners. */
+export function requireActiveRole(db: DB, memberId: string, ref: string) {
+  const r = findRole(db, memberId, ref, false);
+  if (r) return r;
+  const archived = findRole(db, memberId, ref, true);
+  if (archived?.archived_at) throw invalid(`role "${archived.slug}" is archived and cannot be assigned to an issue`);
+  throw notFound('role', ref);
+}
+
+function roleRef(db: DB, memberId: string, ref: string | null | undefined) {
+  if (ref === undefined) return undefined;
+  if (ref === null || String(ref).trim() === '') return null;
+  return requireActiveRole(db, memberId, String(ref).trim());
+}
+
+function assignersOf(db: DB, repoId: number) {
+  return all<{ id: string; slug: string; name: string }>(
+    db,
+    `SELECT r.id, r.slug, r.name FROM github_repo_assigner a JOIN role r ON r.id = a.role_id
+     WHERE a.repo_id = ? ORDER BY r.name`,
+    repoId,
+  );
+}
+
+function setAssigners(db: DB, memberId: string, repoId: number, refs: string[]) {
+  const roles = refs.map((ref) => requireActiveRole(db, memberId, ref));
+  run(db, 'DELETE FROM github_repo_assigner WHERE repo_id = ?', repoId);
+  const seen = new Set<string>();
+  for (const r of roles) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    run(db, 'INSERT INTO github_repo_assigner (repo_id, role_id) VALUES (?,?)', repoId, r.id);
+  }
+  return roles.filter((r, i, arr) => arr.findIndex((x) => x.id === r.id) === i);
+}
+
+/** Resolves a mirrored issue: either `id`, or `repo` (owner/name) plus `number`. Not both. */
+export function resolveIssueId(db: DB, memberId: string, input: { id?: string; repo?: string; number?: number }): string {
+  const hasId = !!(input.id && String(input.id).trim());
+  const hasRepo = !!(input.repo && String(input.repo).trim());
+  const hasNumber = input.number !== undefined && input.number !== null;
+  if (hasId && (hasRepo || hasNumber)) throw invalid('pass either id or repo and number, not both');
+  if (hasId) return String(input.id).trim();
+  if (hasRepo && hasNumber) {
+    if (!Number.isInteger(input.number) || (input.number as number) < 1) throw invalid('number must be a positive integer');
+    const row = get<{ id: string }>(
+      db,
+      'SELECT i.id FROM github_issue i JOIN github_repo r ON r.id = i.repo_id WHERE i.member_id = ? AND lower(r.full_name) = lower(?) AND i.number = ?',
+      memberId,
+      String(input.repo).trim(),
+      input.number,
+    );
+    if (!row) throw notFound('issue', `${String(input.repo).trim()}#${input.number}`);
+    return row.id;
+  }
+  if (hasRepo || hasNumber) throw invalid('repo and number must be passed together');
+  throw invalid('pass an issue id, or repo and number');
+}
+
+/**
+ * Sets or clears the local role label on a mirrored issue. Writes nothing to GitHub.
+ * Owner always may; agents follow assertCanSetIssueRole. An unchanged value succeeds with no new event.
+ */
+export function setMirroredIssueRole(
+  db: DB,
+  actor: Actor,
+  input: { id?: string; repo?: string; number?: number; role?: string | null },
+) {
+  return tx(db, () => {
+    const issueId = resolveIssueId(db, actor.memberId, input);
+    const i = get<{ id: string; number: number; repo_id: number; role_id: string | null }>(
+      db,
+      'SELECT id, number, repo_id, role_id FROM github_issue WHERE id = ? AND member_id = ?',
+      issueId,
+      actor.memberId,
+    );
+    if (!i) throw notFound('issue', issueId);
+    assertCanSetIssueRole(db, actor, i.repo_id);
+    const next = input.role === undefined || input.role === null || String(input.role).trim() === '' ? null : requireActiveRole(db, actor.memberId, String(input.role).trim());
+    const nextId = next?.id ?? null;
+    if (nextId === i.role_id) return issueView(db, actor.memberId, i.id);
+    const prev = i.role_id ? get<{ id: string; slug: string }>(db, 'SELECT id, slug FROM role WHERE id = ?', i.role_id) : undefined;
+    run(db, 'UPDATE github_issue SET role_id = ? WHERE id = ?', nextId, i.id);
+    recordEvent(db, actor, 'issue', i.id, 'issue.role_set', `Issue #${i.number} labelled for ${next ? next.slug : 'no role'}`, {
+      old_role: prev?.slug ?? null,
+      new_role: next?.slug ?? null,
+      old_role_id: prev?.id ?? null,
+      new_role_id: nextId,
+    });
+    return issueView(db, actor.memberId, i.id);
+  });
+}
+
+export type RepoSettingsInput = { project?: string | null; default_role?: string | null; assigners?: string[] };
+
+/** Owner-only: default role and assigner list for a mirrored repository. */
+export function updateRepoSettings(db: DB, actor: Actor, repoId: number, input: RepoSettingsInput): void {
+  if (actor.kind !== 'owner') throw new DomainError('forbidden', "only the owner can set a repository's default role or assigners");
+  tx(db, () => {
+    const repo = get<{ id: number; full_name: string; project_id: string | null; default_role_id: string | null }>(
+      db,
+      'SELECT id, full_name, project_id, default_role_id FROM github_repo WHERE id = ? AND member_id = ?',
+      repoId,
+      actor.memberId,
+    );
+    if (!repo) throw notFound('repository', String(repoId));
+    if (input.project !== undefined) {
+      const projectId = input.project ? requireProject(db, actor.memberId, input.project).id : null;
+      if (projectId !== repo.project_id) {
+        run(db, 'UPDATE github_repo SET project_id = ? WHERE id = ?', projectId, repo.id);
+        recordEvent(db, actor, 'github', String(repo.id), 'github.repo_mapped', `Repository ${repo.full_name} mapped to ${input.project ?? 'no project'}`);
+      }
+    }
+    if (input.default_role !== undefined) {
+      const next = roleRef(db, actor.memberId, input.default_role);
+      const nextId = next === undefined ? repo.default_role_id : next === null ? null : next.id;
+      if (nextId !== repo.default_role_id) {
+        const prev = repo.default_role_id ? get<{ id: string; slug: string }>(db, 'SELECT id, slug FROM role WHERE id = ?', repo.default_role_id) : undefined;
+        run(db, 'UPDATE github_repo SET default_role_id = ? WHERE id = ?', nextId, repo.id);
+        recordEvent(db, actor, 'github', String(repo.id), 'github.repo_default_role', `Default role for ${repo.full_name} set to ${next ? next.slug : 'none'}`, {
+          old_role: prev?.slug ?? null,
+          new_role: next ? next.slug : null,
+          old_role_id: prev?.id ?? null,
+          new_role_id: nextId,
+        });
+      }
+    }
+    if (input.assigners !== undefined) {
+      if (!Array.isArray(input.assigners)) throw invalid('assigners must be an array of role slugs or ids');
+      const before = assignersOf(db, repo.id);
+      const after = setAssigners(db, actor.memberId, repo.id, input.assigners);
+      const beforeIds = before.map((r) => r.id).sort().join(',');
+      const afterIds = after.map((r) => r.id).sort().join(',');
+      if (beforeIds !== afterIds) {
+        recordEvent(db, actor, 'github', String(repo.id), 'github.repo_assigners', `Assigners for ${repo.full_name} updated`, {
+          old_roles: before.map((r) => r.slug),
+          new_roles: after.map((r) => r.slug),
+          old_role_ids: before.map((r) => r.id),
+          new_role_ids: after.map((r) => r.id),
+        });
+      }
+    }
+  });
 }
 
 export class GithubSync {
@@ -84,21 +231,37 @@ export class GithubSync {
 
   status(memberId: string) {
     const c = get<Record<string, unknown>>(this.db, 'SELECT login, connected_at, last_sync_at, last_sync_ok, last_sync_message, last_sync_count FROM github_config WHERE member_id = ?', memberId);
-    const repos = all<Record<string, unknown>>(
+    const repos = all<Record<string, unknown> & { id: number }>(
       this.db,
       `SELECT r.id, r.full_name, r.created_at, r.last_synced_at, p.slug AS project, p.name AS project_name,
+              d.slug AS default_role,
               (SELECT count(*) FROM github_issue i WHERE i.repo_id = r.id) AS issues,
               (SELECT count(*) FROM github_issue i WHERE i.repo_id = r.id AND i.state = 'open') AS open_issues
-       FROM github_repo r LEFT JOIN project p ON p.id = r.project_id WHERE r.member_id = ? ORDER BY r.full_name`,
+       FROM github_repo r LEFT JOIN project p ON p.id = r.project_id
+       LEFT JOIN role d ON d.id = r.default_role_id
+       WHERE r.member_id = ? ORDER BY r.full_name`,
       memberId,
     );
+    const assigners = all<{ repo_id: number; slug: string; name: string }>(
+      this.db,
+      `SELECT a.repo_id, ro.slug, ro.name FROM github_repo_assigner a
+       JOIN role ro ON ro.id = a.role_id JOIN github_repo r ON r.id = a.repo_id
+       WHERE r.member_id = ? ORDER BY ro.name`,
+      memberId,
+    );
+    const byRepo = new Map<number, { slug: string; name: string }[]>();
+    for (const a of assigners) {
+      const list = byRepo.get(a.repo_id) ?? [];
+      list.push({ slug: a.slug, name: a.name });
+      byRepo.set(a.repo_id, list);
+    }
     return {
       connected: !!c,
       login: c?.login ?? null,
       connected_at: c?.connected_at ?? null,
       last_sync: c?.last_sync_at ? { at: c.last_sync_at, ok: !!c.last_sync_ok, message: c.last_sync_message, issues: c.last_sync_count } : null,
       sync_interval_minutes: this.config.githubSyncIntervalMinutes,
-      repos,
+      repos: repos.map((r) => ({ ...r, assigners: byRepo.get(r.id) ?? [] })),
     };
   }
 
@@ -154,21 +317,55 @@ export class GithubSync {
     return out.map((r) => ({ ...r, selected: selected.has(r.full_name.toLowerCase()) }));
   }
 
-  addRepo(actor: Actor, fullName: string, project?: string | null) {
+  addRepo(actor: Actor, fullName: string, opts: { project?: string | null; default_role?: string | null; assigners?: string[] } = {}) {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)) throw new DomainError('invalid', 'Repository must look like owner/name');
     if (!this.token(actor.memberId)) throw new DomainError('invalid', 'GitHub is not connected');
+    const project = opts.project ?? null;
     return tx(this.db, () => {
-      const projectId = project ? requireProject(this.db, actor.memberId, project).id : null;
       const existing = get<{ id: number }>(this.db, 'SELECT id FROM github_repo WHERE member_id = ? AND lower(full_name) = lower(?)', actor.memberId, fullName);
       if (existing) {
-        run(this.db, 'UPDATE github_repo SET project_id = ? WHERE id = ?', projectId, existing.id);
-        recordEvent(this.db, actor, 'github', String(existing.id), 'github.repo_mapped', `Repository ${fullName} mapped to ${project ?? 'no project'}`);
+        updateRepoSettings(this.db, actor, existing.id, opts);
         return existing.id;
       }
-      const r = run(this.db, 'INSERT INTO github_repo (member_id, full_name, project_id, created_at) VALUES (?,?,?,?)', actor.memberId, fullName, projectId, now());
-      recordEvent(this.db, actor, 'github', String(r.lastInsertRowid), 'github.repo_added', `Repository ${fullName} added${project ? ` for project ${project}` : ''}`);
-      return Number(r.lastInsertRowid);
+      if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can add a repository');
+      const projectId = project ? requireProject(this.db, actor.memberId, project).id : null;
+      const defaultRole = roleRef(this.db, actor.memberId, opts.default_role);
+      const defaultId = defaultRole ? defaultRole.id : null;
+      const r = run(
+        this.db,
+        'INSERT INTO github_repo (member_id, full_name, project_id, default_role_id, created_at) VALUES (?,?,?,?,?)',
+        actor.memberId,
+        fullName,
+        projectId,
+        defaultId,
+        now(),
+      );
+      const id = Number(r.lastInsertRowid);
+      if (opts.assigners) setAssigners(this.db, actor.memberId, id, opts.assigners);
+      recordEvent(this.db, actor, 'github', String(id), 'github.repo_added', `Repository ${fullName} added${project ? ` for project ${project}` : ''}`);
+      if (defaultRole) {
+        recordEvent(this.db, actor, 'github', String(id), 'github.repo_default_role', `Default role for ${fullName} set to ${defaultRole.slug}`, {
+          old_role: null,
+          new_role: defaultRole.slug,
+          old_role_id: null,
+          new_role_id: defaultRole.id,
+        });
+      }
+      if (opts.assigners && opts.assigners.length) {
+        const after = assignersOf(this.db, id);
+        recordEvent(this.db, actor, 'github', String(id), 'github.repo_assigners', `Assigners for ${fullName} updated`, {
+          old_roles: [],
+          new_roles: after.map((x) => x.slug),
+          old_role_ids: [],
+          new_role_ids: after.map((x) => x.id),
+        });
+      }
+      return id;
     });
+  }
+
+  updateRepo(actor: Actor, repoId: number, opts: RepoSettingsInput): void {
+    updateRepoSettings(this.db, actor, repoId, opts);
   }
 
   removeRepo(actor: Actor, repoId: number): void {
@@ -182,15 +379,9 @@ export class GithubSync {
     });
   }
 
-  /** The only local addition to a mirrored issue. */
-  setIssueRole(actor: Actor, issueId: string, role: string | null): void {
-    tx(this.db, () => {
-      const i = get<{ id: string; number: number; title: string }>(this.db, 'SELECT id, number, title FROM github_issue WHERE id = ? AND member_id = ?', issueId, actor.memberId);
-      if (!i) throw new DomainError('not_found', `issue not found: ${issueId}`);
-      const r = role ? requireRole(this.db, actor.memberId, role) : null;
-      run(this.db, 'UPDATE github_issue SET role_id = ? WHERE id = ?', r?.id ?? null, i.id);
-      recordEvent(this.db, actor, 'issue', i.id, 'issue.role_set', `Issue #${i.number} labelled for ${r ? r.slug : 'no role'}`, { role_id: r?.id ?? null });
-    });
+  /** The only local addition to a mirrored issue. Same path for the owner UI and MCP. */
+  setIssueRole(actor: Actor, issueId: string, role: string | null) {
+    return setMirroredIssueRole(this.db, actor, { id: issueId, role });
   }
 
   /** Background entry point: syncs the owner's repositories if GitHub is connected. */
@@ -244,7 +435,28 @@ export class GithubSync {
         const cursor = stuck ? new Date(Date.parse(newest!) + 1000).toISOString() : capped ? newest : null;
         tx(this.db, () => {
           if (!get(this.db, 'SELECT 1 FROM github_repo WHERE id = ?', repo.id)) return; // removed meanwhile
-          for (const i of batch) this.upsertIssue(memberId, repo.id, repo.full_name, i);
+          let defaulted = 0;
+          let defaultSlug: string | null = null;
+          let defaultRoleId: string | null = null;
+          for (const i of batch) {
+            const applied = this.upsertIssue(memberId, repo.id, repo.full_name, i);
+            if (applied) {
+              defaulted++;
+              defaultSlug = applied.slug;
+              defaultRoleId = applied.id;
+            }
+          }
+          if (defaulted > 0 && defaultSlug) {
+            recordEvent(
+              this.db,
+              { kind: 'system', memberId },
+              'github',
+              String(repo.id),
+              'github.issue_default_role',
+              `${defaulted} new issue${defaulted === 1 ? '' : 's'} labelled for @${defaultSlug}`,
+              { count: defaulted, role: defaultSlug, role_id: defaultRoleId, repo: repo.full_name },
+            );
+          }
           run(this.db, 'UPDATE github_repo SET last_synced_at = ?, sync_cursor = ? WHERE id = ?', started, cursor, repo.id);
         });
         if (stuck) throw new Error(`more than ${MAX_PAGES * 100} issues share the update time ${newest}; some of them may be missing, the next sync continues after it`);
@@ -272,17 +484,41 @@ export class GithubSync {
     return { ok, message, issues: count };
   }
 
-  private upsertIssue(memberId: string, repoId: number, fullName: string, i: GhIssue): void {
+  /** Inserts a new issue, applying the repo default role only on INSERT, or updates a known one without touching role_id. */
+  private upsertIssue(memberId: string, repoId: number, fullName: string, i: GhIssue): { id: string; slug: string } | null {
     const id = `gh_${repoId}_${i.number}`;
     const labels = (i.labels ?? []).map((l) => (typeof l === 'string' ? l : (l.name ?? ''))).filter(Boolean);
     const body = (i.body ?? '').slice(0, MAX_BODY);
     const state = i.state === 'closed' ? 'closed' : 'open';
+    const existing = get<{ id: string }>(this.db, 'SELECT id FROM github_issue WHERE repo_id = ? AND number = ?', repoId, i.number);
+    if (existing) {
+      run(
+        this.db,
+        `UPDATE github_issue SET title = ?, body = ?, state = ?, labels = ?, url = ?, author = ?, updated_at = ?, closed_at = ?, synced_at = ? WHERE id = ?`,
+        i.title.slice(0, 500),
+        body,
+        state,
+        JSON.stringify(labels),
+        i.html_url,
+        i.user?.login ?? null,
+        i.updated_at,
+        i.closed_at,
+        now(),
+        existing.id,
+      );
+      indexEntity(this.db, memberId, 'issue', existing.id, `${fullName}#${i.number} ${i.title}`, body);
+      return null;
+    }
+    const def = get<{ id: string; slug: string }>(
+      this.db,
+      `SELECT r.id, r.slug FROM github_repo g JOIN role r ON r.id = g.default_role_id
+       WHERE g.id = ? AND r.archived_at IS NULL`,
+      repoId,
+    );
     run(
       this.db,
-      `INSERT INTO github_issue (id, member_id, repo_id, number, title, body, state, labels, url, author, created_at, updated_at, closed_at, synced_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT (repo_id, number) DO UPDATE SET title = excluded.title, body = excluded.body, state = excluded.state, labels = excluded.labels,
-         url = excluded.url, author = excluded.author, updated_at = excluded.updated_at, closed_at = excluded.closed_at, synced_at = excluded.synced_at`,
+      `INSERT INTO github_issue (id, member_id, repo_id, number, title, body, state, labels, url, author, created_at, updated_at, closed_at, role_id, synced_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       memberId,
       repoId,
@@ -296,8 +532,10 @@ export class GithubSync {
       i.created_at,
       i.updated_at,
       i.closed_at,
+      def?.id ?? null,
       now(),
     );
     indexEntity(this.db, memberId, 'issue', id, `${fullName}#${i.number} ${i.title}`, body);
+    return def ?? null;
   }
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { all, get, run, tx, type DB } from '../db/db.ts';
-import { currentBody, DomainError, indexEntity, slugify } from '../domain/core.ts';
+import { currentBody, DomainError, indexEntity, invalid, slugify } from '../domain/core.ts';
 import { indexProject, indexRole, type DocumentRow, type ProjectRow, type RoleRow, type RulesRow } from '../domain/entities.ts';
 import { indexRoutine, type RoutineRow } from '../domain/routines.ts';
 import { indexTask, type TaskRow } from '../domain/tasks.ts';
@@ -14,7 +14,8 @@ import { applyImportedParentLinks, omitParentColumn, parentSpecFor } from './par
  *   manifest.json   format id and version, app version, time, sha256 of every other file, row counts
  *   workspace.json  every workspace table (structure, links, full version history, log)
  *   *.md            readable views (rules, roles, routines, projects, documents, tasks) with YAML front matter
- * Secrets, tokens, webhooks, connections and the GitHub mirror are never included.
+ * Secrets, tokens, webhooks, connections and github_config (the encrypted GitHub token) are never included.
+ * The local GitHub mirror (repositories, default role, assigners, and issues including their role label) is included so a zip import can restore them; the owner reconnects the token after import.
  * Import reads workspace.json only; the Markdown files are views for people and other tools.
  */
 
@@ -41,6 +42,9 @@ const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'review_reply', member: true, order: 'created_at, id' },
   { name: 'checkpoint', member: true, order: 'created_at, id' },
   { name: 'event', member: true, order: 'id' },
+  { name: 'github_repo', member: true, order: 'id' },
+  { name: 'github_repo_assigner', member: false, order: 'repo_id, role_id' },
+  { name: 'github_issue', member: true, order: 'repo_id, number' },
 ];
 
 type Rows = Record<string, unknown>[];
@@ -71,6 +75,9 @@ function safeName(s: string, fallback: string): string {
 function tableRows(db: DB, memberId: string, t: (typeof TABLES)[number]): Rows {
   if (t.name === 'task_dependency') {
     return all(db, 'SELECT d.task_id, d.depends_on_id FROM task_dependency d JOIN task t ON t.id = d.task_id WHERE t.member_id = ? ORDER BY d.task_id, d.depends_on_id', memberId);
+  }
+  if (t.name === 'github_repo_assigner') {
+    return all(db, 'SELECT a.repo_id, a.role_id FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? ORDER BY a.repo_id, a.role_id', memberId);
   }
   return all(db, `SELECT * FROM ${t.name} WHERE member_id = ? ORDER BY ${t.order}`, memberId);
 }
@@ -241,11 +248,21 @@ export function readExport(zip: Uint8Array): { manifest: Manifest; data: { membe
 
 /** True when the member has no content (only the empty rules row created at first start). */
 export function isWorkspaceEmpty(db: DB, memberId: string): boolean {
-  for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint', 'routine']) {
+  for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint', 'routine', 'github_repo', 'github_issue']) {
     if (get(db, `SELECT 1 FROM ${t} WHERE member_id = ? LIMIT 1`, memberId)) return false;
   }
+  if (get(db, 'SELECT 1 FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? LIMIT 1', memberId)) return false;
   if (get(db, 'SELECT 1 FROM rules WHERE member_id = ? AND is_default = 0 LIMIT 1', memberId)) return false;
   return true;
+}
+
+/** Rejects a GitHub role foreign key that is not a role in this import. */
+function importedRoleOrThrow(db: DB, memberId: string, roleId: unknown, field: string): void {
+  if (roleId == null || roleId === '') return;
+  if (typeof roleId !== 'string') throw invalid(`import ${field} must be a role id`);
+  if (!get(db, 'SELECT 1 FROM role WHERE id = ? AND member_id = ?', roleId, memberId)) {
+    throw invalid(`import ${field} refers to a role that is not in the import: ${roleId}`);
+  }
 }
 
 /** Imports into an empty workspace, keeping ids, versions and the log; rebuilds the search index. */
@@ -303,6 +320,9 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
         }
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
         if (parentSpec) vals = omitParentColumn(vals, parentSpec);
+        if (t.name === 'github_repo') importedRoleOrThrow(db, memberId, vals.default_role_id, 'github_repo.default_role_id');
+        if (t.name === 'github_repo_assigner') importedRoleOrThrow(db, memberId, vals.role_id, 'github_repo_assigner.role_id');
+        if (t.name === 'github_issue') importedRoleOrThrow(db, memberId, vals.role_id, 'github_issue.role_id');
         const use = cols.filter((c) => c in vals);
         run(db, `INSERT INTO ${t.name} (${use.join(',')}) VALUES (${use.map(() => '?').join(',')})`, ...use.map((c) => (vals[c] === undefined ? null : vals[c])));
       }
@@ -317,6 +337,14 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
     for (const d of all<DocumentRow>(db, 'SELECT * FROM document WHERE member_id = ?', memberId)) indexEntity(db, memberId, 'document', d.id, d.title, currentBody(db, d.current_version));
     for (const t of all<TaskRow>(db, 'SELECT * FROM task WHERE member_id = ?', memberId)) indexTask(db, t);
     for (const r of all<RoutineRow>(db, 'SELECT * FROM routine WHERE member_id = ?', memberId)) indexRoutine(db, r);
+    // Issues must be indexed here: a later incremental sync skips unchanged rows (imported since / sync_cursor).
+    for (const i of all<{ id: string; number: number; title: string; body: string; full_name: string }>(
+      db,
+      `SELECT i.id, i.number, i.title, i.body, r.full_name FROM github_issue i JOIN github_repo r ON r.id = i.repo_id WHERE i.member_id = ?`,
+      memberId,
+    )) {
+      indexEntity(db, memberId, 'issue', i.id, `${i.full_name}#${i.number} ${i.title}`, i.body);
+    }
     return { counts, format_version: manifest.format_version, exported_at: manifest.exported_at };
   });
 }

@@ -640,17 +640,128 @@ export function LogScreen() {
 
 // ---------------------------------------------------------------- GitHub
 
+interface GhRepo {
+  id: number;
+  full_name: string;
+  created_at: string;
+  last_synced_at: string | null;
+  project: string | null;
+  project_name: string | null;
+  open_issues: number;
+  default_role: string | null;
+  assigners: { slug: string; name: string }[];
+}
+
 interface GhStatus {
   connected: boolean;
   login: string | null;
   connected_at: string | null;
   last_sync: { at: string; ok: boolean; message: string | null; issues: number } | null;
   sync_interval_minutes: number;
-  repos: { id: number; full_name: string; created_at: string; last_synced_at: string | null; project: string | null; project_name: string | null; open_issues: number }[];
+  repos: GhRepo[];
+}
+
+interface RoleChoice {
+  slug: string;
+  name: string;
+}
+
+function RoleAssignerFields({
+  roles,
+  defaultRole,
+  onDefault,
+  assigners,
+  onToggle,
+}: {
+  roles: RoleChoice[];
+  defaultRole: string;
+  onDefault: (slug: string) => void;
+  assigners: string[];
+  onToggle: (slug: string, on: boolean) => void;
+}) {
+  return (
+    <>
+      <Field label="Default role" hint="Applied only to newly synced issues. Existing issues are left unchanged.">
+        <select class="touch-target" value={defaultRole} onChange={(e) => onDefault((e.target as HTMLSelectElement).value)}>
+          <option value="">none</option>
+          {roles.map((r) => (
+            <option key={r.slug} value={r.slug}>
+              {r.name} (@{r.slug})
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div class="field">
+        <span class="field-label">Who can assign a role</span>
+        <span class="field-hint">Besides you and roles allowed to edit any item. This does not change what those roles may edit.</span>
+        {roles.length === 0 ? (
+          <p class="muted small">No roles yet.</p>
+        ) : (
+          <div class="stack">
+            {roles.map((r) => (
+              <label class="touch-row" key={r.slug}>
+                <input type="checkbox" checked={assigners.includes(r.slug)} onChange={(e) => onToggle(r.slug, (e.target as HTMLInputElement).checked)} />
+                {r.name} (@{r.slug})
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function RepoSettings({ repo, roles, onChange }: { repo: GhRepo; roles: RoleChoice[]; onChange: () => void }) {
+  const act = useAction();
+  const [defaultRole, setDefaultRole] = useState(repo.default_role ?? '');
+  const [assigners, setAssigners] = useState<string[]>(repo.assigners.map((a) => a.slug));
+  const toggle = (slug: string, on: boolean) => setAssigners((cur) => (on ? [...cur, slug] : cur.filter((s) => s !== slug)));
+  const save = () =>
+    act.run(async () => {
+      await post(`/github/repos/${repo.id}`, { default_role: defaultRole || null, assigners });
+      onChange();
+    });
+  return (
+    <li class="repo-settings">
+      <div class="version-row">
+        <div>
+          <strong>{repo.full_name}</strong>
+          <div class="small muted">
+            {repo.open_issues} open issues · {repo.project_name ? `project ${repo.project_name}` : 'no project'} · synced <Time at={repo.last_synced_at} />
+          </div>
+        </div>
+        <Button
+          kind="quiet"
+          class="touch-target"
+          onClick={() =>
+            confirm(`Stop mirroring ${repo.full_name}? Its mirrored issues are removed.`) &&
+            act.run(async () => {
+              await del(`/github/repos/${repo.id}`);
+              onChange();
+            })
+          }
+        >
+          Remove
+        </Button>
+      </div>
+      <RoleAssignerFields
+        roles={roles}
+        defaultRole={defaultRole}
+        onDefault={setDefaultRole}
+        assigners={assigners}
+        onToggle={toggle}
+      />
+      {act.error && <Alert>{act.error}</Alert>}
+      <Button kind="primary" class="touch-target" onClick={save} busy={act.busy}>
+        Save
+      </Button>
+    </li>
+  );
 }
 
 export function GitHubScreen() {
   const st = useData(() => api<GhStatus>('/github'));
+  const choices = useData(() => api<{ roles: RoleChoice[] }>('/choices'));
   const s = st.data;
   const act = useAction();
   const [token, setToken] = useState('');
@@ -676,9 +787,10 @@ export function GitHubScreen() {
     });
   return (
     <Page title="GitHub issues">
+      <div class="github-screen">
       <p class="muted">
         A read-only mirror of open issues from repositories you choose. Agents can search and read them; nothing is ever written to GitHub. Issue text is shown to agents
-        as data, never as instructions.
+        as data, never as instructions. You can set a default role for new issues and choose which roles may assign the local role label; agents cannot change those settings.
       </p>
       {act.error && <Alert>{act.error}</Alert>}
       <Loading error={st.error} loading={st.loading}>
@@ -731,61 +843,47 @@ export function GitHubScreen() {
             {!s.repos.length && <Empty>No repositories yet.</Empty>}
             <ul class="list">
               {s.repos.map((r) => (
-                <li key={r.id}>
-                  <div class="version-row">
-                    <div>
-                      <strong>{r.full_name}</strong>
-                      <div class="small muted">
-                        {r.open_issues} open issues · {r.project_name ? `project ${r.project_name}` : 'no project'} · synced <Time at={r.last_synced_at} />
-                      </div>
-                    </div>
-                    <Button
-                      kind="quiet"
-                      onClick={() =>
-                        confirm(`Stop mirroring ${r.full_name}? Its mirrored issues are removed.`) &&
-                        act.run(async () => {
-                          await del(`/github/repos/${r.id}`);
-                          await st.reload();
-                        })
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                </li>
+                <RepoSettings key={r.id} repo={r} roles={choices.data?.roles ?? []} onChange={st.reload} />
               ))}
             </ul>
-            <AddRepo existing={s.repos.map((r) => r.full_name)} onAdded={st.reload} />
+            <AddRepo existing={s.repos.map((r) => r.full_name)} roles={choices.data?.roles ?? []} onAdded={st.reload} />
           </>
         )}
       </Loading>
+      </div>
     </Page>
   );
 }
 
-function AddRepo({ existing, onAdded }: { existing: string[]; onAdded: () => void }) {
+function AddRepo({ existing, roles, onAdded }: { existing: string[]; roles: RoleChoice[]; onAdded: () => void }) {
   const avail = useData(() => api<{ repos: { full_name: string }[] }>('/github/available'));
   const choices = useData(() => api<{ projects: { slug: string; name: string }[] }>('/choices'));
   const [repo, setRepo] = useState('');
   const [project, setProject] = useState('');
+  const [defaultRole, setDefaultRole] = useState('');
+  const [assigners, setAssigners] = useState<string[]>([]);
   const act = useAction();
   const options = (avail.data?.repos ?? []).filter((r) => !existing.includes(r.full_name));
+  const toggle = (slug: string, on: boolean) => setAssigners((cur) => (on ? [...cur, slug] : cur.filter((s) => s !== slug)));
   return (
-    <Card>
+    <Card class="github-add">
       <form
         class="stack"
         onSubmit={(e) => {
           e.preventDefault();
           void act.run(async () => {
-            await post('/github/repos', { full_name: repo, project: project || null });
+            await post('/github/repos', { full_name: repo, project: project || null, default_role: defaultRole || null, assigners });
             setRepo('');
+            setProject('');
+            setDefaultRole('');
+            setAssigners([]);
             onAdded();
           });
         }}
       >
         <div class="grid2">
           <Field label="Repository" hint={avail.error ? `Could not list repositories: ${avail.error}` : 'Repositories the token can read.'}>
-            <select value={repo} onChange={(e) => setRepo((e.target as HTMLSelectElement).value)} required>
+            <select class="touch-target" value={repo} onChange={(e) => setRepo((e.target as HTMLSelectElement).value)} required>
               <option value="">{avail.loading ? 'Loading…' : 'choose'}</option>
               {options.map((r) => (
                 <option key={r.full_name} value={r.full_name}>
@@ -795,7 +893,7 @@ function AddRepo({ existing, onAdded }: { existing: string[]; onAdded: () => voi
             </select>
           </Field>
           <Field label="Link to project" hint="Optional: its issues show with that project.">
-            <select value={project} onChange={(e) => setProject((e.target as HTMLSelectElement).value)}>
+            <select class="touch-target" value={project} onChange={(e) => setProject((e.target as HTMLSelectElement).value)}>
               <option value="">none</option>
               {choices.data?.projects.map((p) => (
                 <option key={p.slug} value={p.slug}>
@@ -805,8 +903,9 @@ function AddRepo({ existing, onAdded }: { existing: string[]; onAdded: () => voi
             </select>
           </Field>
         </div>
+        <RoleAssignerFields roles={roles} defaultRole={defaultRole} onDefault={setDefaultRole} assigners={assigners} onToggle={toggle} />
         {act.error && <Alert>{act.error}</Alert>}
-        <Button kind="primary" type="submit" busy={act.busy} disabled={!repo}>
+        <Button kind="primary" class="touch-target" type="submit" busy={act.busy} disabled={!repo}>
           Add repository
         </Button>
       </form>

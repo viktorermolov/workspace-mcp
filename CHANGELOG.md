@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- Agents can set or clear the local role label on a mirrored GitHub issue with `set_issue_role` (by id, or by repository and number). Nothing is written to GitHub. The owner can set a default role for newly synced issues of a repository, and a list of roles allowed to assign labels on that repository, on the GitHub screen. Existing issues are left unchanged until someone sets them explicitly.
 - A role can have an optional "reports to" parent (`parent_id`). The Map page lays roles out as a reporting tree instead of a circle: solid lines are reporting and declared links, dashed lines are recorded interactions. Node cards list open tasks and routines.
 - Review comments on reading pages (`/reviews`, and a pane on `/read/…`): the owner comments on a block, a bot replies with `reply_review_comment`, and the comment can be marked answered or resolved. Comments re-anchor when a new version is saved (exact quote, line map, then a fuzzy window), or become `outdated`. `setup_notes` has an append-only history starting at this upgrade; comments on that field point at a history row. `start` lists the 10 oldest open comments a role is responsible for; `get` and `search` cover `review_comment`. A `review.commented` webhook is sent to every active role with `edit_any` (and to the responsible role for other targets); if there is no such role, nothing is sent. The comments migration is id 6. Re-anchoring stays within the 500 ms write-lock budget even when a short quote repeats through a 200k document. Forbidden status changes write a `role_check` audit row (a `rejected` row is recorded after the transaction so it survives the rollback).
 - A Reading section in the owner interface renders working rules, other rules sets, role instructions and setup notes, project descriptions and documents as Markdown (`/read`, `/read/rules`, `/read/rules/:id`, `/read/role/:id`, `/read/project/:id`, `/read/document/:id`, and `?v=N` for an older version). History and compare reuse the existing version APIs. Each edit screen has a Read link, and each reading page has an Edit link. The pages are owner-only; there is no public share route. The default `GET /entity/rules` response now also lists every rules set (`sets`) so the index can group them; there is no new owner route.
@@ -14,9 +15,13 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - The Map page no longer uses a circular layout or hides the graph when there are more than 16 roles; the tree scrolls inside its own container.
+- Zip export and import include the local GitHub mirror (`github_repo` with `default_role_id`, `github_repo_assigner`, and `github_issue` with its role label) so those settings and labels survive a move. The encrypted GitHub token in `github_config` is still excluded; reconnect GitHub after import.
 
 ### Fixed
 
+- Zip import now rebuilds the search index for mirrored GitHub issues (title, body, and `full_name#number`), so `search` finds them after a move. A later incremental sync would skip unchanged issues using the imported `since` / `sync_cursor`.
+- A workspace that already has a GitHub mirror (`github_repo`, `github_issue`, or `github_repo_assigner`) is no longer treated as empty, so a second import is refused with the usual conflict message instead of a unique-constraint error.
+- Import of a GitHub default role, assigner role, or issue role that is not in the import is rejected with a clear error and rolled back, rather than failing with a raw foreign-key constraint.
 - Re-anchoring a review comment on repeated lines no longer jumps up to 20 lines away: context is compared the way it is stored (including the separating newline), a fuzzy tie picks the hit nearest the old line, and a unique occurrence outside the window is accepted when at least one adjacent line matches.
 - A unique hit outside the re-anchor window is no longer rejected just because the quoted paragraph is longer than 500 characters or only one neighbouring line moved with the block: `ctx_after` is stored after the truncated quote, and the far-hit check compares only the adjacent line on each side.
 - Review comment quotes no longer keep a trailing `\r` on CRLF text, so editing the commented line keeps the same anchor as on LF text.
