@@ -286,12 +286,37 @@ export function idempotent<T>(db: DB, memberId: string, key: string | undefined,
   return out;
 }
 
-export function checkRev(entity: string, id: string, current: number, expected: number | undefined): void {
+export function currentVersionNumber(db: DB, versionRowId: number | null | undefined): number {
+  if (!versionRowId) return 0;
+  return get<{ number: number }>(db, 'SELECT number FROM version WHERE id = ?', versionRowId)?.number ?? 0;
+}
+
+export function checkRev(
+  entity: string,
+  id: string,
+  current: number,
+  expected: number | undefined,
+  opts?: { version?: number; versionField?: string; revField?: string },
+): void {
+  const versionField = opts?.versionField ?? 'version';
+  const revField = opts?.revField ?? 'rev';
+  const version = opts?.version;
   if (expected === undefined) {
-    throw new DomainError('invalid', `rev is required when updating ${entity} ${id}: read it first and pass its current rev (now ${current})`, { current_rev: current });
+    const hint =
+      version !== undefined && version > 0
+        ? `read it first and pass its current ${revField} (now ${current}), not ${versionField} (now ${version})`
+        : `read it first and pass its current ${revField} (now ${current})`;
+    throw new DomainError('invalid', `${revField} is required when updating ${entity} ${id}: ${hint}`, { current_rev: current, ...(version !== undefined ? { current_version: version } : {}) });
   }
   if (expected !== current) {
-    throw new DomainError('conflict', `${entity} ${id} was changed by someone else: your rev ${expected}, current rev ${current}. Read it again, merge your change and retry.`, {
+    if (version !== undefined && version > 0 && expected === version) {
+      throw new DomainError(
+        'conflict',
+        `${entity} ${id}: you passed ${versionField} ${expected} as ${revField}, but updates require the conflict-check field ${revField} (currently ${current}), not ${versionField} (currently ${version}). Read the item again and pass ${revField}.`,
+        { current_rev: current, current_version: version, version_field: versionField },
+      );
+    }
+    throw new DomainError('conflict', `${entity} ${id} was changed by someone else: your ${revField} ${expected}, current ${revField} ${current}. Read it again, merge your change and retry.`, {
       current_rev: current,
     });
   }

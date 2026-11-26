@@ -4,6 +4,7 @@ import {
   checkLen,
   checkRev,
   currentBody,
+  currentVersionNumber,
   DomainError,
   idempotent,
   indexEntity,
@@ -60,7 +61,13 @@ export function updateRules(db: DB, actor: Actor, input: { text: string; rev?: n
   return tx(db, () => {
     const r = getRules(db, actor.memberId);
     // The first text needs no rev (there is nothing to overwrite); every later change does.
-    if (r.version > 0 || input.rev !== undefined) checkRev('working rules', 'rules', r.rev, input.rev);
+    if (r.version > 0 || input.rev !== undefined) {
+      checkRev('working rules', 'rules', r.rev, input.rev, {
+        version: r.version,
+        versionField: 'version (working_rules_version in start)',
+        revField: 'rev (working_rules_rev in start)',
+      });
+    }
     if (r.text === input.text) return { ...r, unchanged: true };
     const v = addVersion(db, actor, 'rules', actor.memberId, input.text, input.note);
     run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE member_id = ?', now(), actor.memberId);
@@ -204,7 +211,10 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       });
     }
     const role = requireRole(db, actor.memberId, input.id);
-    checkRev('role', role.slug, role.rev, input.rev);
+    checkRev('role', role.slug, role.rev, input.rev, {
+      version: currentVersionNumber(db, role.current_version),
+      versionField: 'instruction_version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -361,7 +371,10 @@ export function saveProject(db: DB, actor: Actor, input: SaveProjectInput) {
       });
     }
     const p = requireProject(db, actor.memberId, input.id);
-    checkRev('project', p.slug, p.rev, input.rev);
+    checkRev('project', p.slug, p.rev, input.rev, {
+      version: currentVersionNumber(db, p.current_version),
+      versionField: 'description_version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -497,7 +510,10 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
       });
     }
     const d = requireDocument(db, actor.memberId, input.id);
-    checkRev('document', d.id, d.rev, input.rev);
+    checkRev('document', d.id, d.rev, input.rev, {
+      version: currentVersionNumber(db, d.current_version),
+      versionField: 'version',
+    });
     const changed: string[] = [];
     const sets: string[] = [];
     const vals: unknown[] = [];
