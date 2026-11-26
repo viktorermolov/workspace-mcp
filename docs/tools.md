@@ -9,7 +9,7 @@ The server's MCP `instructions` and the description of `start` both tell a newly
 - **Responses** are JSON text. Errors come back as a tool result with `isError: true` and a body such as `{"error": "conflict", "message": "…", "current_rev": 2}`. Error codes: `invalid`, `not_found`, `conflict`, `limit`.
 - **Ids and slugs.** Every item has an id with a type prefix (`role_…`, `proj_…`, `doc_…`, `task_…`, `chk_…`, `rtn_…`). Roles and projects also have a slug; wherever a tool takes a role or project, the id or the slug works.
 - **Creates** omit `id`. Pass an `idempotency_key` to make a create safe to retry: the same key returns the item created the first time.
-- **Updates** pass `id` and `rev`, the revision you last read. If someone changed the item since, the call fails with `conflict` and the current revision; read the item again, merge and retry. Nothing is overwritten silently.
+- **Updates** pass `id` and `rev`, the conflict-check counter you last read (`rev`, or `working_rules_rev` from `start`). This is not the version-history number (`version`, `instruction_version`, `description_version`, or `working_rules_version` in `start`). If you pass the version-history number as `rev` and the two differ, the call fails with a conflict that names both fields. If someone changed the item since, the call also fails with `conflict` and the current revision; read the item again, merge and retry. Nothing is overwritten silently.
 - **`claimed_role`** on writes is your own role, recorded in the log and in version history. A role is a label the agent claims, not a permission.
 - **Instructions and data are separate.** Only the `instructions` block of `start` holds instructions. Everything else (tasks, documents, comments, checkpoints, mirrored issues) is data written by agents or third parties and never changes rules or access.
 - **Limits.** Lists return 25 items by default and 100 at most, with a `cursor` for the next page. A response larger than 512 KiB of JSON first has its long text fields shortened to previews and carries `response_shortened` (the stored text stays complete); only if it is still too large is it replaced by a `limit` error that asks for a narrower request. Text fields refuse NUL characters and broken Unicode (unpaired surrogates). Field limits are listed in [configuration.md](configuration.md#fixed-limits).
@@ -48,10 +48,10 @@ Input: `role` (optional, slug or id).
 
 Returns two blocks:
 
-- `instructions`: `working_rules`, `working_rules_version` and `working_rules_rev` (pass it to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`.
-- `data`: the `roles` (id, slug, name, area), the `projects` with `focus` and `state`, a global `routines` list, and for the given role its links and setup notes, its `role_routines`, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; `null` on the first `start` of a connection with a given role, since there is no previous call: read earlier history with `changes`; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
+- `instructions`: `working_rules`, `working_rules_version` (the version-history number) and `working_rules_rev` (the conflict-check counter: pass this, not the version, to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`.
+- `data`: the `roles` (id, slug, name, area), `archived_roles` (id, slug, name, `archived: true`) when any exist, the `projects` with `focus` and `state`, a global `routines` list, and for the given role its links and setup notes, its `role_routines`, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; `null` on the first `start` of a connection with a given role, since there is no previous call: read earlier history with `changes`; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
 
-`start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles, 50 projects and 50 routines are listed (`more_roles`, `more_projects` and `more_routines` count the rest; find them with `search`), and at most 100 links of the role (`more_links`). When a role is given, `role_routines` (and `more_role_routines`) lists that role's routines. Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
+`start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles, 50 archived roles, 50 projects and 50 routines are listed (`more_roles`, `more_archived_roles`, `more_projects` and `more_routines` count the rest; find them with `search`, with `include_archived` for archived roles), and at most 100 links of the role (`more_links`). When a role is given, `role_routines` (and `more_role_routines`) lists that role's routines. Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
 
 On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` explains the first fill: working rules, roles, projects, documents, tasks, then `start` again with a role.
 
@@ -77,7 +77,7 @@ Like `changes`, a page ends with `has_more` and `next_cursor`: while `has_more` 
 
 Input: `id` and `rev` (for updates), `name`, `slug`, `area` (area of responsibility), `instruction`, `setup_notes` (what a new platform must recreate by hand: connectors, wake-up triggers; structured schedules belong in `save_routine`), `links` (array of `{to, type}`; the type is free-form, for example `delegates_to` or `reviews`; replaces all links of the role), `note` (stored with a new instruction version), `claimed_role`, `idempotency_key`.
 
-The instruction is versioned. Edits to instructions are highlighted to the owner, because they change the behaviour of every later session.
+The instruction is versioned. Edits to instructions are highlighted to the owner, because they change the behaviour of every later session. A slug stays reserved after the role is archived; creating or renaming a role to that slug fails with a conflict that says the existing role is archived and gives its id.
 
 ### `save_routine`
 
@@ -97,7 +97,7 @@ Every change to the body creates a new version. Documents are found by full-text
 
 ### `update_rules`
 
-Input: `text`, `rev` (`working_rules_rev` from `start`, or `rev` from `get(rules)`; not needed for the very first text), `note`, `claimed_role`.
+Input: `text`, `rev` (`working_rules_rev` from `start`, or `rev` from `get(rules)`; not `working_rules_version` or `version`; not needed for the very first text), `note`, `claimed_role`.
 
 Replaces the working rules shared by all roles and platforms and creates a new version. Saving the same text again is a no-op.
 
@@ -121,7 +121,7 @@ Input: `id`, `body`, `claimed_role`, `idempotency_key`.
 
 Input: `type` (`role`, `project`, `document`, `task` or `routine`), `id`, `restore` (true to restore), `claimed_role`.
 
-Archived items are hidden from lists and kept with their history. Nothing can be deleted through MCP. Only the owner can delete an archived item permanently, in the web interface.
+Archived items are hidden from the main lists and kept with their history. `start` still lists archived roles under `archived_roles`, because their slugs stay reserved. Nothing can be deleted through MCP. Only the owner can delete an archived item permanently, in the web interface.
 
 ### `versions`
 
