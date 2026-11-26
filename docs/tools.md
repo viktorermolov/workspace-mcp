@@ -140,7 +140,7 @@ The next `start` for this role returns the latest checkpoint, so another session
 
 Input: `cursor` (event id, default 0), `limit` (up to 200), `entity_type`, `entity_id`.
 
-Returns log events after the cursor, oldest first, each with who (owner, or connection and claimed role), what and when, plus `next_cursor` and `has_more`. While `has_more` is true, pass `next_cursor` to read on. `start` uses the same names in `changes_since_previous_start`.
+Returns log events after the cursor, oldest first, each with who (owner, or connection and claimed role), what and when, plus `next_cursor` and `has_more`. While `has_more` is true, pass `next_cursor` to read on. On the last page `has_more` is false and `next_cursor` is the id of the last event returned (or the cursor you passed, if there were none): keep it and pass it later to read only newer events. `start` uses the same names in `changes_since_previous_start`.
 
 ## A typical session
 
