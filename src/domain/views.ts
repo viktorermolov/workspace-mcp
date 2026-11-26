@@ -172,7 +172,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
   }
   const page = hits.slice(offset, offset + limit);
   // `total` counts every match unless the scan stopped early; then it is a lower bound.
-  return { results: page, total: hits.length, total_exact: exact, next_cursor: offset + limit < hits.length ? encodeCursor(offset + limit) : null };
+  return { results: page, total: hits.length, total_exact: exact, has_more: offset + limit < hits.length, next_cursor: offset + limit < hits.length ? encodeCursor(offset + limit) : null };
 }
 
 function statusOk(input: SearchInput, status?: string): boolean {

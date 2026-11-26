@@ -236,7 +236,8 @@ export function currentBody(db: DB, versionId: number | null | undefined): strin
 export function listVersions(db: DB, type: VersionedType, entityId: string, limit = 50, before?: number): VersionRow[] {
   return all<VersionRow>(
     db,
-    `SELECT id, entity_type, entity_id, number, '' AS body, actor_kind, connection_id, connection_name, claimed_role, note, rollback_of, created_at
+    `SELECT id, entity_type, entity_id, number, '' AS body, actor_kind, connection_id, connection_name, claimed_role, note,
+       (SELECT t.number FROM version t WHERE t.id = version.rollback_of) AS rollback_of, created_at
      FROM version WHERE entity_type = ? AND entity_id = ? ${before ? 'AND number < ?' : ''} ORDER BY number DESC LIMIT ?`,
     ...(before ? [type, entityId, before, limit] : [type, entityId, limit]),
   );
