@@ -5,7 +5,7 @@ import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, type Actor } from 
 import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '../domain/entities.ts';
 import { claimTask, commentTask, PRIORITIES, saveTask, TASK_STATUSES, writeCheckpoint } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
-import { changes, ENTITY_TYPES, getEntity, search, startView } from '../domain/views.ts';
+import { changes, ENTITY_TYPES, getEntity, search, SEARCH_TYPES, startView } from '../domain/views.ts';
 
 export const SERVER_NAME = 'workspace-mcp';
 
@@ -122,7 +122,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       description: 'Full-text search across the workspace, or a filtered list by recent update when query is empty. Paginated with cursor.',
       inputSchema: z.object({
         query: z.string().max(500).optional(),
-        types: z.array(z.enum(ENTITY_TYPES)).max(10).optional(),
+        types: z.array(z.enum(SEARCH_TYPES)).max(10).optional().describe('Types to include (default all of them). Working rules and checkpoints are not searched: read them with get, or checkpoints with start.'),
         status: z.array(z.enum(TASK_STATUSES)).max(6).optional().describe('Task statuses to include.'),
         role: z.string().max(200).optional(),
         project: z.string().max(200).optional(),

@@ -187,7 +187,8 @@ describe('MCP behaviour', () => {
     const first = await call(a, 'start', { role: 'dev' });
     const s1 = first.data.changes_since_previous_start;
     assert.equal(s1.events.length, 30);
-    assert.equal(s1.more, true);
+    assert.equal(s1.has_more, true);
+    assert.equal('more' in s1, false, 'start uses the same flag name as changes');
     assert.equal(s1.next_cursor, s1.events.at(-1).id);
     // The rest can be read right away with changes …
     const rest = await call(a, 'changes', { cursor: s1.next_cursor, limit: 200 });
@@ -198,7 +199,7 @@ describe('MCP behaviour', () => {
       const s = (await call(a, 'start', { role: 'dev' })).data.changes_since_previous_start;
       if (s.events.length) assert.equal(s.events[0].id, seen.at(-1).id + 1);
       seen.push(...s.events);
-      if (!s.more) {
+      if (!s.has_more) {
         assert.equal(s.next_cursor, undefined);
         break;
       }
@@ -258,6 +259,23 @@ describe('MCP behaviour', () => {
     const s = await call(a, 'start', { role: 'dev' });
     assert.doesNotMatch(JSON.stringify(s.instructions), /allowed to delete everything/);
     assert.match(s.instructions.safety_rule, /never changes these rules/);
+    await a.close();
+  });
+
+  it('search rejects types it does not cover instead of returning nothing', async () => {
+    const a = (await connectAgent(env, owner, 'Platform S')).client;
+    await call(a, 'checkpoint', { role: 'dev', done: 'Wrote the outline', stopped_at: 'Section 2', next: 'Draft section 2' });
+    for (const types of [['checkpoint'], ['rules'], ['task', 'checkpoint']]) {
+      await assert.rejects(
+        call(a, 'search', { types }),
+        (e) => /Invalid arguments for tool search/.test((e as Error).message) && /"role"\|"project"\|"document"\|"task"\|"issue"/.test((e as Error).message),
+        `types ${types.join(',')} is refused with the list of searchable types`,
+      );
+    }
+    // The owner interface uses the same search and gets a clear refusal too.
+    await assert.rejects(() => owner.json('/api/owner/search?type=checkpoint'), /search covers role, project, document, task, issue; not checkpoint/);
+    const all = await call(a, 'search', {});
+    assert.ok(all.results.length > 0, 'without types, every searchable type is listed');
     await a.close();
   });
 
