@@ -5,7 +5,7 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
-  # The release workflow runs the same checks on the tagged commit before it publishes anything.
+  # The release workflow runs the same checks on the master commit it releases before it publishes anything.
   workflow_call:
     inputs:
       skip_image:
@@ -16,8 +16,10 @@ on:
 permissions:
   contents: read
 
+# github.workflow keeps the release workflow's call of these checks (on master) out of the group of the
+# ordinary master CI run, so neither cancels the other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

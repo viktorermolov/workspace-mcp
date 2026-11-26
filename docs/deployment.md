@@ -171,12 +171,14 @@ Each release `vX.Y.Z` publishes one multi-arch image (`linux/amd64` and `linux/a
 
 Prefer a version tag over `latest`, so an update happens only when you choose it; read the release notes first ([Versions and compatibility](../README.md#versions-and-compatibility)).
 
-Before an image is tagged, the release workflow checks that the tag is on a commit from `master`, runs the full CI on that commit, smoke-tests the exact image that is published on each architecture, and upgrades the previous release to it with data in place. Each release's multi-arch image (what a tag points to) is signed with [cosign](https://docs.sigstore.dev/) (keyless, by the release workflow), and each platform image carries an SBOM and build provenance. To verify a release before you run it:
+A release is made by merging into `master` a version bump in `package.json` together with its changelog section. Before an image is tagged, the release workflow runs the full CI on that commit, smoke-tests the exact image that is published on each architecture, and upgrades the previous release to it with data in place. Each release's multi-arch image (what a tag points to) is signed with [cosign](https://docs.sigstore.dev/) (keyless, by the release workflow), and each platform image carries an SBOM and build provenance. The signature is checked against the release workflow on `master` and the commit that the release tag `vX.Y.Z` points to, so an image signed for one version does not verify as another. To verify a release before you run it:
 
 ```sh
+SHA="$(git ls-remote https://github.com/viktorermolov/workspace-mcp refs/tags/vX.Y.Z | cut -f1)"
 cosign verify ghcr.io/viktorermolov/workspace-mcp:X.Y.Z \
-  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/tags/vX.Y.Z \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/heads/master \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-sha "${SHA:?no git tag vX.Y.Z}"
 docker buildx imagetools inspect ghcr.io/viktorermolov/workspace-mcp:X.Y.Z --format '{{ json .SBOM }}'
 ```
 

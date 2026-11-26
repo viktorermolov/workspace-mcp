@@ -54,13 +54,12 @@ docker build -t workspace-mcp:local . && scripts/container-smoke.sh workspace-mc
 
 ## Releasing
 
-Releases are made by the maintainer, and only from `master`:
+Releases are made by merging, only from `master`, with no tag to push by hand:
 
-1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md`, `docs/deployment.md` (published images) and `docs/runbook-raspberry-pi.md`. Merge it.
-2. Tag that commit on `master` and push the tag: `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
-3. After the first release only: GitHub creates the container package as private. Make it public in the package settings (Package settings → Change visibility), so `docker pull` works without signing in.
+1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md`, `docs/deployment.md` (published images) and `docs/runbook-raspberry-pi.md`. Merge it. That merge commit is the release.
+2. After the first release only: GitHub creates the container package as private. Make it public in the package settings (Package settings → Change visibility), so `docker pull` works without signing in.
 
-The release workflow then refuses to publish unless the tag is `vX.Y.Z` on a commit from `master`, `package.json` has the same version, `CHANGELOG.md` has notes for it, and the version is not released or in the registry yet. It runs the full CI on the tagged commit, builds and tests the images, signs them, then tags them and creates the GitHub Release from the changelog section. `latest` moves only when the new version is the highest. A released version is never rebuilt or republished: to fix one, release a new version.
+On every push to `master`, the release workflow checks whether the version in `package.json` is released yet; if it is, it does nothing. If not, that commit is the release: it requires a non-empty `CHANGELOG.md` section for that version (a missing one fails the run rather than skipping the release), `package-lock.json` to match and the version to be absent from the registry and from git tags elsewhere, runs the full CI on that commit, builds and tests the images, signs them, then tags them, and creates the git tag `vX.Y.Z` on that commit and the GitHub Release from the changelog section. If a release fails before its images are tagged, fix the cause and merge again, or run the workflow manually on `master` (Actions → release → Run workflow); if it fails after that, re-run its failed jobs, which finishes the same signed image. `latest` moves only when the new version is the highest. A released version is never rebuilt or republished: to fix one, release a new version.
 
 ## Issue standard
 

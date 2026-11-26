@@ -1,26 +1,31 @@
 name: release
 
-# Runs only when the owner pushes a version tag vX.Y.Z on a commit from master. In order:
-#   guard    the tag is vX.Y.Z on a commit from master, matches package.json, has CHANGELOG notes, and the
-#            version is not released or in the registry yet
+# Releases happen by merging, with nobody at a computer: every push to master (and a manual run on master)
+# checks whether package.json names a version that CHANGELOG.md has a section for and that is not released
+# yet. If so, this run releases that exact commit; otherwise it ends after the guard. In order:
+#   guard    the run is on master; if the package.json version is already released, the run ends here;
+#            otherwise it needs CHANGELOG notes, a matching package-lock.json, and no git tag elsewhere
+#            and no registry tag for it yet
 #   ci       the full CI (typecheck, unit tests, UI build, tree check, e2e) on the same commit
 #   build    per architecture: builds the image with SBOM and provenance, pushes it by digest (no tag),
 #            then pulls exactly that digest and runs the smoke test and the upgrade test from the previous release
 #   publish  joins the tested digests into one multi-arch index, uploads it by digest (no tag), checks the
-#            platforms, SBOM and provenance, signs it with cosign (keyless) and verifies the signature; only
-#            then tags it vX.Y.Z and X.Y.Z, and `latest` only when this is the highest version
-#   release  creates the GitHub Release with the notes from CHANGELOG.md
-# Nothing is tagged in the registry until every check has passed and the image is signed.
+#            platforms, SBOM and provenance, signs it with cosign (keyless) and verifies the signature
+#            (bound to this workflow on master and to this commit); only then tags it vX.Y.Z and X.Y.Z,
+#            and `latest` only when this is the highest version
+#   release  creates the git tag vX.Y.Z on this commit and the GitHub Release with the notes from CHANGELOG.md
+# Nothing is tagged, in git or in the registry, until every check has passed and the image is signed.
 on:
   push:
-    tags: ['v*.*.*']
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 # One release at a time, so the `latest` decision sees the releases before it. A running release is never
-# cancelled; if several tags are pushed while one runs, GitHub keeps only the newest waiting run and cancels
-# the others, which then publish nothing and need a re-run.
+# cancelled. If several pushes arrive while one runs, GitHub keeps only the newest waiting run; that is safe,
+# because a later commit with the same unreleased version releases it instead.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -33,7 +38,9 @@ jobs:
       contents: read
       packages: read
     outputs:
+      release: ${{ steps.check.outputs.release }}
       version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
       previous: ${{ steps.check.outputs.previous }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,49 +50,55 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
-      - name: Check the tag, the commit, the version and the release notes
+      - name: Is this commit a release, and may it be released
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
-          node scripts/release-version.ts check "$TAG" || fail "Release tags have the form vX.Y.Z; ${TAG} is not one."
-          COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          [ "$COMMIT" = "$GITHUB_SHA" ] || fail "The tag points to ${COMMIT}, but this run is for ${GITHUB_SHA}."
+          skip() { echo "::notice::$*"; echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$GITHUB_REF" = "refs/heads/master" ] || fail "Releases are made only from master, not ${GITHUB_REF}."
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master \
-            || fail "${GITHUB_SHA} is not a commit on master. Tag a commit from master."
+            || fail "${GITHUB_SHA} is not a commit on master."
           VERSION="$(node -p 'require("./package.json").version')"
-          [ "v${VERSION}" = "$TAG" ] || fail "package.json has version ${VERSION}, the tag is ${TAG}."
+          TAG="v${VERSION}"
+          node scripts/release-version.ts check "$TAG" || fail "package.json version ${VERSION} is not X.Y.Z."
+          RELEASES="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName,isDraft \
+            --jq '.[] | "\(.tagName) \(.isDraft)"')"
+          if grep -qxF "${TAG} false" <<<"$RELEASES"; then
+            skip "${TAG} is already released; nothing to do. A published version is never rebuilt."
+          fi
+          # From here on package.json names an unreleased version, so this commit is meant to be its release,
+          # and anything inconsistent stops it loudly instead of skipping it.
+          node scripts/release-version.ts notes "$VERSION" >/dev/null \
+            || fail "package.json names ${VERSION}, which is not released, but CHANGELOG.md has no non-empty section \"## [${VERSION}]\"."
           LOCK="$(node -p 'const l=require("./package-lock.json"); l.version + " " + l.packages[""].version')"
           [ "$LOCK" = "${VERSION} ${VERSION}" ] || fail "package-lock.json has version ${LOCK}, expected ${VERSION}."
-          node scripts/release-version.ts notes "$VERSION" >/dev/null \
-            || fail "CHANGELOG.md has no section \"## [${VERSION}]\" with release notes."
-          ALL="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')"
-          if grep -qxF "$TAG" <<<"$ALL"; then
-            fail "A GitHub Release ${TAG} already exists. A published version is never rebuilt; release a new version."
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            [ "$COMMIT" = "$GITHUB_SHA" ] || fail "The git tag ${TAG} already exists on ${COMMIT}, not on ${GITHUB_SHA}."
           fi
           RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
             --json tagName --jq '.[].tagName')"
-          # Versions already tagged in the registry count too, so a release that published its image but not
-          # its GitHub Release still keeps an older version from taking `latest`.
           REGISTRY_TAGS="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
           for T in "$TAG" "$VERSION"; do
             if grep -qxF "$T" <<<"$REGISTRY_TAGS"; then
-              fail "ghcr.io/${GITHUB_REPOSITORY,,}:${T} is already in the registry. A published version is never rebuilt."
+              fail "ghcr.io/${GITHUB_REPOSITORY,,}:${T} is already in the registry without a GitHub Release. A published version is never rebuilt."
             fi
           done
           PREVIOUS="$(node scripts/release-version.ts previous "$VERSION" <<<"$RELEASED")"
-          LATEST="$(printf '%s\n%s\n' "$RELEASED" "$REGISTRY_TAGS" | node scripts/release-version.ts is-highest "$VERSION")"
           {
+            echo "release=true"
             echo "version=${VERSION}"
+            echo "tag=${TAG}"
             echo "previous=${PREVIOUS}"
           } >> "$GITHUB_OUTPUT"
-          echo "Release ${TAG} from ${GITHUB_SHA}: upgrade test from ${PREVIOUS:-nothing (first release)}; would be latest now: ${LATEST} (decided again when tagging)."
+          echo "Releasing ${TAG} from ${GITHUB_SHA}: upgrade test from ${PREVIOUS:-nothing (first release)}."
 
   ci:
     needs: guard
+    if: needs.guard.outputs.release == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       skip_image: true
@@ -186,7 +199,7 @@ jobs:
       latest: ${{ steps.tags.outputs.latest }}
     env:
       VERSION: ${{ needs.guard.outputs.version }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ needs.guard.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -252,6 +265,7 @@ jobs:
           cosign verify \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
             "${IMAGE}@${DIGEST}" >/dev/null
           echo "Signed and verified ${IMAGE}@${DIGEST}"
       - name: Tag the signed image
@@ -304,7 +318,7 @@ jobs:
       VERSION: ${{ needs.guard.outputs.version }}
       LATEST: ${{ needs.publish.outputs.latest }}
       DIGEST: ${{ needs.publish.outputs.digest }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ needs.guard.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -317,8 +331,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          NOW="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)"
-          [ "$NOW" = "$GITHUB_SHA" ] || { echo "::error::the tag ${TAG} now points to ${NOW}, not ${GITHUB_SHA}"; exit 1; }
+          # The git tag is created here, on this commit, together with the Release. If it appeared meanwhile,
+          # it must be on this commit.
+          # matching-refs answers 200 with a list, so an API error fails this step instead of reading as "no tag".
+          REFS="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" --jq '.[].ref')"
+          if grep -qxF "refs/tags/${TAG}" <<<"$REFS"; then
+            NOW="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)"
+            [ "$NOW" = "$GITHUB_SHA" ] || { echo "::error::the tag ${TAG} points to ${NOW}, not ${GITHUB_SHA}"; exit 1; }
+          fi
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           NOTES="${RUNNER_TEMP}/notes.md"
           {
@@ -331,10 +351,13 @@ jobs:
             echo '```sh'
             echo "docker pull ${IMAGE}:${VERSION}"
             echo "cosign verify --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF} \\"
-            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com ${IMAGE}:${VERSION}"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  --certificate-github-workflow-sha ${GITHUB_SHA} ${IMAGE}:${VERSION}"
             echo '```'
             echo
             echo "Digest: \`${DIGEST}\`"
           } > "$NOTES"
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" \
             --notes-file "$NOTES" --latest="$LATEST"
+          [ "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)" = "$GITHUB_SHA" ] \
+            || { echo "::error::the tag ${TAG} was not created on ${GITHUB_SHA}"; exit 1; }

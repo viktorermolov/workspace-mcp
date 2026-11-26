@@ -105,9 +105,11 @@ With a published release, you can use its signed image instead of building. Chec
 
 ```sh
 VERSION=X.Y.Z
+SHA="$(git ls-remote https://github.com/viktorermolov/workspace-mcp refs/tags/v${VERSION} | cut -f1)"
 cosign verify ghcr.io/viktorermolov/workspace-mcp:${VERSION} \
-  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/tags/v${VERSION} \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null && echo signature ok
+  --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/heads/master \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-sha "${SHA:?no git tag v${VERSION}}" >/dev/null && echo signature ok
 grep -q '^WORKSPACE_IMAGE=' .env || echo 'WORKSPACE_IMAGE=' >> .env
 sed -i "s|^WORKSPACE_IMAGE=.*|WORKSPACE_IMAGE=ghcr.io/viktorermolov/workspace-mcp:${VERSION}|" .env
 docker compose pull workspace
