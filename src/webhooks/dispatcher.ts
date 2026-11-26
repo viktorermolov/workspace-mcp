@@ -11,7 +11,7 @@ import { postJson, validateWebhookUrl, type PostResult } from './transport.ts';
  * the agent fetches the content through MCP. Deliveries are queued in the same transaction as the
  * change, coalesced for a short window, signed, retried with backoff and logged.
  */
-export const WEBHOOK_EVENTS = ['task.assigned', 'task.updated', 'task.commented', 'task.unblocked', 'role.updated'] as const;
+export const WEBHOOK_EVENTS = ['task.assigned', 'task.updated', 'task.commented', 'task.unblocked', 'role.updated', 'review.commented'] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
 export const COALESCE_MS = 10_000;
@@ -35,24 +35,31 @@ export interface WebhookRow {
 
 type Sender = (url: string, headers: Record<string, string>, body: string) => Promise<PostResult>;
 
-/** Maps a log event to (role id, webhook event type), or null when it wakes nobody. */
-function classify(db: DB, e: EventRecord): { roleId: string; type: WebhookEvent } | null {
-  const d = e.data as { role_id?: string | null };
+/** Maps a log event to the roles it should wake, or an empty list. */
+function classify(db: DB, e: EventRecord): { roleId: string; type: WebhookEvent }[] {
+  const d = e.data as { role_id?: string | null; target_type?: string; responsible_role_id?: string | null };
   switch (e.action) {
+    case 'review.commented': {
+      if (d.target_type === 'rules') {
+        const roles = all<{ id: string }>(db, "SELECT id FROM role WHERE member_id = ? AND archived_at IS NULL AND edit_any = 1", e.member_id);
+        return roles.map((r) => ({ roleId: r.id, type: 'review.commented' as const }));
+      }
+      return d.responsible_role_id ? [{ roleId: d.responsible_role_id, type: 'review.commented' }] : [];
+    }
     case 'task.assigned':
     case 'task.commented':
     case 'task.unblocked':
-      return d.role_id ? { roleId: d.role_id, type: e.action } : null;
+      return d.role_id ? [{ roleId: d.role_id, type: e.action }] : [];
     case 'task.updated':
     case 'task.claimed': {
       const t = get<{ role_id: string | null }>(db, 'SELECT role_id FROM task WHERE id = ?', e.entity_id);
-      return t?.role_id ? { roleId: t.role_id, type: 'task.updated' } : null;
+      return t?.role_id ? [{ roleId: t.role_id, type: 'task.updated' }] : [];
     }
     case 'role.updated':
     case 'role.instruction_updated':
-      return e.entity_id ? { roleId: e.entity_id, type: 'role.updated' } : null;
+      return e.entity_id ? [{ roleId: e.entity_id, type: 'role.updated' }] : [];
     default:
-      return null;
+      return [];
   }
 }
 
@@ -78,11 +85,11 @@ export class WebhookDispatcher {
   }
 
   private enqueue(db: DB, e: EventRecord): void {
-    const c = classify(db, e);
-    if (!c) return;
+    const classified = classify(db, e);
+    for (const c of classified) {
     const role = get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', c.roleId);
     // Changes made by the same role do not wake it.
-    if (role && e.claimed_role && (e.claimed_role === role.slug || e.claimed_role === c.roleId)) return;
+    if (role && e.claimed_role && (e.claimed_role === role.slug || e.claimed_role === c.roleId)) continue;
     const hooks = all<WebhookRow>(db, 'SELECT * FROM webhook WHERE role_id = ? AND enabled = 1', c.roleId);
     for (const h of hooks) {
       if (!(JSON.parse(h.events) as string[]).includes(c.type)) continue;
@@ -110,6 +117,7 @@ export class WebhookDispatcher {
           now(),
         );
       }
+    }
     }
   }
 
