@@ -47,10 +47,14 @@ Option 2. The eight review points and the answers to the nine open questions are
 
 These numbers were accepted in the approval and will be checked in pull request B:
 
-1. One budget, not stacked: 500 ms in total, and the 200 ms `lineDiff` timeout counts toward it. Time is taken from a monotonic clock (`performance.now()`), and is checked before each comment and inside the fuzzy loop.
-2. The fuzzy window is ±20 lines and at most about 8,000 characters. Only spans whose length is close to the quote (≤ 500 characters of slack) are compared. A single line may be 200k characters, so a line-only window would be too large.
+1. One budget, not stacked: 500 ms in total, and the 200 ms `lineDiff` timeout counts toward it. Time is taken from a monotonic clock (`performance.now()`), and is checked before each comment, inside the exact-hit loop, and inside the fuzzy loop. When the deadline is reached, that comment and any remaining comments become `outdated`.
+2. The fuzzy window is ±20 lines and at most about 8,000 characters. Only spans whose length is close to the quote (≤ 500 characters of slack) are compared. A single line may be 200k characters, so a line-only window would be too large. Exact-quote ranking uses the same window (and stops after a fixed number of hits); a unique occurrence elsewhere is still accepted. Offsets are mapped to line numbers from a line-start index built once per remapping, with a binary search — not by rescanning the text for each hit.
 3. `maxEditLength` stays at 10,000. If the diff hits a limit, the exact-quote search (step 1) still runs; only the later steps fall back to `outdated`.
 4. The timing test asserts well under 500 ms on CI amd64, about ≤ 250 ms. The Raspberry Pi is slower.
+
+5. Timing tests also cover two pathological cases at 200k characters with 200 comments: a quote that repeats on every line, and a single long line. Both must stay under about 250 ms on CI amd64.
+
+Forbidden status changes write a `role_check` row in `oauth_diag` (`warning` when warning mode still applies the change, `rejected` when it is refused). A rejected write rolls back its transaction, so the rejected row is inserted through `afterTransaction` after the rollback. That helper is also in #79 (not yet on master); this change includes a compatible copy so rejected review-status rows survive today.
 
 ### Optional points also accepted
 

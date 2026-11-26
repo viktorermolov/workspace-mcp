@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { loadConfig } from '../src/config.ts';
+import { listDiag } from '../src/auth/diagnostics.ts';
 import { all, get, openDatabase, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
 import { clearEventHooks, clearVersionHooks, DomainError } from '../src/domain/core.ts';
@@ -25,6 +26,7 @@ import {
   setReviewCommentStatus,
   startReviewComments,
 } from '../src/domain/reviews.ts';
+import { runWithWarnings } from '../src/domain/access.ts';
 import { rollback } from '../src/domain/versions.ts';
 import { getEntity, search, startView } from '../src/domain/views.ts';
 import { buildExport, importExport } from '../src/backup/export.ts';
@@ -45,6 +47,9 @@ function memoryDb() {
 
 describe('migration 6', () => {
   it('uses id 6 and leaves 5 unused', () => {
+    // Id 5 is reserved for #55 (role parent). If #55 merges first, this assertion
+    // will fail: change it to expect migrations.find((m) => m.id === 5)?.name === 'role_parent'
+    // (or whatever name ships) and keep the id-6 check below.
     assert.equal(migrations.some((m) => m.id === 5), false);
     assert.equal(migrations.find((m) => m.id === 6)?.name, 'review-comments');
   });
@@ -244,6 +249,94 @@ describe('review comments', () => {
       const sample = listReviewComments(db, owner.memberId, { target_type: 'document', target_id: doc.id, status: 'all', limit: 100 });
       assert.equal(sample.comments[0]!.anchor_state, 'exact');
       assert.equal(sample.comments[0]!.anchor_line_start, 2);
+    } finally {
+      close();
+    }
+  });
+
+  it('re-anchors 200 comments on a 200k document where the quote repeats on every line in well under 250 ms', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const body = '}\n'.repeat(100_000).slice(0, 200_000);
+      const doc = saveDocument(db, owner, { title: 'Repeated braces', body });
+      const nlines = body.split('\n').length;
+      for (let i = 0; i < 200; i++) {
+        const line = 1 + Math.floor((i * (nlines - 1)) / 200);
+        createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: `c${i}`, line_start: line, line_end: line });
+      }
+      const moved = ('x\n' + body).slice(0, 200_000);
+      const t0 = performance.now();
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: moved });
+      const ms = performance.now() - t0;
+      assert.ok(ms <= 250, `repeated-quote re-anchor took ${ms.toFixed(1)} ms`);
+    } finally {
+      close();
+    }
+  });
+
+  it('re-anchors 200 comments on a single 200k-character line in well under 250 ms', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const body = 'a b c d '.repeat(Math.ceil(200_000 / 8)).slice(0, 200_000);
+      const doc = saveDocument(db, owner, { title: 'One long line', body });
+      for (let i = 0; i < 200; i++) {
+        createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: `c${i}`, line_start: 1, line_end: 1 });
+      }
+      const moved = ('x' + body.slice(1)).slice(0, 200_000);
+      const t0 = performance.now();
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: moved });
+      const ms = performance.now() - t0;
+      assert.ok(ms <= 250, `single-line re-anchor took ${ms.toFixed(1)} ms`);
+    } finally {
+      close();
+    }
+  });
+
+  it('writes a warning role_check row when an unauthorized answered status is applied in warning mode', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      saveRole(db, owner, { name: 'Writer', slug: 'writer', instruction: 'Hello.\nWorld.' });
+      saveRole(db, owner, { name: 'Reader', slug: 'reader', instruction: 'Read only.' });
+      const role = { id: get<{ id: string }>(db, "SELECT id FROM role WHERE slug = 'writer'")!.id };
+      const c = createReviewComment(db, owner, { target_type: 'role', target_id: role.id, field: 'instruction', body: 'Please fix.', line_start: 1, line_end: 1 });
+      const bot = { kind: 'agent' as const, memberId: owner.memberId, connectionId: 'c-reader', connectionName: 'Reader bot', role: 'reader' };
+      run(db, "UPDATE member SET role_enforcement = 'warn' WHERE id = ?", owner.memberId);
+      const { value, warnings } = runWithWarnings(() => replyReviewComment(db, bot, { id: c.id, body: 'Not my job, but answering.', status: 'answered' }));
+      assert.equal(value.status, 'answered');
+      assert.equal(warnings.some((w) => w.code === 'review_status_forbidden'), true);
+      const rows = listDiag(db, { client_id: 'c-reader' }) as { step: string; outcome: string; detail: Record<string, unknown> }[];
+      const hit = rows.find((r) => r.step === 'role_check' && r.outcome === 'warning');
+      assert.ok(hit, 'expected a warning role_check row');
+      const detail = hit!.detail as { reason?: string; claimed_role?: string; responsible_role?: string };
+      assert.equal(detail.reason, 'review_status');
+      assert.equal(detail.claimed_role, 'reader');
+      assert.equal(detail.responsible_role, 'writer');
+    } finally {
+      close();
+    }
+  });
+
+  it('writes a rejected role_check row that survives the rollback in enforce mode', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      saveRole(db, owner, { name: 'Writer', slug: 'writer', instruction: 'Hello.\nWorld.' });
+      saveRole(db, owner, { name: 'Reader', slug: 'reader', instruction: 'Read only.' });
+      const role = { id: get<{ id: string }>(db, "SELECT id FROM role WHERE slug = 'writer'")!.id };
+      const c = createReviewComment(db, owner, { target_type: 'role', target_id: role.id, field: 'instruction', body: 'Please fix.', line_start: 1, line_end: 1 });
+      const bot = { kind: 'agent' as const, memberId: owner.memberId, connectionId: 'c-reader', connectionName: 'Reader bot', role: 'reader' };
+      run(db, "UPDATE member SET role_enforcement = 'enforce' WHERE id = ?", owner.memberId);
+      assert.throws(() => replyReviewComment(db, bot, { id: c.id, body: 'Done.', status: 'answered' }), (e: unknown) => e instanceof DomainError && e.code === 'forbidden');
+      assert.throws(() => replyReviewComment(db, bot, { id: c.id, body: 'Closing this.', status: 'resolved' }), (e: unknown) => e instanceof DomainError && e.code === 'forbidden');
+      assert.equal(getReviewComment(db, owner.memberId, c.id).status, 'open');
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM review_reply WHERE comment_id = ?', c.id)!.n, 0);
+      const rows = (listDiag(db, { client_id: 'c-reader' }) as { step: string; outcome: string; detail: Record<string, unknown> }[]).filter((r) => r.step === 'role_check' && r.outcome === 'rejected');
+      assert.equal(rows.length, 2);
+      for (const r of rows) {
+        const detail = r.detail as { reason?: string; claimed_role?: string; responsible_role?: string };
+        assert.equal(detail.reason, 'review_status');
+        assert.equal(detail.claimed_role, 'reader');
+        assert.equal(detail.responsible_role, 'writer');
+      }
     } finally {
       close();
     }
