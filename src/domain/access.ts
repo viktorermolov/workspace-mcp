@@ -292,20 +292,8 @@ export function unconfirmedActiveConnections(db: DB, memberId: string): { client
   );
 }
 
-/**
- * Fills a draft allow-list from this connection's own history, once.
- * Only existing, non-archived roles are included. The draft is not confirmed
- * and has no effect in enforce until the owner confirms it.
- */
-export function prefillConnectionRoles(db: DB, clientId: string): void {
-  const c = get<{ member_id: string; roles_confirmed_at: string | null; roles_suggested_at: string | null }>(
-    db,
-    'SELECT member_id, roles_confirmed_at, roles_suggested_at FROM connection WHERE client_id = ?',
-    clientId,
-  );
-  if (!c || c.roles_confirmed_at || c.roles_suggested_at) return;
-
-  const names = all<{ claimed_role: string }>(
+function claimedRoleHistory(db: DB, clientId: string): string[] {
+  return all<{ claimed_role: string }>(
     db,
     `SELECT DISTINCT claimed_role FROM (
        SELECT claimed_role FROM event WHERE connection_id = ? AND claimed_role IS NOT NULL
@@ -320,11 +308,40 @@ export function prefillConnectionRoles(db: DB, clientId: string): void {
     clientId,
     clientId,
     clientId,
+  ).map((r) => r.claimed_role);
+}
+
+/** Computed suggestions for a GET. Does not write. */
+function suggestedRolesFromHistory(db: DB, memberId: string, clientId: string): AllowedRole[] {
+  const out: AllowedRole[] = [];
+  const seen = new Set<string>();
+  for (const claimed of claimedRoleHistory(db, clientId)) {
+    const role = roleByRef(db, memberId, claimed, false);
+    if (!role || seen.has(role.id)) continue;
+    seen.add(role.id);
+    out.push({ id: role.id, slug: role.slug, name: role.name, source: 'suggested' });
+  }
+  out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return out;
+}
+
+/**
+ * Fills a draft allow-list from this connection's own history, once.
+ * Only existing, non-archived roles are included. The draft is not confirmed
+ * and has no effect in enforce until the owner confirms it.
+ * Called from explicit actions (turning on enforcement), not from GET.
+ */
+export function prefillConnectionRoles(db: DB, clientId: string): void {
+  const c = get<{ member_id: string; roles_confirmed_at: string | null; roles_suggested_at: string | null }>(
+    db,
+    'SELECT member_id, roles_confirmed_at, roles_suggested_at FROM connection WHERE client_id = ?',
+    clientId,
   );
+  if (!c || c.roles_confirmed_at || c.roles_suggested_at) return;
 
   let inserted = 0;
-  for (const row of names) {
-    const role = roleByRef(db, c.member_id, row.claimed_role, false);
+  for (const claimed of claimedRoleHistory(db, clientId)) {
+    const role = roleByRef(db, c.member_id, claimed, false);
     if (!role) continue;
     const res = run(
       db,
@@ -348,15 +365,22 @@ export function prefillAllConnectionRoles(db: DB, memberId: string): void {
 
 export function setConnectionRoles(db: DB, actor: Actor, clientId: string, roleRefs: string[], confirm: boolean): void {
   if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can set a connection\'s allow-list');
-  const c = get<{ member_id: string }>(db, 'SELECT member_id FROM connection WHERE client_id = ?', clientId);
+  const c = get<{ member_id: string; roles_confirmed_at: string | null; roles_suggested_at: string | null }>(
+    db,
+    'SELECT member_id, roles_confirmed_at, roles_suggested_at FROM connection WHERE client_id = ?',
+    clientId,
+  );
   if (!c) throw new DomainError('not_found', `connection not found: ${clientId}`);
   tx(db, () => {
+    const beforeIds = listConnectionRoles(db, clientId).map((r) => r.id).sort();
+    const beforeConfirmed = !!c.roles_confirmed_at;
     const ids: string[] = [];
     for (const ref of roleRefs) {
       const role = roleByRef(db, c.member_id, String(ref), false);
       if (!role) throw invalid(`role not found or archived: ${ref}`);
       ids.push(role.id);
     }
+    const listChanged = JSON.stringify(beforeIds) !== JSON.stringify([...ids].sort());
     run(db, 'DELETE FROM connection_role WHERE client_id = ?', clientId);
     for (const id of ids) {
       run(db, `INSERT INTO connection_role (client_id, role_id, source) VALUES (?,?, 'owner')`, clientId, id);
@@ -366,6 +390,16 @@ export function setConnectionRoles(db: DB, actor: Actor, clientId: string, roleR
       recordEvent(db, actor, 'connection', clientId, 'connection.roles_confirmed', `Allow-list confirmed for a connection`, { role_ids: ids });
     } else {
       run(db, 'UPDATE connection SET roles_confirmed_at = NULL WHERE client_id = ?', clientId);
+      // Lock the draft so a later prefill cannot add back roles the owner removed.
+      if (!c.roles_suggested_at) {
+        run(db, 'UPDATE connection SET roles_suggested_at = ? WHERE client_id = ?', now(), clientId);
+      }
+      if (listChanged || beforeConfirmed) {
+        recordEvent(db, actor, 'connection', clientId, 'connection.roles_updated', `Allow-list updated for a connection`, {
+          role_ids: ids,
+          confirmed: false,
+        });
+      }
     }
   });
 }
@@ -420,14 +454,16 @@ export function setEnforcement(
 }
 
 export function connectionAccessView(db: DB, memberId: string, clientId: string) {
-  prefillConnectionRoles(db, clientId);
   const c = get<{ roles_confirmed_at: string | null; roles_suggested_at: string | null }>(
     db,
     'SELECT roles_confirmed_at, roles_suggested_at FROM connection WHERE client_id = ?',
     clientId,
   );
+  const stored = listConnectionRoles(db, clientId);
+  // A locked empty draft (roles_suggested_at set, no rows) must not be replaced with a fresh scan.
+  const roles = stored.length > 0 || c?.roles_suggested_at ? stored : suggestedRolesFromHistory(db, memberId, clientId);
   return {
-    roles: listConnectionRoles(db, clientId),
+    roles,
     roles_confirmed_at: c?.roles_confirmed_at ?? null,
     roles_suggested_at: c?.roles_suggested_at ?? null,
     roles_confirmed: !!c?.roles_confirmed_at,
@@ -435,7 +471,6 @@ export function connectionAccessView(db: DB, memberId: string, clientId: string)
 }
 
 export function workspaceAccessSettings(db: DB, memberId: string) {
-  prefillAllConnectionRoles(db, memberId);
   const roles = all<{ id: string; slug: string; name: string; edit_any: number }>(
     db,
     'SELECT id, slug, name, edit_any FROM role WHERE member_id = ? AND archived_at IS NULL ORDER BY name',
