@@ -300,6 +300,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   const memberId = actor.memberId;
   const rules = getRules(db, memberId);
   const roles = listRoles(db, memberId);
+  const archivedRoles = listRoles(db, memberId, true).filter((r) => r.archived_at);
   const projects = listProjects(db, memberId);
   const empty = roles.length === 0 && projects.length === 0 && !rules.text && !get(db, 'SELECT 1 FROM task WHERE member_id = ? LIMIT 1', memberId);
   const out: Record<string, unknown> = {};
@@ -322,7 +323,17 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   let checkpoint: unknown;
   if (roleRef) {
     const r = findRole(db, memberId, roleRef, false);
-    if (!r) throw new DomainError('not_found', `role not found: ${roleRef}. Available roles: ${roles.map((x) => x.slug).join(', ') || '(none yet)'}`);
+    if (!r) {
+      const archived = findRole(db, memberId, roleRef, true);
+      if (archived?.archived_at) {
+        throw new DomainError(
+          'not_found',
+          `role "${roleRef}" is archived (id ${archived.id}). Restore it before using it, or pick an active role. Available roles: ${roles.map((x) => x.slug).join(', ') || '(none yet)'}`,
+          { id: archived.id, slug: archived.slug, archived: true },
+        );
+      }
+      throw new DomainError('not_found', `role not found: ${roleRef}. Available roles: ${roles.map((x) => x.slug).join(', ') || '(none yet)'}`);
+    }
     role = roleView(db, r);
     roleTasks = all<TaskRow>(
       db,
@@ -383,6 +394,12 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       ...out,
       roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area, pv) })),
       ...(roles.length > START_LIST_MAX ? { more_roles: roles.length - START_LIST_MAX } : {}),
+      ...(archivedRoles.length
+        ? {
+            archived_roles: archivedRoles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, archived: true })),
+            ...(archivedRoles.length > START_LIST_MAX ? { more_archived_roles: archivedRoles.length - START_LIST_MAX } : {}),
+          }
+        : {}),
       projects: projects.slice(0, START_LIST_MAX).map((p) => ({ id: p.id, slug: p.slug, name: p.name, focus: preview(p.focus, pv), state: preview(p.state, pv) })),
       ...(projects.length > START_LIST_MAX ? { more_projects: projects.length - START_LIST_MAX } : {}),
       ...(role

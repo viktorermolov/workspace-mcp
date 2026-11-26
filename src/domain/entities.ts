@@ -175,6 +175,18 @@ export function indexRole(db: DB, r: RoleRow): void {
   indexEntity(db, r.member_id, 'role', r.id, r.name, `${r.slug}\n${r.area}\n${currentBody(db, r.current_version)}`);
 }
 
+
+function roleSlugTaken(existing: RoleRow, slug: string): DomainError {
+  if (existing.archived_at) {
+    return new DomainError(
+      'conflict',
+      `a role with slug "${slug}" already exists and is archived (id ${existing.id}). Restore it, change its slug, or delete it permanently before reusing this slug.`,
+      { id: existing.id, slug, archived: true },
+    );
+  }
+  return new DomainError('conflict', `a role with slug "${slug}" already exists`);
+}
+
 export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
   checkLen('name', input.name, LIMITS.title);
   checkLen('area', input.area, LIMITS.shortText);
@@ -186,7 +198,8 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_role', () => {
         if (!input.name?.trim()) throw invalid('name is required to create a role');
         const slug = input.slug ?? slugify(input.name);
-        if (findRole(db, actor.memberId, slug)) throw new DomainError('conflict', `a role with slug "${slug}" already exists`);
+        const taken = findRole(db, actor.memberId, slug);
+        if (taken) throw roleSlugTaken(taken, slug);
         const id = newId('role');
         const at = now();
         run(
@@ -223,7 +236,7 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
       if (v !== undefined && v !== role[f]) {
         if (f === 'slug') {
           const other = findRole(db, actor.memberId, v);
-          if (other && other.id !== role.id) throw new DomainError('conflict', `a role with slug "${v}" already exists`);
+          if (other && other.id !== role.id) throw roleSlugTaken(other, v);
         }
         if (f === 'name' && !v.trim()) throw invalid('name must not be empty');
         sets.push(`${f} = ?`);
