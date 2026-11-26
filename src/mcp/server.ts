@@ -119,7 +119,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     'search',
     {
       title: 'Search and list',
-      description: 'Full-text search across the workspace, or a filtered list by recent update when query is empty. Paginated with cursor.',
+      description: 'Full-text search across the workspace, or a filtered list by recent update when query is empty. While has_more is true, pass next_cursor for the next page.',
       inputSchema: z.object({
         query: z.string().max(500).optional(),
         types: z.array(z.enum(SEARCH_TYPES)).max(10).optional().describe('Types to include (default all of them). Working rules and checkpoints are not searched: read them with get, or checkpoints with start.'),

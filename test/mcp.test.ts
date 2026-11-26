@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { get, run } from '../src/db/db.ts';
+import { all, get, run } from '../src/db/db.ts';
 import { startView } from '../src/domain/views.ts';
 import { call, connectAgent, registerOwner, ToolError, startService, type Browser, type TestEnv } from './helpers/harness.ts';
 
@@ -297,6 +297,59 @@ describe('MCP behaviour', () => {
     assert.equal(page1.has_more, true);
     const page2 = await call(a, 'changes', { cursor: page1.next_cursor, limit: 5 });
     assert.ok(page2.events[0].id > page1.events[4].id);
+    await a.close();
+  });
+
+  it('says which version a rollback restored', async () => {
+    const a = (await connectAgent(env, owner, 'Platform R')).client;
+    // Other versioned writes first, so version row ids and version numbers differ.
+    for (let i = 0; i < 3; i++) await call(a, 'save_document', { title: `Filler ${i}`, body: `Filler ${i}` });
+    let d = await call(a, 'save_document', { title: 'Release notes', body: 'First draft' });
+    d = await call(a, 'save_document', { id: d.id, rev: d.rev, body: 'Second draft' });
+    d = await call(a, 'save_document', { id: d.id, rev: d.rev, body: 'Third draft' });
+    const rb = await call(a, 'rollback', { type: 'document', id: d.id, to_version: 1, rev: d.rev });
+    assert.equal(rb.new_version, 4);
+    const list = await call(a, 'versions', { type: 'document', id: d.id });
+    assert.deepEqual(
+      list.versions.map((v: any) => [v.number, v.rollback_of]),
+      [
+        [4, 1],
+        [3, null],
+        [2, null],
+        [1, null],
+      ],
+    );
+    await a.close();
+  });
+
+  it('search marks the last page with has_more like changes', async () => {
+    const a = (await connectAgent(env, owner, 'Platform P')).client;
+    for (let i = 0; i < 3; i++) await call(a, 'save_task', { title: `Pageable ${i}`, role: 'dev' });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 10; i++) {
+      const r = await call(a, 'search', { types: ['task'], query: 'Pageable', limit: 1, ...(cursor ? { cursor } : {}) });
+      seen.push(...r.results.map((x: any) => x.id));
+      assert.equal(typeof r.has_more, 'boolean');
+      assert.equal(r.has_more, r.next_cursor !== null);
+      if (!r.has_more) break;
+      cursor = r.next_cursor;
+    }
+    assert.equal(seen.length, 3);
+    await a.close();
+  });
+
+  it('names the item in archive, restore and delete log entries', async () => {
+    const a = (await connectAgent(env, owner, 'Platform L')).client;
+    const t = await call(a, 'save_task', { title: 'Old idea', role: 'dev' });
+    await call(a, 'archive', { type: 'task', id: t.id });
+    await call(a, 'archive', { type: 'task', id: t.id, restore: true });
+    await call(a, 'archive', { type: 'task', id: t.id });
+    await owner.json('/api/owner/purge', { json: { type: 'task', id: t.id } });
+    const summaries = all<{ action: string; summary: string }>(env.svc.db, 'SELECT action, summary FROM event WHERE entity_id = ? ORDER BY id', t.id)
+      .filter((e) => /^task\.(archived|restored|deleted)$/.test(e.action))
+      .map((e) => e.summary);
+    assert.deepEqual(summaries, ['Task "Old idea" archived', 'Task "Old idea" restored', 'Task "Old idea" archived', 'Task "Old idea" deleted permanently']);
     await a.close();
   });
 

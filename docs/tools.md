@@ -48,7 +48,7 @@ Input: `role` (optional, slug or id).
 Returns two blocks:
 
 - `instructions`: `working_rules`, `working_rules_version` and `working_rules_rev` (pass it to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`.
-- `data`: the `roles` (id, slug, name, area), the `projects` with `focus` and `state`, and for the given role its links and setup notes, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
+- `data`: the `roles` (id, slug, name, area), the `projects` with `focus` and `state`, and for the given role its links and setup notes, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; `null` on the first `start` of a connection with a given role, since there is no previous call: read earlier history with `changes`; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
 
 `start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles and 50 projects are listed (`more_roles` and `more_projects` count the rest; find them with `search`), and at most 100 links of the role (`more_links`). Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
 
@@ -69,6 +69,8 @@ Input: `query` (optional full-text query), `types` (any of `role`, `project`, `d
 Working rules and checkpoints are not searched, and asking for them is an error: read the rules with `get`, and checkpoints with `start` (`last_checkpoint`) or with `get` by id; `changes` with `entity_type: "checkpoint"` lists the ids of earlier ones.
 
 With a query, results are ranked by SQLite FTS5 relevance with a short snippet. `total` counts the matches; when `total_exact` is `false`, the search stopped early (the page was full, or a very common query hit the work limit per request) and `total` is a lower bound. Without a query, it lists items by most recent update, filtered by the other fields. Archived items are left out unless `include_archived` is true.
+
+Like `changes`, a page ends with `has_more` and `next_cursor`: while `has_more` is true, pass `next_cursor` to read on; otherwise `has_more` is false and `next_cursor` is `null`. If `total_exact` is also `false`, the search stopped early and there may be more matches: narrow the query or the filters to find them.
 
 ### `save_role`
 
@@ -118,7 +120,7 @@ Archived items are hidden from lists and kept with their history. Nothing can be
 
 Input: `type` (`rules`, `role`, `project` or `document`), `id` (not needed for rules), `action`:
 
-- `list` (default): versions, newest first, with number, author, time and note. `limit` and `before` page through them.
+- `list` (default): versions, newest first, with number, author, time and note. A version made by `rollback` has `rollback_of`, the number of the version it restored; for other versions it is `null`. `limit` and `before` page through them.
 - `get`: the full text of version `number`.
 - `compare`: a line-by-line diff from version `from` to version `to`. `from: 0` compares with an empty text.
 

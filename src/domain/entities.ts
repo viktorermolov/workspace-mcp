@@ -545,6 +545,14 @@ export function saveDocument(db: DB, actor: Actor, input: SaveDocumentInput) {
 
 export type ArchivableType = 'role' | 'project' | 'document' | 'task';
 const archTable: Record<ArchivableType, string> = { role: 'role', project: 'project', document: 'document', task: 'task' };
+const nameColumn: Record<ArchivableType, string> = { role: 'name', project: 'name', document: 'title', task: 'title' };
+
+/** How the change log names an item, for example `Task "Fix login"`. */
+function logLabel(db: DB, type: ArchivableType, id: string): string {
+  const row = get<{ label: string | null }>(db, `SELECT ${nameColumn[type]} AS label FROM ${archTable[type]} WHERE id = ?`, id);
+  const kind = type.charAt(0).toUpperCase() + type.slice(1);
+  return row?.label ? `${kind} "${row.label}"` : `${kind} ${id}`;
+}
 
 export function resolveEntityId(db: DB, memberId: string, type: ArchivableType, ref: string): string {
   if (type === 'role') return requireRole(db, memberId, ref).id;
@@ -560,7 +568,7 @@ export function setArchived(db: DB, actor: Actor, type: ArchivableType, ref: str
     const row = get<{ archived_at: string | null }>(db, `SELECT archived_at FROM ${archTable[type]} WHERE id = ?`, id)!;
     if (!!row.archived_at === archived) return { type, id, archived, unchanged: true };
     run(db, `UPDATE ${archTable[type]} SET archived_at = ?, rev = rev + 1, updated_at = ? WHERE id = ?`, archived ? now() : null, now(), id);
-    recordEvent(db, actor, type, id, archived ? `${type}.archived` : `${type}.restored`, `${type} ${id} ${archived ? 'archived' : 'restored'}`);
+    recordEvent(db, actor, type, id, archived ? `${type}.archived` : `${type}.restored`, `${logLabel(db, type, id)} ${archived ? 'archived' : 'restored'}`);
     return { type, id, archived, unchanged: false };
   });
 }
@@ -572,6 +580,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
     const id = resolveEntityId(db, actor.memberId, type, ref);
     const row = get<{ archived_at: string | null }>(db, `SELECT archived_at FROM ${archTable[type]} WHERE id = ?`, id)!;
     if (!row.archived_at) throw invalid('archive the item first; only archived items can be deleted permanently');
+    const label = logLabel(db, type, id);
     run(db, 'INSERT OR IGNORE INTO purge_guard (id) VALUES (1)');
     try {
       if (type === 'task') {
@@ -614,7 +623,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
       run(db, 'DELETE FROM purge_guard');
     }
     unindexEntity(db, type, id);
-    recordEvent(db, actor, type, id, `${type}.deleted`, `${type} ${id} deleted permanently`);
+    recordEvent(db, actor, type, id, `${type}.deleted`, `${label} deleted permanently`);
     return { type, id, deleted: true };
   });
 }
