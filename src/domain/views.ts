@@ -7,11 +7,13 @@ import {
   getRules,
   listProjects,
   listRoles,
+  listRules,
   projectView,
   requireDocument,
   requireProject,
   requireRole,
   roleView,
+  rulesView,
   type DocumentRow,
 } from './entities.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
@@ -54,7 +56,7 @@ export function issueView(db: DB, memberId: string, id: string) {
 export function getEntity(db: DB, memberId: string, type: EntityType, id?: string, opts: { cursor?: string } = {}) {
   switch (type) {
     case 'rules':
-      return getRules(db, memberId);
+      return getRules(db, memberId, id);
     case 'role':
       return roleView(db, requireRole(db, memberId, need(id)));
     case 'project': {
@@ -317,9 +319,12 @@ export const SAFETY_RULE =
 /** Roles and projects listed by start; the rest are counted and found with search. */
 export const START_LIST_MAX = 50;
 
-export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget?: number } = {}) {
+export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget?: number; project?: string } = {}) {
   const memberId = actor.memberId;
   const rules = getRules(db, memberId);
+  const projectRow = opts.project ? findProject(db, memberId, opts.project) : undefined;
+  if (opts.project && !projectRow) throw notFound('project', opts.project);
+  const projectRules = projectRow ? listRules(db, memberId, { projectId: projectRow.id }).map((r) => rulesView(db, r)) : undefined;
   const roles = listRoles(db, memberId);
   const archivedRoles = listRoles(db, memberId, true).filter((r) => r.archived_at);
   const projects = listProjects(db, memberId);
@@ -404,14 +409,27 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text || '(no working rules yet)', instr),
       working_rules_version: rules.version,
       working_rules_rev: rules.rev,
+      ...(projectRules
+        ? {
+            project_rules: projectRules.map((r) => ({
+              id: r.id,
+              slug: r.slug,
+              title: r.title,
+              text: instr === null ? r.text : preview(r.text, instr),
+              version: r.version,
+              rev: r.rev,
+            })),
+          }
+        : {}),
       save_state_rule: SAVE_STATE_RULE,
       safety_rule: SAFETY_RULE,
       ...(role ? { role_instruction: instr === null ? roleInstruction : preview(roleInstruction!, instr), role: role.slug } : {}),
       ...(instr === null
         ? {}
         : {
-            instructions_shortened:
-              'The working rules or the role instruction are too long to return in full here. Before working, read them in full with get(type: rules) and get(type: role, id: <role id>), and follow them.',
+            instructions_shortened: projectRules
+              ? 'The working rules, project rules or the role instruction are too long to return in full here. Before working, read them in full with get(type: rules), get(type: rules, id: <id>) and get(type: role, id: <role id>), and follow them.'
+              : 'The working rules or the role instruction are too long to return in full here. Before working, read them in full with get(type: rules) and get(type: role, id: <role id>), and follow them.',
           }),
     },
     data: {

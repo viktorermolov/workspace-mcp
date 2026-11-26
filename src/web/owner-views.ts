@@ -140,7 +140,7 @@ export function changeFeed(db: DB, memberId: string, limit = 200) {
     if (type) {
       const d = e.data as { version?: number };
       version = d.version ?? (e.action.endsWith('.created') ? 1 : null);
-      const entityId = type === 'rules' ? memberId : e.entity_id;
+      const entityId = e.entity_id;
       if (version && entityId) {
         const cur = get<{ body: string }>(db, 'SELECT body FROM version WHERE entity_type = ? AND entity_id = ? AND number = ?', type, entityId, version);
         const prev = version > 1 ? get<{ body: string }>(db, 'SELECT body FROM version WHERE entity_type = ? AND entity_id = ? AND number = ?', type, entityId, version - 1) : { body: '' };
