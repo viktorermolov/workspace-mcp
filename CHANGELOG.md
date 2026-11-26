@@ -8,7 +8,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - In warning mode, `claim_task` with an unknown `claimed_role` and no `role` now proceeds with a warning instead of failing with `not_found`.
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
-- Saving a connection's role list without confirming it now records a log event.
+- Saving a connection's role list without confirming it now records a log event, including when the list was already empty.
+- Import now inserts rows without a parent first and sets parent links in a second pass, so a task whose parent was created later imports successfully. A parent missing from the import or a cycle is rejected as invalid and the import is rolled back.
 
 ## [0.2.0] - 2026-11-26
 
