@@ -403,6 +403,36 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('explains when version is passed as rev for working rules', async () => {
+    const a = (await connectAgent(env, owner, 'Platform rev-vs-version')).client;
+    const current = await call(a, 'get', { type: 'rules' });
+    const first = await call(a, 'update_rules', { text: 'Rules for the rev-vs-version check.', rev: current.rev });
+    const second = await call(a, 'update_rules', { text: 'Rules for the rev-vs-version check, revised.', rev: first.rev });
+    assert.notEqual(second.rev, second.version);
+    const started = await call(a, 'start');
+    assert.equal(started.instructions.working_rules_rev, second.rev);
+    assert.equal(started.instructions.working_rules_version, second.version);
+    await assert.rejects(
+      call(a, 'update_rules', { text: 'Should not apply.', rev: second.version }),
+      (e) =>
+        err(e).error === 'conflict' &&
+        /you passed version/.test(err(e).message) &&
+        /working_rules_rev/.test(err(e).message) &&
+        err(e).message.includes(String(second.rev)) &&
+        err(e).message.includes(String(second.version)),
+    );
+    const role = await call(a, 'save_role', { name: 'Rev check', slug: 'rev-check', instruction: 'Follow the rules.' });
+    const bumped = await call(a, 'save_role', { id: role.id, rev: role.rev, area: 'Only metadata' });
+    assert.notEqual(bumped.rev, bumped.instruction_version);
+    await assert.rejects(
+      call(a, 'save_role', { id: role.id, rev: bumped.instruction_version, area: 'Wrong counter' }),
+      (e) => err(e).error === 'conflict' && /instruction_version/.test(err(e).message) && /pass rev/.test(err(e).message),
+    );
+    const ok = await call(a, 'update_rules', { text: 'Rules for the rev-vs-version check, accepted.', rev: second.rev });
+    assert.equal(ok.unchanged, false);
+    await a.close();
+  });
+
   it('records who did what: connection name and claimed role', async () => {
     const a = (await connectAgent(env, owner, 'Platform I')).client;
     await call(a, 'save_task', { title: 'Logged task', role: 'dev', claimed_role: 'lead' });
