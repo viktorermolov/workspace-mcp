@@ -1,5 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { recordEvent, type Actor } from '../domain/core.ts';
+import { connectionAccessView } from '../domain/access.ts';
 import { log } from '../util/log.ts';
 
 /**
@@ -16,6 +17,8 @@ export interface ConnectionRow {
   approved_at: string;
   last_activity_at: string | null;
   revoked_at: string | null;
+  roles_confirmed_at?: string | null;
+  roles_suggested_at?: string | null;
 }
 
 export function getConnection(db: DB, clientId: string): ConnectionRow | undefined {
@@ -130,7 +133,12 @@ export function touchConnection(db: DB, clientId: string): void {
 
 export function listConnections(db: DB) {
   const rows = all<ConnectionRow>(db, 'SELECT * FROM connection ORDER BY revoked_at IS NOT NULL, coalesce(last_activity_at, approved_at) DESC');
-  return rows.map((r) => ({ ...r, client: clientInfo(db, r.client_id) ?? null, active: !r.revoked_at }));
+  return rows.map((r) => ({
+    ...r,
+    client: clientInfo(db, r.client_id) ?? null,
+    active: !r.revoked_at,
+    ...connectionAccessView(db, r.member_id, r.client_id),
+  }));
 }
 
 /** Pending clients: registered (or discovered) but never approved. */

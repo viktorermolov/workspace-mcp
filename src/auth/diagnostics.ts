@@ -5,7 +5,7 @@ import { all, now, run, type DB } from '../db/db.ts';
  * authorization, consent, token, first MCP call) so the owner can see where a platform gets stuck.
  * Never stores tokens, codes, secrets or cookies.
  */
-export type DiagStep = 'discovery' | 'registration' | 'authorize' | 'login' | 'consent' | 'token' | 'revoke' | 'mcp';
+export type DiagStep = 'discovery' | 'registration' | 'authorize' | 'login' | 'consent' | 'token' | 'revoke' | 'mcp' | 'role_check';
 
 export interface DiagInput {
   client_id?: string | null;
@@ -13,7 +13,7 @@ export interface DiagInput {
   method: string;
   path: string;
   status: number;
-  outcome: 'ok' | 'error';
+  outcome: 'ok' | 'error' | 'warning' | 'rejected' | 'override';
   detail?: Record<string, unknown>;
 }
 

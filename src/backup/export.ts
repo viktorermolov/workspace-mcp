@@ -93,7 +93,7 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
   for (const r of tables.role as unknown as RoleRow[]) {
     const links = (tables.role_link as { from_role_id: string; to_role_id: string; type: string }[]).filter((l) => l.from_role_id === r.id).map((l) => `${l.type}: ${slugOf.get(l.to_role_id) ?? l.to_role_id}`);
     files[unique(`roles/${safeName(r.slug, r.id)}.md`)] = strToU8(
-      frontMatter({ type: 'role', id: r.id, slug: r.slug, name: r.name, area: r.area, links: links.length ? links : undefined, archived_at: r.archived_at, updated_at: r.updated_at }) +
+      frontMatter({ type: 'role', id: r.id, slug: r.slug, name: r.name, area: r.area, links: links.length ? links : undefined, edit_any: r.edit_any === 1 || undefined, archived_at: r.archived_at, updated_at: r.updated_at }) +
         currentBody(db, r.current_version) +
         (r.setup_notes ? `\n\n## Setup notes\n\n${r.setup_notes}\n` : ''),
     );
@@ -117,7 +117,7 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
   }
   for (const p of tables.project as unknown as ProjectRow[]) {
     files[unique(`projects/${safeName(p.slug, p.id)}.md`)] = strToU8(
-      frontMatter({ type: 'project', id: p.id, slug: p.slug, name: p.name, focus: p.focus, state: p.state, repos: JSON.parse(p.repos || '[]'), archived_at: p.archived_at, updated_at: p.updated_at }) +
+      frontMatter({ type: 'project', id: p.id, slug: p.slug, name: p.name, focus: p.focus, state: p.state, repos: JSON.parse(p.repos || '[]'), owner_role: p.owner_role_id ? (slugOf.get(p.owner_role_id) ?? p.owner_role_id) : null, archived_at: p.archived_at, updated_at: p.updated_at }) +
         currentBody(db, p.current_version),
     );
   }
