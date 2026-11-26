@@ -42,37 +42,172 @@ export function ensureOwnerMember(db: DB): Member {
   const m = ownerMember(db);
   if (m) return m;
   const id = newId('mem');
-  run(db, 'INSERT INTO member (id, user_id, name, is_owner, created_at) VALUES (?,?,?,1,?)', id, null, 'Owner', now());
-  run(db, 'INSERT INTO rules (member_id, current_version, rev, updated_at) VALUES (?, NULL, 1, ?)', id, now());
+  const at = now();
+  run(db, 'INSERT INTO member (id, user_id, name, is_owner, created_at) VALUES (?,?,?,1,?)', id, null, 'Owner', at);
+  run(
+    db,
+    `INSERT INTO rules (id, member_id, slug, title, project_id, is_default, current_version, rev, created_at, updated_at)
+     VALUES (?, ?, 'working-rules', 'Working rules', NULL, 1, NULL, 1, ?, ?)`,
+    newId('rul'),
+    id,
+    at,
+    at,
+  );
   return ownerMember(db)!;
 }
 
 // ---------- working rules ----------
 
-export function getRules(db: DB, memberId: string) {
-  const r = get<{ current_version: number | null; rev: number; updated_at: string }>(db, 'SELECT * FROM rules WHERE member_id = ?', memberId);
-  if (!r) throw notFound('working rules', memberId);
-  const v = r.current_version ? get<{ number: number }>(db, 'SELECT number FROM version WHERE id = ?', r.current_version) : undefined;
-  return { text: currentBody(db, r.current_version), rev: r.rev, version: v?.number ?? 0, updated_at: r.updated_at };
+export interface RulesRow {
+  id: string;
+  member_id: string;
+  slug: string;
+  title: string;
+  project_id: string | null;
+  is_default: number;
+  current_version: number | null;
+  rev: number;
+  created_at: string;
+  updated_at: string;
 }
 
-export function updateRules(db: DB, actor: Actor, input: { text: string; rev?: number; note?: string }) {
+/** Looks up a rules set by id or slug, or the member's default set when ref is omitted. */
+export function findRules(db: DB, memberId: string, ref?: string): RulesRow | undefined {
+  if (!ref) return get<RulesRow>(db, 'SELECT * FROM rules WHERE member_id = ? AND is_default = 1', memberId);
+  return get<RulesRow>(db, 'SELECT * FROM rules WHERE member_id = ? AND (id = ? OR slug = ?)', memberId, ref, ref);
+}
+
+export function requireRules(db: DB, memberId: string, ref?: string): RulesRow {
+  const r = findRules(db, memberId, ref);
+  if (!r) throw notFound('working rules', ref ?? memberId);
+  return r;
+}
+
+export function rulesView(db: DB, r: RulesRow) {
+  const v = r.current_version ? get<{ number: number }>(db, 'SELECT number FROM version WHERE id = ?', r.current_version) : undefined;
+  const project = r.project_id ? (get<{ slug: string }>(db, 'SELECT slug FROM project WHERE id = ?', r.project_id)?.slug ?? null) : null;
+  return {
+    id: r.id,
+    slug: r.slug,
+    title: r.title,
+    project,
+    is_default: r.is_default === 1,
+    text: currentBody(db, r.current_version),
+    rev: r.rev,
+    version: v?.number ?? 0,
+    updated_at: r.updated_at,
+  };
+}
+
+export function getRules(db: DB, memberId: string, ref?: string) {
+  return rulesView(db, requireRules(db, memberId, ref));
+}
+
+export function listRules(db: DB, memberId: string, opts: { projectId?: string } = {}): RulesRow[] {
+  if (opts.projectId) {
+    return all<RulesRow>(db, 'SELECT * FROM rules WHERE member_id = ? AND project_id = ? ORDER BY slug', memberId, opts.projectId);
+  }
+  return all<RulesRow>(db, 'SELECT * FROM rules WHERE member_id = ? ORDER BY is_default DESC, slug', memberId);
+}
+
+function checkRulesSlug(slug: string): void {
+  if (!/^[a-z0-9][a-z0-9-]{0,59}$/.test(slug)) throw invalid('slug must be lowercase letters, digits and dashes (max 60)');
+}
+
+export function updateRules(
+  db: DB,
+  actor: Actor,
+  input: { text?: string; rev?: number; note?: string; id?: string; slug?: string; title?: string; project?: string | null },
+) {
   checkLen('text', input.text, LIMITS.instruction);
+  checkLen('title', input.title, LIMITS.title);
+  if (input.slug !== undefined) checkRulesSlug(input.slug);
   return tx(db, () => {
-    const r = getRules(db, actor.memberId);
-    // The first text needs no rev (there is nothing to overwrite); every later change does.
-    if (r.version > 0 || input.rev !== undefined) {
-      checkRev('working rules', 'rules', r.rev, input.rev, {
-        version: r.version,
-        versionField: 'version (working_rules_version in start)',
-        revField: 'rev (working_rules_rev in start)',
-      });
+    const byId = input.id ? findRules(db, actor.memberId, input.id) : undefined;
+    if (input.id && !byId) throw notFound('working rules', input.id);
+    let existing: RulesRow | undefined;
+    if (byId) existing = byId;
+    else if (input.slug) existing = findRules(db, actor.memberId, input.slug);
+    else existing = findRules(db, actor.memberId);
+
+    if (!existing) {
+      if (!input.slug) throw invalid('slug is required to create a rules set');
+      if (input.text === undefined) throw invalid('text is required to create a rules set');
+      const title = (input.title ?? '').trim() || input.slug;
+      const projectId = input.project ? requireProject(db, actor.memberId, input.project).id : null;
+      const id = newId('rul');
+      const at = now();
+      run(
+        db,
+        `INSERT INTO rules (id, member_id, slug, title, project_id, is_default, current_version, rev, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, NULL, 1, ?, ?)`,
+        id,
+        actor.memberId,
+        input.slug,
+        title,
+        projectId,
+        at,
+        at,
+      );
+      const v = addVersion(db, actor, 'rules', id, input.text, input.note);
+      recordEvent(db, actor, 'rules', id, 'rules.updated', `${title} created at version ${v.number}`, { version: v.number, note: input.note ?? null });
+      return { ...getRules(db, actor.memberId, id), unchanged: false };
     }
-    if (r.text === input.text) return { ...r, unchanged: true };
-    const v = addVersion(db, actor, 'rules', actor.memberId, input.text, input.note);
-    run(db, 'UPDATE rules SET rev = rev + 1, updated_at = ? WHERE member_id = ?', now(), actor.memberId);
-    recordEvent(db, actor, 'rules', actor.memberId, 'rules.updated', `Working rules updated to version ${v.number}`, { version: v.number, note: input.note ?? null });
-    return { ...getRules(db, actor.memberId), unchanged: false };
+
+    const current = rulesView(db, existing);
+    const textChanging = input.text !== undefined && input.text !== current.text;
+    const titleNext = input.title !== undefined ? input.title.trim() || existing.title : existing.title;
+    const slugNext = input.slug !== undefined ? input.slug : existing.slug;
+    let projectId = existing.project_id;
+    if (input.project !== undefined) {
+      if (existing.is_default && input.project) {
+        throw invalid('the default working rules stay global; they cannot be attached to a project');
+      }
+      projectId = input.project ? requireProject(db, actor.memberId, input.project).id : null;
+    }
+    const metaChanging = titleNext !== existing.title || slugNext !== existing.slug || projectId !== existing.project_id;
+
+    if (current.version > 0 || input.rev !== undefined) {
+      // The first text needs no rev (there is nothing to overwrite); every later change does.
+      if (textChanging || metaChanging || input.text !== undefined) {
+        checkRev('working rules', 'rules', current.rev, input.rev, {
+          version: current.version,
+          versionField: 'version (working_rules_version in start)',
+          revField: 'rev (working_rules_rev in start)',
+        });
+      }
+    }
+
+    if (!textChanging && !metaChanging) return { ...current, unchanged: true };
+
+    if (slugNext !== existing.slug) {
+      const taken = findRules(db, actor.memberId, slugNext);
+      if (taken && taken.id !== existing.id) {
+        throw new DomainError('conflict', `a rules set with slug "${slugNext}" already exists`, { id: taken.id, slug: slugNext });
+      }
+    }
+
+    if (textChanging) addVersion(db, actor, 'rules', existing.id, input.text!, input.note);
+    run(
+      db,
+      'UPDATE rules SET slug = ?, title = ?, project_id = ?, rev = rev + 1, updated_at = ? WHERE id = ?',
+      slugNext,
+      titleNext,
+      projectId,
+      now(),
+      existing.id,
+    );
+    const after = getRules(db, actor.memberId, existing.id);
+    recordEvent(
+      db,
+      actor,
+      'rules',
+      existing.id,
+      'rules.updated',
+      textChanging ? `${after.title} updated to version ${after.version}` : `${after.title} updated`,
+      { version: after.version, note: input.note ?? null },
+    );
+    return { ...after, unchanged: false };
   });
 }
 
@@ -624,6 +759,8 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, "DELETE FROM version WHERE entity_type = 'document' AND entity_id = ?", id);
         run(db, 'DELETE FROM document WHERE id = ?', id);
       } else if (type === 'project') {
+        const rulesN = get<{ n: number }>(db, 'SELECT count(*) AS n FROM rules WHERE project_id = ?', id)!.n;
+        if (rulesN > 0) throw invalid('the project still has rules sets; move or delete them first');
         const used = get<{ n: number }>(
           db,
           "SELECT (SELECT count(*) FROM task WHERE project_id = ?) + (SELECT count(*) FROM document WHERE scope_type='project' AND scope_id = ?) AS n",

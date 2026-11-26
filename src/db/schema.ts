@@ -339,4 +339,50 @@ CREATE TABLE routine (
 CREATE INDEX routine_role ON routine (member_id, role_id, status);
 `,
   },
+  {
+    id: 3,
+    name: 'titled-rules-sets',
+    sql: `
+-- Version and event rows for rules used to be keyed by member_id. Rewriting entity_id
+-- requires dropping the immutable-update triggers for the duration of this migration.
+DROP TRIGGER IF EXISTS version_immutable_update;
+DROP TRIGGER IF EXISTS event_immutable_update;
+
+CREATE TABLE rules_new (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  project_id TEXT REFERENCES project(id),
+  is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+  current_version INTEGER,
+  rev INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (member_id, slug),
+  CHECK (is_default = 0 OR project_id IS NULL)
+);
+CREATE UNIQUE INDEX rules_one_default ON rules_new (member_id) WHERE is_default = 1;
+
+INSERT INTO rules_new (id, member_id, slug, title, project_id, is_default, current_version, rev, created_at, updated_at)
+SELECT 'rul_' || lower(hex(randomblob(12))), member_id, 'working-rules', 'Working rules', NULL, 1, current_version, rev, updated_at, updated_at
+FROM rules;
+
+UPDATE version
+SET entity_id = (SELECT id FROM rules_new WHERE rules_new.member_id = version.entity_id)
+WHERE entity_type = 'rules';
+
+UPDATE event
+SET entity_id = (SELECT id FROM rules_new WHERE rules_new.member_id = event.entity_id)
+WHERE entity_type = 'rules';
+
+DROP TABLE rules;
+ALTER TABLE rules_new RENAME TO rules;
+
+CREATE TRIGGER version_immutable_update BEFORE UPDATE ON version
+BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
+CREATE TRIGGER event_immutable_update BEFORE UPDATE ON event
+BEGIN SELECT RAISE(ABORT, 'the log is append-only'); END;
+`,
+  },
 ];
