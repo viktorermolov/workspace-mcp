@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Re-anchoring a review comment on repeated lines no longer jumps up to 20 lines away: context is compared the way it is stored (including the separating newline), a fuzzy tie picks the hit nearest the old line, and a unique occurrence outside the window is accepted when at least one adjacent line matches.
+- A unique hit outside the re-anchor window is no longer rejected just because the quoted paragraph is longer than 500 characters or only one neighbouring line moved with the block: `ctx_after` is stored after the truncated quote, and the far-hit check compares only the adjacent line on each side.
+- Review comment quotes no longer keep a trailing `\r` on CRLF text, so editing the commented line keeps the same anchor as on LF text.
 - A rejected role check is still recorded in the owner diagnostics after the write transaction is rolled back.
 - Saving a role no longer fails when its existing parent is archived and is not being changed. An archived parent is rejected only when the parent actually changes.
 - Reparenting a role is rejected when the new parent's ancestor depth plus the height of the moved subtree would exceed 16 levels.

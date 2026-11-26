@@ -124,14 +124,104 @@ function extractRange(text: string, start: number, end: number): string {
   return extractRangeIndexed(text, lineStarts(text), start, end);
 }
 
-function contextAround(text: string, start: number, end: number): { ctx_before: string; ctx_after: string } {
+function stripTrailingCR(s: string): string {
+  return s.endsWith('\r') ? s.slice(0, -1) : s;
+}
+
+/** The last line in a stored before-slice, ignoring a separating newline and a trailing CR. */
+function lastAdjacentLine(stored: string): string {
+  let s = stored;
+  if (s.endsWith('\n')) s = s.slice(0, -1);
+  if (s.endsWith('\r')) s = s.slice(0, -1);
+  const i = s.lastIndexOf('\n');
+  let line = i < 0 ? s : s.slice(i + 1);
+  if (line.endsWith('\r')) line = line.slice(0, -1);
+  return line.length > CONTEXT_CHARS ? line.slice(-CONTEXT_CHARS) : line;
+}
+
+/** The first line in a stored after-slice, ignoring a separating newline and a trailing CR. */
+function firstAdjacentLine(stored: string): string {
+  let s = stored;
+  if (s.startsWith('\r\n')) s = s.slice(2);
+  else if (s.startsWith('\n') || s.startsWith('\r')) s = s.slice(1);
+  const i = s.indexOf('\n');
+  let line = i < 0 ? s : s.slice(0, i);
+  if (line.endsWith('\r')) line = line.slice(0, -1);
+  return line.slice(0, CONTEXT_CHARS);
+}
+
+function adjacentLineBeforeAt(text: string, index: number): string {
+  let end = index;
+  if (end > 0 && text[end - 1] === '\n') end--;
+  if (end > 0 && text[end - 1] === '\r') end--;
+  const start = end === 0 ? 0 : text.lastIndexOf('\n', end - 1) + 1;
+  return lastAdjacentLine(text.slice(start, end));
+}
+
+function adjacentLineAfterAt(text: string, afterIndex: number): string {
+  let start = afterIndex;
+  if (text.startsWith('\r\n', start)) start += 2;
+  else if (text[start] === '\n' || text[start] === '\r') start += 1;
+  const nl = text.indexOf('\n', start);
+  const end = nl < 0 ? text.length : nl;
+  return firstAdjacentLine(text.slice(start, end));
+}
+
+function adjacentBeforeMatch(stored: string, hitLine: string): boolean {
+  const a = lastAdjacentLine(stored);
+  if (!a && !hitLine) return true;
+  if (!a || !hitLine) return false;
+  return a === hitLine || hitLine.endsWith(a) || a.endsWith(hitLine);
+}
+
+function adjacentAfterMatch(stored: string, hitLine: string): boolean {
+  const a = firstAdjacentLine(stored);
+  if (!a && !hitLine) return true;
+  if (!a || !hitLine) return false;
+  return a === hitLine || hitLine.startsWith(a) || a.startsWith(hitLine);
+}
+
+/** Unique out-of-window hits: compare only the adjacent line on each side and accept if either matches. */
+function uniqueHitContextOk(text: string, index: number, quote: string, ctxBefore: string, ctxAfter: string): boolean {
+  const beforeOk = adjacentBeforeMatch(ctxBefore, adjacentLineBeforeAt(text, index));
+  const afterOk = adjacentAfterMatch(ctxAfter, adjacentLineAfterAt(text, index + quote.length));
+  return beforeOk || afterOk;
+}
+
+function contextAround(text: string, start: number, end: number, quote: string): { ctx_before: string; ctx_after: string } {
   const starts = lineStarts(text);
   if (start < 1 || end < start || end > starts.length) {
     throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
   }
-  const before = text.slice(0, start <= 1 ? 0 : endOfLine(starts, text.length, start - 1));
-  const after = text.slice(end < starts.length ? starts[end]! : text.length);
-  return { ctx_before: before.slice(-CONTEXT_CHARS), ctx_after: after.slice(0, CONTEXT_CHARS) };
+  // ctx_after is taken right after the stored (possibly truncated) quote, not after the
+  // full line range, so a paragraph longer than QUOTE_MAX still has a matching after-slice.
+  const from = offsetOfLine(starts, text.length, start);
+  const after = from + quote.length;
+  return { ctx_before: text.slice(Math.max(0, from - CONTEXT_CHARS), from), ctx_after: text.slice(after, after + CONTEXT_CHARS) };
+}
+
+/** True if stored context matches a slice next to a hit, with or without the separating newline.
+ *  Older rows saved context without that newline; new rows include it. */
+function ctxBeforeOk(stored: string, slice: string): boolean {
+  if (!stored) return true;
+  if (slice === stored || slice.endsWith(stored)) return true;
+  if (slice.endsWith('\n') && (slice.slice(0, -1) === stored || slice.slice(0, -1).endsWith(stored))) return true;
+  if (stored.endsWith('\n') && (slice === stored.slice(0, -1) || slice.endsWith(stored.slice(0, -1)))) return true;
+  return false;
+}
+
+function ctxAfterOk(stored: string, slice: string): boolean {
+  if (!stored) return true;
+  if (slice === stored || slice.startsWith(stored)) return true;
+  if (slice.startsWith('\n') && (slice.slice(1) === stored || slice.slice(1).startsWith(stored))) return true;
+  if (stored.startsWith('\n') && (slice === stored.slice(1) || slice.startsWith(stored.slice(1)))) return true;
+  return false;
+}
+
+function hitContextOk(text: string, index: number, quote: string, ctxBefore: string, ctxAfter: string): boolean {
+  const before = text.slice(Math.max(0, index - CONTEXT_CHARS), index);
+  const after = text.slice(index + quote.length, index + quote.length + CONTEXT_CHARS);
+  return ctxBeforeOk(ctxBefore, before) && ctxAfterOk(ctxAfter, after);
 }
 
 /** Offsets of the first character of each line (0-based). Built once per remapping. */
@@ -169,7 +259,7 @@ function extractRangeIndexed(text: string, starts: number[], start: number, end:
   if (start < 1 || end < start || end > starts.length) {
     throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
   }
-  return text.slice(offsetOfLine(starts, text.length, start), endOfLine(starts, text.length, end));
+  return stripTrailingCR(text.slice(offsetOfLine(starts, text.length, start), endOfLine(starts, text.length, end)));
 }
 
 /** Character window around a hint line: ±FUZZY_LINE_WINDOW lines, capped at FUZZY_CHAR_CAP. */
@@ -409,7 +499,7 @@ export function createReviewComment(
           const raw = extractRange(text, lineStart, lineEnd);
           quote = raw.slice(0, QUOTE_MAX);
           hashQ = quoteHash(quote);
-          const ctx = contextAround(text, lineStart, lineEnd);
+          const ctx = contextAround(text, lineStart, lineEnd, quote);
           ctx_before = ctx.ctx_before;
           ctx_after = ctx.ctx_after;
           state = 'exact';
@@ -434,7 +524,7 @@ export function createReviewComment(
           const raw = extractRange(wanted.body, lineStart, lineEnd);
           quote = raw.slice(0, QUOTE_MAX);
           hashQ = quoteHash(quote);
-          const ctx = contextAround(wanted.body, lineStart, lineEnd);
+          const ctx = contextAround(wanted.body, lineStart, lineEnd, quote);
           ctx_before = ctx.ctx_before;
           ctx_after = ctx.ctx_after;
           state = 'exact';
@@ -893,26 +983,32 @@ function findExact(
   const { hits, timeout } = collectExactHits(text, quote, starts, win.from, win.to, EXACT_HIT_CAP, deadline, clock);
   if (timeout) return 'timeout';
   if (!hits.length) {
-    // Unique occurrence outside the window still counts as exact (e.g. a moved unique quote
-    // when the diff was limited). Two or more hits are not ranked across the whole document.
+    // A unique occurrence outside the window still counts as exact when the stored
+    // context matches (e.g. a moved unique quote when the diff was limited). Two or
+    // more hits are not ranked across the whole document.
     if (clock() >= deadline) return 'timeout';
     const i = text.indexOf(quote);
     if (i < 0) return null;
     if (clock() >= deadline) return 'timeout';
     if (text.indexOf(quote, i + 1) >= 0) return null;
+    if ((ctxBefore || ctxAfter) && !uniqueHitContextOk(text, i, quote, ctxBefore, ctxAfter)) return null;
     return { start: lineAtIndex(starts, i), end: lineAtIndex(starts, i + Math.max(quote.length - 1, 0)) };
   }
   if (hits.length === 1) return { start: hits[0]!.start, end: hits[0]!.end };
   const ranked = hits
     .map((h) => {
-      const before = text.slice(Math.max(0, h.index - CONTEXT_CHARS), h.index);
-      const after = text.slice(h.index + quote.length, h.index + quote.length + CONTEXT_CHARS);
-      const ctxOk = (!ctxBefore || before.endsWith(ctxBefore) || before === ctxBefore) && (!ctxAfter || after.startsWith(ctxAfter) || after === ctxAfter);
+      const ctxOk = hitContextOk(text, h.index, quote, ctxBefore, ctxAfter);
       const dist = hintLine != null ? Math.abs(h.start - hintLine) : 0;
       return { h, ctxOk, dist };
     })
     .sort((a, b) => Number(b.ctxOk) - Number(a.ctxOk) || a.dist - b.dist);
   const best = ranked[0]!;
+  // Prefer a context match, then the hit nearest the hint. If no context matches,
+  // still accept a hit that sits on the hint line: the quote is still there, even
+  // when the rest of the line (and thus ctx_after) changed.
+  if (best.ctxOk || (hintLine != null && best.h.start === hintLine)) {
+    return { start: best.h.start, end: best.h.end };
+  }
   if ((ctxBefore || ctxAfter) && !best.ctxOk) return null;
   return { start: best.h.start, end: best.h.end };
 }
@@ -950,7 +1046,7 @@ function fuzzyFind(
   if (!quote || clock() >= deadline) return null;
   const win = hintWindow(text, starts, hintLine);
   const window = text.slice(win.from, win.to);
-  return fuzzyInWindow(window, quote, win.from, starts, deadline, clock);
+  return fuzzyInWindow(window, quote, win.from, starts, hintLine, deadline, clock);
 }
 
 function fuzzyInWindow(
@@ -958,13 +1054,14 @@ function fuzzyInWindow(
   quote: string,
   windowOffset: number,
   starts: number[],
+  hintLine: number | null,
   deadline: number,
   clock: () => number,
 ): { start: number; end: number } | null {
   const want = normalizeQuote(quote);
   const minLen = Math.max(1, quote.length - FUZZY_LENGTH_SLACK);
   const maxLen = quote.length + FUZZY_LENGTH_SLACK;
-  let best: { score: number; start: number; end: number } | null = null;
+  let best: { score: number; start: number; end: number; dist: number } | null = null;
   // Walk line-aligned segments of length close to the quote.
   const wLines = splitLines(window);
   let lineOff = 0;
@@ -977,11 +1074,12 @@ function fuzzyInWindow(
       if (acc.length < minLen && j < wLines.length - 1) continue;
       if (acc.length > maxLen) break;
       const score = dice(want, normalizeQuote(acc));
-      if (!best || score > best.score) {
-        const abs = windowOffset + lineOff;
-        const start = lineAtIndex(starts, abs);
-        const end = lineAtIndex(starts, abs + Math.max(acc.length - 1, 0));
-        best = { score, start, end };
+      const abs = windowOffset + lineOff;
+      const start = lineAtIndex(starts, abs);
+      const end = lineAtIndex(starts, abs + Math.max(acc.length - 1, 0));
+      const dist = hintLine != null ? Math.abs(start - hintLine) : 0;
+      if (!best || score > best.score || (score === best.score && dist < best.dist)) {
+        best = { score, start, end, dist };
       }
     }
     lineOff += wLines[i]!.length + 1;
@@ -1043,7 +1141,10 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
       continue;
     }
 
-    const exact = findExact(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, c.ctx_before, c.ctx_after, starts, deadline(), clock);
+    const rawHint = c.anchor_line_start ?? c.line_start;
+    const mapped = !lineMapping?.limited ? lineMapping?.map.get(rawHint) : undefined;
+    const hint = mapped ?? rawHint;
+    const exact = findExact(opts.newText, c.quote, hint, c.ctx_before, c.ctx_after, starts, deadline(), clock);
     if (exact && exact !== 'timeout') {
       mark(db, c, 'exact', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, exact.start, exact.end);
       continue;
@@ -1077,7 +1178,7 @@ export function reanchorField(db: DB, memberId: string, targetType: ReviewTarget
       mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
       continue;
     }
-    const found = fuzzyFind(opts.newText, c.quote, c.anchor_line_start ?? c.line_start, starts, deadline(), clock);
+    const found = fuzzyFind(opts.newText, c.quote, hint, starts, deadline(), clock);
     if (clock() >= deadline() && !found) {
       exhausted = true;
       mark(db, c, 'outdated', opts.newVersionId ?? c.anchor_version_id, opts.newSetupNotesId, c.anchor_line_start, c.anchor_line_end);
