@@ -177,7 +177,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
   return { results: page, total: hits.length, total_exact: exact, has_more: offset + limit < hits.length, next_cursor: offset + limit < hits.length ? encodeCursor(offset + limit) : null };
 }
 
-// Snippets are marked with private characters first, so marks can be told apart from brackets in the text.
+// Snippets are marked with private characters first, so joining marks never treats a bracket from the text as a mark.
 const MARK_OPEN = '\u0001';
 const MARK_CLOSE = '\u0002';
 const MARK_GAP = /\u0002([^\p{L}\p{N}\n\u0001\u0002]{1,3})\u0001/gu;

@@ -56,11 +56,12 @@ describe('data safety', () => {
   });
 
   it('upgrades a database that holds data through a later app migration, with a backup first', async () => {
-    let env = await startService();
-    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(env.svc.db).id };
-    saveRole(env.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Survives the upgrade.' });
-    const dataDir = env.dataDir;
-    await env.close();
+    const first = await startService();
+    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(first.svc.db).id };
+    saveRole(first.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Survives the upgrade.' });
+    const dataDir = first.dataDir;
+    await first.close();
+    let env: Awaited<ReturnType<typeof startService>> | undefined;
 
     // A later release: one more app migration on top of the current ones (test-only, never shipped).
     const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: role note', sql: "ALTER TABLE role ADD COLUMN fixture_note TEXT; UPDATE role SET fixture_note = 'migrated';" };
@@ -84,6 +85,7 @@ describe('data safety', () => {
         before.close();
       }
       await env.close();
+      env = undefined;
 
       // Starting again applies nothing and makes no new pre-migration backup.
       env = await startService({ dataDir });
@@ -91,7 +93,7 @@ describe('data safety', () => {
       assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id)!.n, 1);
     } finally {
       migrations.splice(migrations.indexOf(fixture), 1);
-      await env.close();
+      await env?.close();
     }
   });
 
