@@ -9,6 +9,7 @@ import { claimTask, commentTask, PRIORITIES, saveTask, TASK_STATUSES, writeCheck
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
 import { replyReviewComment } from '../domain/reviews.ts';
 import { changes, ENTITY_TYPES, getEntity, search, SEARCH_TYPES, startView } from '../domain/views.ts';
+import { setMirroredIssueRole } from '../github/sync.ts';
 
 export const SERVER_NAME = 'workspace-mcp';
 
@@ -419,6 +420,24 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       annotations: WRITE,
     },
     writeWrap((a) => ({ claimed: a.claimed_role, synonym: a.role }), (input, actor) => writeCheckpoint(db, actor, input)),
+  );
+
+  server.registerTool(
+    'set_issue_role',
+    {
+      title: 'Set the role on a mirrored GitHub issue',
+      description:
+        'Set or clear the local role label on a mirrored GitHub issue. Nothing is written to GitHub. Pass either id (from get or search) or repo (owner/name) and number, not both. role is a slug or id; omit or pass null to clear. Allowed for the owner, a role marked as allowed to edit any item, or a role the owner has allowed to assign issue roles on that repository. claimed_role is required on writes once enforcement is on.',
+      inputSchema: z.object({
+        id: id.optional().describe('Mirrored issue id from get or search.'),
+        repo: z.string().max(200).optional().describe('Repository owner/name. Must be passed together with number, and not with id.'),
+        number: z.number().int().positive().optional().describe('Issue number in that repository. Must be passed together with repo, and not with id.'),
+        role: z.string().max(200).nullable().optional().describe('Role slug or id to assign, or null/empty to clear.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+      }),
+      annotations: WRITE,
+    },
+    writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => setMirroredIssueRole(db, actor, input)),
   );
 
   server.registerTool(

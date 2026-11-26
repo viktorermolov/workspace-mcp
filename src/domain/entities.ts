@@ -953,6 +953,8 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         for (const rtn of all<{ id: string }>(db, 'SELECT id FROM routine WHERE role_id = ?', id)) unindexEntity(db, 'routine', rtn.id);
         run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
+        run(db, 'UPDATE github_repo SET default_role_id = NULL WHERE default_role_id = ?', id);
+        run(db, 'DELETE FROM github_repo_assigner WHERE role_id = ?', id);
         run(db, 'UPDATE project SET owner_role_id = NULL WHERE owner_role_id = ?', id);
         purgeReviewData(db, 'role', id);
         run(db, "DELETE FROM version WHERE entity_type = 'role' AND entity_id = ?", id);

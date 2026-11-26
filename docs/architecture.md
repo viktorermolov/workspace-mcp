@@ -84,7 +84,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `oauth_diag` | Steps of authorization attempts, without secrets. |
 | `setup_code` | Hashes of setup and recovery codes. |
 | `search_fts` | FTS5 index of titles and bodies. |
-| `github_config`, `github_repo`, `github_issue` | The encrypted token, selected repositories mapped to projects, mirrored issues with their role label. |
+| `github_config`, `github_repo`, `github_issue`, `github_repo_assigner` | The encrypted token, selected repositories (optional project, optional default role for newly synced issues, and roles allowed to set the local issue label), and mirrored issues with their role label. A zip export includes `github_repo` (with `default_role_id`), `github_repo_assigner`, and `github_issue` (with the role label), and never includes `github_config` (the encrypted token); reconnect GitHub after a zip import. A SQLite backup copies the whole database, including the token. |
 | `webhook`, `webhook_delivery` | Subscriptions with encrypted secrets, and the delivery log. |
 | `purge_guard` | A marker row set only inside the owner's permanent deletion, the one place where the version triggers allow deletes. |
 
@@ -122,7 +122,7 @@ An event hook queues a delivery for each role subscription that matches, inside 
 
 ### GitHub mirror
 
-A scheduler (and the manual refresh) lists issues of the selected repositories with `GET` requests and upserts them into `github_issue`. Nothing is written to GitHub. The role label is the only local field.
+A scheduler (and the manual refresh) lists issues of the selected repositories with `GET` requests and upserts them into `github_issue`. Nothing is written to GitHub. The role label is the only local field on an issue. A repository may have a default role, applied only when an issue is first inserted, and a list of roles the owner has allowed to change that label (besides the owner and roles marked as allowed to edit any item). Changing the default later does not backfill existing issues.
 
 ### Backups, export and import
 

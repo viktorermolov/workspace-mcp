@@ -14,7 +14,8 @@ import { applyImportedParentLinks, omitParentColumn, parentSpecFor } from './par
  *   manifest.json   format id and version, app version, time, sha256 of every other file, row counts
  *   workspace.json  every workspace table (structure, links, full version history, log)
  *   *.md            readable views (rules, roles, routines, projects, documents, tasks) with YAML front matter
- * Secrets, tokens, webhooks, connections and the GitHub mirror are never included.
+ * Secrets, tokens, webhooks, connections and github_config (the encrypted GitHub token) are never included.
+ * The local GitHub mirror (repositories, default role, assigners, and issues including their role label) is included so a zip import can restore them; the owner reconnects the token after import.
  * Import reads workspace.json only; the Markdown files are views for people and other tools.
  */
 
@@ -41,6 +42,9 @@ const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'review_reply', member: true, order: 'created_at, id' },
   { name: 'checkpoint', member: true, order: 'created_at, id' },
   { name: 'event', member: true, order: 'id' },
+  { name: 'github_repo', member: true, order: 'id' },
+  { name: 'github_repo_assigner', member: false, order: 'repo_id, role_id' },
+  { name: 'github_issue', member: true, order: 'repo_id, number' },
 ];
 
 type Rows = Record<string, unknown>[];
@@ -71,6 +75,9 @@ function safeName(s: string, fallback: string): string {
 function tableRows(db: DB, memberId: string, t: (typeof TABLES)[number]): Rows {
   if (t.name === 'task_dependency') {
     return all(db, 'SELECT d.task_id, d.depends_on_id FROM task_dependency d JOIN task t ON t.id = d.task_id WHERE t.member_id = ? ORDER BY d.task_id, d.depends_on_id', memberId);
+  }
+  if (t.name === 'github_repo_assigner') {
+    return all(db, 'SELECT a.repo_id, a.role_id FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? ORDER BY a.repo_id, a.role_id', memberId);
   }
   return all(db, `SELECT * FROM ${t.name} WHERE member_id = ? ORDER BY ${t.order}`, memberId);
 }

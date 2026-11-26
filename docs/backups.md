@@ -88,7 +88,7 @@ tasks/<title>-<id>.md  each task with its fields, comments and result
 
 The Markdown files have YAML front matter with ids, links and times, so the folder opens in Obsidian or any editor. `workspace.json` is the complete data and is what import reads.
 
-An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, no GitHub token or mirrored issues.
+An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, and no GitHub token (`github_config`). The local GitHub mirror (`github_repo`, including `default_role_id`; `github_repo_assigner`; and `github_issue`, including the role label) is included so those settings and labels survive a move.
 
 Make an export in the web interface (**Download export**) or offline:
 
@@ -119,7 +119,7 @@ docker compose run --rm workspace cli import /data/import.zip
 docker compose start workspace
 ```
 
-After an import, connect the AI platforms again and, if you use them, reconnect GitHub and recreate webhooks: none of these travel in an export.
+After an import, connect the AI platforms again and, if you use them, reconnect GitHub (the token does not travel in an export; selected repositories, default roles, assigners and issue labels do) and recreate webhooks.
 
 ## Moving to another machine
 
