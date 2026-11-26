@@ -171,7 +171,7 @@ Each release `vX.Y.Z` publishes one multi-arch image (`linux/amd64` and `linux/a
 
 Prefer a version tag over `latest`, so an update happens only when you choose it; read the release notes first ([Versions and compatibility](../README.md#versions-and-compatibility)).
 
-Before an image is tagged, the release workflow checks that the tag is on a commit from `master`, runs the full CI on that commit, smoke-tests the exact image that is published on each architecture, and upgrades the previous release to it with data in place. Each image is signed with [cosign](https://docs.sigstore.dev/) (keyless, by the release workflow) and carries an SBOM and build provenance. To verify a release before you run it:
+Before an image is tagged, the release workflow checks that the tag is on a commit from `master`, runs the full CI on that commit, smoke-tests the exact image that is published on each architecture, and upgrades the previous release to it with data in place. Each release's multi-arch image (what a tag points to) is signed with [cosign](https://docs.sigstore.dev/) (keyless, by the release workflow), and each platform image carries an SBOM and build provenance. To verify a release before you run it:
 
 ```sh
 cosign verify ghcr.io/viktorermolov/workspace-mcp:X.Y.Z \

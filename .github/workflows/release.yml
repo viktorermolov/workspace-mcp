@@ -63,7 +63,8 @@ jobs:
           [ "$LOCK" = "${VERSION} ${VERSION}" ] || fail "package-lock.json has version ${LOCK}, expected ${VERSION}."
           node scripts/release-version.ts notes "$VERSION" >/dev/null \
             || fail "CHANGELOG.md has no section \"## [${VERSION}]\" with release notes."
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          ALL="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')"
+          if grep -qxF "$TAG" <<<"$ALL"; then
             fail "A GitHub Release ${TAG} already exists. A published version is never rebuilt; release a new version."
           fi
           RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
@@ -166,7 +167,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: echo "$DIGEST" > "${RUNNER_TEMP}/digest-${ARCH}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digest-${{ matrix.arch }}
@@ -184,11 +185,17 @@ jobs:
       id-token: write # keyless cosign signature
     outputs:
       digest: ${{ steps.tags.outputs.digest }}
+      latest: ${{ steps.tags.outputs.latest }}
     env:
       VERSION: ${{ needs.guard.outputs.version }}
-      LATEST: ${{ needs.guard.outputs.latest }}
       TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: digest-*
@@ -257,25 +264,35 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          check() {
+            local GOT
+            GOT="$(docker buildx imagetools inspect "${IMAGE}:$1" --format '{{json .Manifest}}' | jq -r .digest)"
+            [ "$GOT" = "$DIGEST" ] || { echo "::error::${IMAGE}:$1 points to ${GOT}, not the signed ${DIGEST}"; exit 1; }
+          }
+          # Decided again here, not taken from the guard: a re-run of failed jobs reuses the guard's outputs,
+          # and a newer version may have been released since.
           EXISTING="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
           for T in "$TAG" "$VERSION"; do
             if grep -qxF "$T" <<<"$EXISTING"; then echo "::error::${IMAGE}:${T} appeared in the registry during this run"; exit 1; fi
           done
-          NAMES=("$TAG" "$VERSION")
+          RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
+            --json tagName --jq '.[].tagName')"
+          LATEST="$(printf '%s\n%s\n' "$RELEASED" "$EXISTING" | node scripts/release-version.ts is-highest "$VERSION")"
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" -t "${IMAGE}:${VERSION}" "${IMAGE}@${DIGEST}"
+          check "$TAG"
+          check "$VERSION"
+          # latest moves last, in its own step, only once the version tags are in place.
           if [ "$LATEST" = "true" ]; then
-            NAMES+=(latest)
+            docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
+            check latest
           else
             echo "::notice::${VERSION} is not the highest released version, so latest stays where it is."
           fi
-          TAGS=()
-          for T in "${NAMES[@]}"; do TAGS+=(-t "${IMAGE}:${T}"); done
-          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${DIGEST}"
-          for T in "${NAMES[@]}"; do
-            GOT="$(docker buildx imagetools inspect "${IMAGE}:${T}" --format '{{json .Manifest}}' | jq -r .digest)"
-            [ "$GOT" = "$DIGEST" ] || { echo "::error::${IMAGE}:${T} points to ${GOT}, not the signed ${DIGEST}"; exit 1; }
-          done
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "Published ${IMAGE}@${DIGEST} as ${NAMES[*]}"
+          {
+            echo "digest=${DIGEST}"
+            echo "latest=${LATEST}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Published ${IMAGE}@${DIGEST} as ${TAG}, ${VERSION}$([ "$LATEST" = "true" ] && echo ', latest')"
 
   release:
     needs: [guard, publish]
@@ -285,7 +302,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.guard.outputs.version }}
-      LATEST: ${{ needs.guard.outputs.latest }}
+      LATEST: ${{ needs.publish.outputs.latest }}
       DIGEST: ${{ needs.publish.outputs.digest }}
       TAG: ${{ github.ref_name }}
     steps:

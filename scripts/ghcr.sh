@@ -22,14 +22,20 @@ case "$cmd" in
     TOKEN="$(token pull)"
     body="$(mktemp)"; headers="$(mktemp)"
     trap 'rm -f "$body" "$headers"' EXIT
-    status="$(curl -sS --retry 3 -o "$body" -D "$headers" -w '%{http_code}' \
-      -H "Authorization: Bearer ${TOKEN}" "https://${REGISTRY}/v2/${repo}/tags/list?n=10000")"
-    if [ "$status" = 404 ] && jq -e '.errors[]? | select(.code == "NAME_UNKNOWN")' "$body" >/dev/null 2>&1; then
-      exit 0 # the image has never been published
-    fi
-    [ "$status" = 200 ] || { echo "ghcr.sh: listing tags of ${repo} failed with HTTP ${status}: $(head -c 300 "$body")" >&2; exit 1; }
-    if grep -qi '^link:' "$headers"; then echo "ghcr.sh: more tags than one page; extend ghcr.sh to follow pages" >&2; exit 1; fi
-    jq -r '.tags // [] | .[]' "$body"
+    path="/v2/${repo}/tags/list?n=1000"
+    for _ in $(seq 1 100); do
+      status="$(curl -sS --retry 3 -o "$body" -D "$headers" -w '%{http_code}' \
+        -H "Authorization: Bearer ${TOKEN}" "https://${REGISTRY}${path}")"
+      if [ "$status" = 404 ] && jq -e '.errors[]? | select(.code == "NAME_UNKNOWN")' "$body" >/dev/null 2>&1; then
+        exit 0 # the image has never been published
+      fi
+      [ "$status" = 200 ] || { echo "ghcr.sh: listing tags of ${repo} failed with HTTP ${status}: $(head -c 300 "$body")" >&2; exit 1; }
+      jq -r '.tags // [] | .[]' "$body"
+      # The next page, if any, is in the Link header: </v2/...?last=...&n=...>; rel="next"
+      path="$(tr -d '\r' <"$headers" | sed -n 's/^[Ll]ink: *<\(\/v2\/[^>]*\)>; *rel="next".*/\1/p' | tail -n1)"
+      [ -n "$path" ] || exit 0
+    done
+    echo "ghcr.sh: too many pages of tags for ${repo}" >&2; exit 1
     ;;
   put-index)
     file="${3:?usage: ghcr.sh put-index <owner/name> <index.json>}"
