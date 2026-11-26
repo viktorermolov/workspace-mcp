@@ -24,7 +24,7 @@ const VERSIONED = ['rules', 'role', 'project', 'document'] as const;
 const ARCHIVABLE = ['role', 'project', 'document', 'task'] as const;
 
 const id = z.string().min(1).max(200);
-const rev = z.number().int().positive().describe('The rev you last read; required for updates (conflict check).');
+const rev = z.number().int().positive().describe('The rev you last read (the conflict-check counter, not version / instruction_version / description_version); required for updates.');
 const idem = z.string().min(1).max(200).describe('Optional key that makes a create safe to retry.');
 const note = z.string().max(LIMITS.shortText).describe('Optional note stored with the new version.');
 
@@ -206,7 +206,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     'update_rules',
     {
       title: 'Update the working rules',
-      description: 'Replace the working rules shared by all roles and platforms. Pass working_rules_rev from start, or rev from get(rules). Creates a new version.',
+      description: 'Replace the working rules shared by all roles and platforms. Pass working_rules_rev from start, or rev from get(rules) — not working_rules_version / version, which is the version-history number. Creates a new version.',
       inputSchema: z.object({ text: z.string().max(LIMITS.instruction), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
       annotations: WRITE_IDEMPOTENT,
     },
