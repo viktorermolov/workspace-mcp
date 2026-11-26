@@ -1,6 +1,6 @@
 # Portable workspace for AI agents (MCP): implementation brief
 
-Working name: Workspace MCP. The final name is agreed with the owner before the first release.
+Name: Workspace MCP (confirmed by the owner on 2026-11-26, before the first release).
 
 ## 1. Task and context
 
