@@ -6,6 +6,8 @@ import { indexProject, indexRole, type DocumentRow, type ProjectRow, type RoleRo
 import { indexRoutine, type RoutineRow } from '../domain/routines.ts';
 import { indexTask, type TaskRow } from '../domain/tasks.ts';
 import { VERSION } from '../version.ts';
+import { applyImportedParentLinks, omitParentColumn, parentSpecFor } from './parent-import.ts';
+
 
 /**
  * Export format, version 1: a zip with
@@ -20,7 +22,9 @@ export const EXPORT_FORMAT = 'workspace-mcp-export';
 export const EXPORT_FORMAT_VERSION = 1;
 const MAX_UNPACKED = 512 * 1024 * 1024;
 
-/** Tables in insert order (parents before children). `member` marks tables with a member_id column. */
+/** Tables in insert order (referenced tables first). `member` marks tables with a member_id column.
+ * Self-referential parent columns are applied in a second pass; see IMPORT_PARENT_SPECS.
+ */
 const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'version', member: true, order: 'id' },
   { name: 'role', member: true, order: 'created_at, id' },
@@ -288,8 +292,9 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
       }
       const defaultRulesId = get<{ id: string }>(db, 'SELECT id FROM rules WHERE member_id = ? AND is_default = 1', memberId)?.id;
       const importedRulesHaveIds = (data.tables.rules ?? []).some((row: unknown) => row && typeof row === 'object' && (row as { id?: unknown }).id);
+      const parentSpec = parentSpecFor(t.name);
       for (const row of rows) {
-        const vals: Record<string, unknown> = { ...row };
+        let vals: Record<string, unknown> = { ...row };
         if (t.member) vals.member_id = memberId;
         // Old exports keyed rules versions and events by the source member id. Point them at
         // this workspace's default rules id. New exports already use the rules row id.
@@ -297,9 +302,11 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
           vals.entity_id = defaultRulesId;
         }
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
+        if (parentSpec) vals = omitParentColumn(vals, parentSpec);
         const use = cols.filter((c) => c in vals);
         run(db, `INSERT INTO ${t.name} (${use.join(',')}) VALUES (${use.map(() => '?').join(',')})`, ...use.map((c) => (vals[c] === undefined ? null : vals[c])));
       }
+      if (parentSpec) applyImportedParentLinks(db, memberId, rows as Record<string, unknown>[], parentSpec);
       counts[t.name] = rows.length;
     }
     const lr = Number(data.member?.last_review_event_id ?? 0);

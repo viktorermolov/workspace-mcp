@@ -6,13 +6,29 @@ import path from 'node:path';
 import { describe, it, mock } from 'node:test';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createBackup, listBackups, pruneBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
-import { buildExport, importExport, readExport } from '../src/backup/export.ts';
+import { buildExport, importExport, isWorkspaceEmpty, readExport } from '../src/backup/export.ts';
 import { loadConfig } from '../src/config.ts';
 import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
+import { DomainError } from '../src/domain/core.ts';
 import { ensureOwnerMember, getRules, saveRole, updateRules } from '../src/domain/entities.ts';
 import { log } from '../src/util/log.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService } from './helpers/harness.ts';
+
+
+function withTaskParents(zip: Uint8Array, parents: Record<string, string | null>): Uint8Array {
+  const files = unzipSync(zip);
+  const ws = JSON.parse(Buffer.from(files['workspace.json']!).toString()) as {
+    tables: { task: { id: string; parent_id: string | null }[] };
+  };
+  for (const row of ws.tables.task) {
+    if (row.id in parents) row.parent_id = parents[row.id]!;
+  }
+  const wsBytes = strToU8(JSON.stringify(ws));
+  const manifest = JSON.parse(Buffer.from(files['manifest.json']!).toString()) as { files: Record<string, string> };
+  manifest.files['workspace.json'] = createHash('sha256').update(wsBytes).digest('hex');
+  return zipSync({ ...files, 'workspace.json': wsBytes, 'manifest.json': strToU8(JSON.stringify(manifest, null, 2)) });
+}
 
 describe('data safety', () => {
   it('keeps all state across a restart, including connections and the passkey', async () => {
@@ -494,6 +510,66 @@ describe('data safety', () => {
       assert.equal(get<{ n: number }>(dst.svc.db, "SELECT count(*) AS n FROM version WHERE entity_type = 'rules'")!.n, 1);
       const ev = get<{ entity_id: string }>(dst.svc.db, "SELECT entity_id FROM event WHERE entity_type = 'rules' LIMIT 1")!;
       assert.equal(ev.entity_id, view.id);
+    } finally {
+      await dst.close();
+    }
+  });
+
+  it('imports a task whose parent was created after it', async () => {
+    const src = await startService();
+    const { client } = await connectAgent(src, (await registerOwner(src)).browser, 'Parent import');
+    const child = await call<{ id: string; rev: number }>(client, 'save_task', { title: 'Child first' });
+    const parent = await call<{ id: string }>(client, 'save_task', { title: 'Parent later' });
+    await call(client, 'save_task', { id: child.id, rev: child.rev, parent_id: parent.id });
+    const { zip } = buildExport(src.svc.db, ensureOwnerMember(src.svc.db).id);
+    await client.close();
+    await src.close();
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      importExport(dst.svc.db, owner.id, zip);
+      const imported = get<{ parent_id: string | null; title: string }>(dst.svc.db, 'SELECT parent_id, title FROM task WHERE id = ?', child.id)!;
+      assert.equal(imported.title, 'Child first');
+      assert.equal(imported.parent_id, parent.id);
+      assert.ok(get(dst.svc.db, 'SELECT 1 FROM task WHERE id = ?', parent.id));
+    } finally {
+      await dst.close();
+    }
+  });
+
+  it('rejects an import when task parents form a cycle or point outside the import', async () => {
+    const src = await startService();
+    const memberId = ensureOwnerMember(src.svc.db).id;
+    const { client } = await connectAgent(src, (await registerOwner(src)).browser, 'Cycle import');
+    const a = await call<{ id: string; rev: number }>(client, 'save_task', { title: 'Task A' });
+    const b = await call<{ id: string; rev: number }>(client, 'save_task', { title: 'Task B' });
+    await call(client, 'save_task', { id: a.id, rev: a.rev, parent_id: b.id });
+    const { zip } = buildExport(src.svc.db, memberId);
+    await client.close();
+    await src.close();
+
+    const cycleZip = withTaskParents(zip, { [a.id]: b.id, [b.id]: a.id });
+    const missingZip = withTaskParents(zip, { [a.id]: 'tsk_not_in_export' });
+
+    const dst = await startService();
+    try {
+      const owner = ensureOwnerMember(dst.svc.db);
+      assert.throws(() => importExport(dst.svc.db, owner.id, cycleZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /cycle/i);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true, 'a failed import must roll back');
+
+      assert.throws(() => importExport(dst.svc.db, owner.id, missingZip), (e: unknown) => {
+        assert.ok(e instanceof DomainError);
+        assert.equal(e.code, 'invalid');
+        assert.match(e.message, /not in the import/i);
+        return true;
+      });
+      assert.equal(isWorkspaceEmpty(dst.svc.db, owner.id), true);
     } finally {
       await dst.close();
     }
