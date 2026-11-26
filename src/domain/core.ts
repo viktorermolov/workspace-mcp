@@ -95,6 +95,18 @@ export function clearEventHooks(): void {
   hooks.length = 0;
 }
 
+/** Called after a version is written, still inside the writer's transaction. */
+export interface VersionHook {
+  (db: DB, actor: Actor, row: VersionRow, previousBody: string): void;
+}
+const versionHooks: VersionHook[] = [];
+export function onVersionAdded(h: VersionHook): void {
+  versionHooks.push(h);
+}
+export function clearVersionHooks(): void {
+  versionHooks.length = 0;
+}
+
 export interface EventRecord {
   id: number;
   member_id: string;
@@ -189,6 +201,10 @@ export function addVersion(
   note?: string | null,
   rollbackOf?: number | null,
 ): VersionRow {
+  const current = get<{ current_version: number | null }>(db, `SELECT current_version FROM ${versionTable[type]} WHERE id = ?`, entityId);
+  const previousBody = current?.current_version
+    ? (get<{ body: string }>(db, 'SELECT body FROM version WHERE id = ?', current.current_version)?.body ?? '')
+    : '';
   const last = get<{ n: number }>(db, 'SELECT max(number) AS n FROM version WHERE entity_type = ? AND entity_id = ?', type, entityId);
   const number = (last?.n ?? 0) + 1;
   const at = now();
@@ -211,7 +227,7 @@ export function addVersion(
   );
   const id = Number(res.lastInsertRowid);
   run(db, `UPDATE ${versionTable[type]} SET current_version = ? WHERE id = ?`, id, entityId);
-  return {
+  const row: VersionRow = {
     id,
     entity_type: type,
     entity_id: entityId,
@@ -225,6 +241,8 @@ export function addVersion(
     rollback_of: rollbackOf ?? null,
     created_at: at,
   };
+  for (const h of versionHooks) h(db, actor, row, previousBody);
+  return row;
 }
 
 export function currentBody(db: DB, versionId: number | null | undefined): string {
