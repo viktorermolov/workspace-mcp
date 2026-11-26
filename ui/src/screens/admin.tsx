@@ -816,7 +816,7 @@ function AddRepo({ existing, onAdded }: { existing: string[]; onAdded: () => voi
 
 // ---------------------------------------------------------------- webhooks
 
-const EVENTS = ['task.assigned', 'task.updated', 'task.commented', 'task.unblocked', 'role.updated'];
+const EVENTS = ['task.assigned', 'task.updated', 'task.commented', 'task.unblocked', 'role.updated', 'review.commented'];
 interface Hook {
   id: string;
   role: string;
@@ -1225,6 +1225,7 @@ export function MoreScreen() {
   const links: [string, string, string][] = [
     ['/rules', 'Working rules', 'Shared by every role'],
     ['/read', 'Reading', 'Rendered rules, instructions and documents'],
+    ['/reviews', 'Reviews', 'Review comments waiting for a reply or a resolution'],
     ['/roles', 'Roles', 'Who does what'],
     ['/projects', 'Projects and documents', 'Descriptions, specs, notes'],
     ['/github', 'GitHub issues', 'Read-only mirror'],
