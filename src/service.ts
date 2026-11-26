@@ -9,7 +9,8 @@ import { hasOwner, issueCode } from './auth/setup.ts';
 import { createBackup, listBackups, pruneBackups } from './backup/backup.ts';
 import type { Config } from './config.ts';
 import { hasUserTables, openDatabase, pendingAppMigrations, runAppMigrations, type DB } from './db/db.ts';
-import { clearEventHooks } from './domain/core.ts';
+import { clearEventHooks, clearVersionHooks } from './domain/core.ts';
+import { attachReviewHooks } from './domain/reviews.ts';
 import { ensureOwnerMember } from './domain/entities.ts';
 import { GithubSync } from './github/sync.ts';
 import { errMessage, log } from './util/log.ts';
@@ -64,6 +65,7 @@ export async function createService(config: Config, opts: ServiceOptions = {}): 
   fs.mkdirSync(config.backupDir, { recursive: true });
   const db = openDatabase(config.dbPath, { exclusive: opts.exclusive ?? true });
   clearEventHooks();
+  clearVersionHooks();
 
   const auth = createAuth({ config, db, cimdFetch: opts.cimdFetch });
   try {
@@ -76,6 +78,7 @@ export async function createService(config: Config, opts: ServiceOptions = {}): 
 
   const webhooks = new WebhookDispatcher(db, config, { fetchImpl: opts.fetchImpl });
   webhooks.attach();
+  attachReviewHooks();
   const github = new GithubSync(db, config, { fetchImpl: opts.fetchImpl });
 
   const { app, close: closeApp } = createApp({ config, db, auth, version: VERSION, webhooks, github });

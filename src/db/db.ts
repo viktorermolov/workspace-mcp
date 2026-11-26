@@ -23,6 +23,33 @@ export function openDatabase(file: string, opts: { exclusive?: boolean } = {}): 
 }
 
 let txDepth = 0;
+const afterTx: Array<(db: DB) => void> = [];
+
+/** True while an IMMEDIATE transaction started by `tx()` is open. */
+export function inTransaction(): boolean {
+  return txDepth > 0;
+}
+
+/**
+ * Run `fn` now, or after the current `tx()` commits or rolls back. Used so a rejected write
+ * can still leave an audit row after the transaction is undone.
+ */
+export function afterTransaction(db: DB, fn: (db: DB) => void): void {
+  if (txDepth > 0) afterTx.push(fn);
+  else fn(db);
+}
+
+function flushAfterTx(db: DB): void {
+  const pending = afterTx.splice(0);
+  for (const fn of pending) {
+    try {
+      fn(db);
+    } catch {
+      // Post-transaction hooks must not hide the original result.
+    }
+  }
+}
+
 /**
  * Runs fn inside one IMMEDIATE transaction (a write lock is taken up front, so concurrent
  * writers are serialized). A change and its log event are always written through this.
@@ -49,6 +76,7 @@ export function tx<T>(db: DB, fn: () => T): T {
     throw e;
   } finally {
     txDepth = 0;
+    flushAfterTx(db);
   }
 }
 

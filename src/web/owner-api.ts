@@ -12,6 +12,7 @@ import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, se
 import { saveRoutine } from '../domain/routines.ts';
 import { claimTask, commentTask, saveTask } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
+import { createReviewComment, getReviewComment, listReviewComments, listSetupNotesHistory, replyReviewComment, reviewCounts, setReviewCommentStatus, type ReviewStatus } from '../domain/reviews.ts';
 import { changes, ENTITY_TYPES, getEntity, search, type EntityType } from '../domain/views.ts';
 import { log } from '../util/log.ts';
 import { changeFeed, mapView, taskTree } from './owner-views.ts';
@@ -309,6 +310,37 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.post('/routines', async (c) => c.json(saveRoutine(db, actor(c), await body(c))));
   api.post('/tasks/:id/claim', async (c) => c.json(claimTask(db, actor(c), { id: c.req.param('id'), role: (await body<{ role?: string }>(c).catch(() => ({}) as { role?: string })).role })));
   api.post('/tasks/:id/comment', async (c) => c.json(commentTask(db, actor(c), { id: c.req.param('id'), body: String((await body<{ body?: string }>(c)).body ?? '') })));
+  api.get('/reviews/counts', (c) => c.json(reviewCounts(db, actor(c).memberId)));
+  api.get('/reviews/:id', (c) => c.json(getReviewComment(db, actor(c).memberId, c.req.param('id'))));
+  api.get('/reviews', (c) => {
+    const q = c.req.query();
+    const status = q.status === 'all' ? 'all' : q.status ? (q.status.split(',') as ReviewStatus[]) : undefined;
+    const limit = q.limit ? Number(q.limit) : undefined;
+    const offset = q.offset ? Number(q.offset) : undefined;
+    const version_id = q.version_id ? Number(q.version_id) : undefined;
+    const version = q.version ? Number(q.version) : undefined;
+    return c.json(listReviewComments(db, actor(c).memberId, {
+      status,
+      target_type: q.target_type,
+      target_id: q.target_id,
+      field: q.field,
+      version_id: Number.isFinite(version_id) ? version_id : undefined,
+      version: Number.isFinite(version) ? version : undefined,
+      include_resolved: q.include_resolved === '1',
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : undefined,
+    }));
+  });
+  api.post('/reviews', async (c) => c.json(createReviewComment(db, actor(c), await body(c))));
+  api.post('/reviews/:id/reply', async (c) => {
+    const b = await body<{ body?: string; status?: ReviewStatus; rev?: number; expected_status?: ReviewStatus }>(c);
+    return c.json(replyReviewComment(db, actor(c), { id: c.req.param('id'), body: String(b.body ?? ''), status: b.status, rev: b.rev, expected_status: b.expected_status }));
+  });
+  api.post('/reviews/:id/status', async (c) => {
+    const b = await body<{ status?: ReviewStatus; rev?: number; expected_status?: ReviewStatus }>(c);
+    return c.json(setReviewCommentStatus(db, actor(c), { id: c.req.param('id'), status: b.status as ReviewStatus, rev: b.rev, expected_status: b.expected_status }));
+  });
+  api.get('/roles/:id/setup-notes-history', (c) => c.json({ history: listSetupNotesHistory(db, actor(c).memberId, c.req.param('id')), starts_at_upgrade: true }));
   api.post('/archive', async (c) => {
     const b = await body<{ type: ArchivableType; id: string; restore?: boolean }>(c);
     if (!ARCHIVABLE.includes(b.type)) throw new DomainError('invalid', 'unknown type');

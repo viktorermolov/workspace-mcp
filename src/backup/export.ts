@@ -28,6 +28,7 @@ const MAX_UNPACKED = 512 * 1024 * 1024;
 const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'version', member: true, order: 'id' },
   { name: 'role', member: true, order: 'created_at, id' },
+  { name: 'setup_notes_history', member: true, order: 'id' },
   { name: 'role_link', member: true, order: 'created_at, id' },
   { name: 'routine', member: true, order: 'created_at, id' },
   { name: 'project', member: true, order: 'created_at, id' },
@@ -36,6 +37,8 @@ const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'task', member: true, order: 'created_at, id' },
   { name: 'task_dependency', member: false, order: 'task_id, depends_on_id' },
   { name: 'task_comment', member: true, order: 'created_at, id' },
+  { name: 'review_comment', member: true, order: 'created_at, id' },
+  { name: 'review_reply', member: true, order: 'created_at, id' },
   { name: 'checkpoint', member: true, order: 'created_at, id' },
   { name: 'event', member: true, order: 'id' },
 ];
