@@ -4,7 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- A role can have an optional "reports to" parent (`parent_id`). The Map page lays roles out as a reporting tree instead of a circle: solid lines are reporting and declared links, dashed lines are recorded interactions. Node cards list open tasks and routines.
+
+### Changed
+
+- The Map page no longer uses a circular layout or hides the graph when there are more than 16 roles; the tree scrolls inside its own container.
+
 ### Fixed
+
+- A rejected role check is still recorded in the owner diagnostics after the write transaction is rolled back.
+
 
 - In warning mode, `claim_task` with an unknown `claimed_role` and no `role` now proceeds with a warning instead of failing with `not_found`.
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
