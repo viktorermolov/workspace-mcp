@@ -3,6 +3,7 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { all, get, run, tx, type DB } from '../db/db.ts';
 import { currentBody, DomainError, indexEntity, slugify } from '../domain/core.ts';
 import { indexProject, indexRole, type DocumentRow, type ProjectRow, type RoleRow } from '../domain/entities.ts';
+import { indexRoutine, type RoutineRow } from '../domain/routines.ts';
 import { indexTask, type TaskRow } from '../domain/tasks.ts';
 import { VERSION } from '../version.ts';
 
@@ -10,7 +11,7 @@ import { VERSION } from '../version.ts';
  * Export format, version 1: a zip with
  *   manifest.json   format id and version, app version, time, sha256 of every other file, row counts
  *   workspace.json  every workspace table (structure, links, full version history, log)
- *   *.md            readable views (rules, roles, projects, documents, tasks) with YAML front matter
+ *   *.md            readable views (rules, roles, routines, projects, documents, tasks) with YAML front matter
  * Secrets, tokens, webhooks, connections and the GitHub mirror are never included.
  * Import reads workspace.json only; the Markdown files are views for people and other tools.
  */
@@ -25,6 +26,7 @@ const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'rules', member: true, order: 'member_id' },
   { name: 'role', member: true, order: 'created_at, id' },
   { name: 'role_link', member: true, order: 'created_at, id' },
+  { name: 'routine', member: true, order: 'created_at, id' },
   { name: 'project', member: true, order: 'created_at, id' },
   { name: 'document', member: true, order: 'created_at, id' },
   { name: 'task', member: true, order: 'created_at, id' },
@@ -94,6 +96,23 @@ export function buildExport(db: DB, memberId: string): { zip: Uint8Array; manife
       frontMatter({ type: 'role', id: r.id, slug: r.slug, name: r.name, area: r.area, links: links.length ? links : undefined, archived_at: r.archived_at, updated_at: r.updated_at }) +
         currentBody(db, r.current_version) +
         (r.setup_notes ? `\n\n## Setup notes\n\n${r.setup_notes}\n` : ''),
+    );
+  }
+  for (const r of (tables.routine ?? []) as unknown as RoutineRow[]) {
+    files[unique(`routines/${safeName(r.name, r.id)}.md`)] = strToU8(
+      frontMatter({
+        type: 'routine',
+        id: r.id,
+        name: r.name,
+        role: slugOf.get(r.role_id) ?? r.role_id,
+        schedule: r.schedule,
+        timezone: r.timezone,
+        status: r.status,
+        external_id: r.external_id,
+        last_run_at: r.last_run_at,
+        archived_at: r.archived_at,
+        updated_at: r.updated_at,
+      }) + (r.last_run_result || ''),
     );
   }
   for (const p of tables.project as unknown as ProjectRow[]) {
@@ -194,7 +213,7 @@ export function readExport(zip: Uint8Array): { manifest: Manifest; data: { membe
 
 /** True when the member has no content (only the empty rules row created at first start). */
 export function isWorkspaceEmpty(db: DB, memberId: string): boolean {
-  for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint']) {
+  for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint', 'routine']) {
     if (get(db, `SELECT 1 FROM ${t} WHERE member_id = ? LIMIT 1`, memberId)) return false;
   }
   return true;
@@ -238,6 +257,7 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
     for (const p of all<ProjectRow>(db, 'SELECT * FROM project WHERE member_id = ?', memberId)) indexProject(db, p);
     for (const d of all<DocumentRow>(db, 'SELECT * FROM document WHERE member_id = ?', memberId)) indexEntity(db, memberId, 'document', d.id, d.title, currentBody(db, d.current_version));
     for (const t of all<TaskRow>(db, 'SELECT * FROM task WHERE member_id = ?', memberId)) indexTask(db, t);
+    for (const r of all<RoutineRow>(db, 'SELECT * FROM routine WHERE member_id = ?', memberId)) indexRoutine(db, r);
     return { counts, format_version: manifest.format_version, exported_at: manifest.exported_at };
   });
 }

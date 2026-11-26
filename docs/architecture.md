@@ -47,8 +47,8 @@ Workspace MCP is a modular monolith: one Node.js process, one SQLite file, one c
 | `src/config.ts` | Environment variables, validation, keys derived from `SECRET_KEY` with HKDF. |
 | `src/cli.ts`, `bin/` | Offline administration: version, backups, restore, verify, export, import, recovery code. |
 | `src/db/` | Opening the database (WAL, foreign keys, exclusive lock) and the numbered migrations. |
-| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `core.ts` (ids, limits, events, versions, search index). |
-| `src/mcp/` | The MCP server and its 15 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
+| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `core.ts` (ids, limits, events, versions, search index). |
+| `src/mcp/` | The MCP server and its 16 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
 | `src/auth/` | better-auth setup (`auth.ts`), connections and revocation (`connections.ts`), OAuth diagnostics (`diagnostics.ts`), setup and recovery codes (`setup.ts`). |
 | `src/web/` | The HTTP app with security headers and rate limits (`app.ts`), the owner API (`owner-api.ts`) and its read models (`owner-views.ts`). |
 | `src/webhooks/` | Per-role wake-up webhooks: queueing, coalescing, signing, retries (`dispatcher.ts`) and the SSRF-safe sender (`transport.ts`). |
@@ -74,6 +74,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `version` | Immutable versions of rules, role instructions, project descriptions and documents: number, body, author (connection, claimed role or owner), time, note. |
 | `task`, `task_dependency`, `task_comment` | Tasks with status, role, project, parent, dependencies, priority, due date, result, blocking reason; comments. |
 | `checkpoint` | What an agent did, where it stopped and what is next, per role and project. |
+| `routine` | A recurring job owned by a role: name, schedule, timezone, status (`enabled` / `paused`), optional external platform id, last run time and result. The server stores this; it does not run the schedule. |
 | `event` | The log: who changed what and when. Read by cursor. |
 | `idempotency` | Keys that make creates safe to retry. |
 | `start_cursor` | Per connection and role, the event id of the previous `start`, for "changes since your last call". |

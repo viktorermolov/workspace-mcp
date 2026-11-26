@@ -2,7 +2,7 @@
 
 A self-hosted, portable workspace for your AI agents, served as a remote MCP server.
 
-You keep one workspace (working rules, roles, projects, documents, tasks and checkpoints) and connect it to any AI platform that supports remote MCP with OAuth: Claude, ChatGPT, Grok or another client. When you move to a new platform, connect it and say *"This is my workspace, call `start` and continue from there."* Everything the platform changes stays in the workspace for the next one.
+You keep one workspace (working rules, roles, routines, projects, documents, tasks and checkpoints) and connect it to any AI platform that supports remote MCP with OAuth: Claude, ChatGPT, Grok or another client. When you move to a new platform, connect it and say *"This is my workspace, call `start` and continue from there."* Everything the platform changes stays in the workspace for the next one.
 
 The service stores, shows and notifies. It does not run agents, assign work, set priorities or call an LLM: your agents and you decide, the platform executes.
 
@@ -15,7 +15,8 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 ## What it stores
 
 - **Working rules**: how to work with you, shared by every role and platform.
-- **Roles**: area of responsibility, instruction, typed links to other roles, an optional wake-up webhook, and setup notes for what a new platform must recreate by hand (schedules, connectors, triggers).
+- **Roles**: area of responsibility, instruction, typed links to other roles, an optional wake-up webhook, and setup notes for what a new platform must recreate by hand (connectors, triggers).
+- **Routines**: a recurring job owned by a role, with a schedule, timezone, status, optional external platform id, and last run. The server stores this; it does not run the schedule.
 - **Projects**: description, current focus, where work stopped, repositories.
 - **Documents**: Markdown of any kind, attached to the workspace, a project or a role, with full-text search.
 - **Tasks**: status, role, project, parent, dependencies, priority, due date, result, comments and history. Claiming is atomic; cycles are rejected.
@@ -25,7 +26,7 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 
 ## How it works
 
-- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 15 tools. The entry tool `start` returns your working rules, the role's instruction, open tasks, the last checkpoint and what changed since the previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
+- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 16 tools. The entry tool `start` returns your working rules, the role's instruction, open tasks, last checkpoint, routines and what changed since the previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
 - **Agents edit directly, and nothing is lost.** Working rules, role instructions, documents and project descriptions keep every version with its author. Any two versions can be compared line by line, and a rollback is one tap. Agents cannot change history or delete anything permanently.
 - **You see what changed.** The **Changes** screen lists everything agents changed since your last visit, with edits to working rules and role instructions first.
 - **Sign-in without passwords.** Platforms connect through the service's own OAuth 2.1 server (CIMD, dynamic registration or a client you create, PKCE, resource-bound tokens, rotating refresh tokens). You approve each connection with a passkey and can revoke it at any time. Every step of a connection attempt is recorded for diagnosis.

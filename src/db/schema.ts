@@ -316,4 +316,27 @@ CREATE TABLE webhook_delivery (
 CREATE INDEX webhook_delivery_due ON webhook_delivery (status, next_attempt_at);
 `,
   },
+  {
+    id: 2,
+    name: 'routines',
+    sql: `
+CREATE TABLE routine (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  role_id TEXT NOT NULL REFERENCES role(id),
+  name TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  status TEXT NOT NULL CHECK (status IN ('enabled','paused')),
+  external_id TEXT,
+  last_run_at TEXT,
+  last_run_result TEXT NOT NULL DEFAULT '',
+  rev INTEGER NOT NULL DEFAULT 1,
+  archived_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX routine_role ON routine (member_id, role_id, status);
+`,
+  },
 ];
