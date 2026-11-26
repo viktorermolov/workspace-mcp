@@ -102,21 +102,21 @@ describe('role reporting tree', () => {
     assert.equal(cycle.status, 400);
     assert.match(((await cycle.json()) as { message: string }).message, /cycle/);
 
+    const internClear = await roleOf('intern');
+    await owner.json('/api/owner/roles', { json: { id: internClear.id, rev: internClear.rev, parent: null } });
     await owner.json('/api/owner/archive', { json: { type: 'role', id: leadId } });
     const intern2 = await roleOf('intern');
     const archived = await owner.fetch('/api/owner/roles', { json: { id: intern2.id, rev: intern2.rev, parent: 'lead' } });
     assert.equal(archived.status, 400);
     assert.match(((await archived.json()) as { message: string }).message, /archived/);
     await owner.json('/api/owner/archive', { json: { type: 'role', id: leadId, restore: true } });
-    const intern3 = await roleOf('intern');
-    await owner.json('/api/owner/roles', { json: { id: intern3.id, rev: intern3.rev, parent: null } });
   });
 
   it('lets a child under an archived parent save other fields, and keeps parent_id', async () => {
     const writer = await owner.json<{ id: string; rev: number }>('/api/owner/roles', { json: { name: 'Writer', slug: 'writer', parent: 'lead' } });
     await owner.json('/api/owner/archive', { json: { type: 'role', id: leadId } });
     const after = await owner.json<{ area: string; parent: { slug: string } | null }>('/api/owner/roles', {
-      json: { id: writer.id, rev: writer.rev, area: 'Still reporting' },
+      json: { id: writer.id, rev: writer.rev, area: 'Still reporting', parent: 'lead' },
     });
     assert.equal(after.area, 'Still reporting');
     assert.equal(after.parent?.slug, 'lead');
@@ -156,6 +156,42 @@ describe('role reporting tree', () => {
     assert.equal(tooDeep.status, 400);
     assert.match(((await tooDeep.json()) as { message: string }).message, /deeper than 16/);
     for (const id of ids.reverse()) {
+      const row = await roleOf(id);
+      if (row.parent) await owner.json('/api/owner/roles', { json: { id: row.id, rev: row.rev, parent: null } });
+      await owner.json('/api/owner/archive', { json: { type: 'role', id } });
+      await owner.json('/api/owner/purge', { json: { type: 'role', id } });
+    }
+  });
+
+  it('rejects hanging one 10-level chain under another when depth plus subtree height would exceed 16', async () => {
+    const created: string[] = [];
+    const makeChain = async (prefix: string) => {
+      let prev: string | null = null;
+      let root: { id: string; slug: string; rev: number } | undefined;
+      let leafSlug: string | null = null;
+      for (let i = 0; i < 10; i++) {
+        const slug = `${prefix}${String(i).padStart(2, '0')}`;
+        const role = await owner.json<{ id: string; slug: string; rev: number }>(
+          '/api/owner/roles',
+          { json: { name: `${prefix} ${i}`, slug, parent: prev } },
+        );
+        created.push(role.id);
+        if (i === 0) root = role;
+        prev = slug;
+        leafSlug = slug;
+      }
+      return { root: root!, leafSlug: leafSlug! };
+    };
+    const a = await makeChain('a');
+    const b = await makeChain('b');
+    const hanging = await owner.fetch('/api/owner/roles', {
+      json: { id: a.root.id, rev: a.root.rev, parent: b.leafSlug },
+    });
+    assert.equal(hanging.status, 400);
+    assert.match(((await hanging.json()) as { message: string }).message, /deeper than 16/);
+    const still = await roleOf(a.root.id);
+    assert.equal(still.parent, null);
+    for (const id of created.reverse()) {
       const row = await roleOf(id);
       if (row.parent) await owner.json('/api/owner/roles', { json: { id: row.id, rev: row.rev, parent: null } });
       await owner.json('/api/owner/archive', { json: { type: 'role', id } });
@@ -221,6 +257,41 @@ describe('role reporting tree', () => {
       return true;
     });
     await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+  });
+
+  it('creating a role with parent null or omitted does not run the parent permission check (#81)', async () => {
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce' } });
+    const created = await call<{ id: string; slug: string; parent: { slug: string } | null; warnings?: Warning[] }>(
+      agent,
+      'save_role',
+      { name: 'No parent on create', slug: 'no-parent-create', parent: null, claimed_role: 'intern' },
+    );
+    assert.equal(created.parent, null);
+    assert.ok(!created.warnings?.some((w) => /reporting line/.test(w.message)));
+
+    const omitted = await call<{ id: string; parent: { slug: string } | null; warnings?: Warning[] }>(
+      agent,
+      'save_role',
+      { name: 'Omitted parent', slug: 'omitted-parent', claimed_role: 'intern' },
+    );
+    assert.equal(omitted.parent, null);
+
+    const intern = await roleOf('intern');
+    assert.equal(intern.parent, null);
+    const unchanged = await call<{ parent: { slug: string } | null; warnings?: Warning[] }>(agent, 'save_role', {
+      id: intern.id,
+      rev: intern.rev,
+      parent: null,
+      claimed_role: 'intern',
+    });
+    assert.equal(unchanged.parent, null);
+    assert.ok(!unchanged.warnings?.some((w) => /reporting line/.test(w.message)));
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+
+    for (const id of [created.id, omitted.id]) {
+      await owner.json('/api/owner/archive', { json: { type: 'role', id } });
+      await owner.json('/api/owner/purge', { json: { type: 'role', id } });
+    }
   });
 
   it('an edit_any role and the owner can set parent, including at creation', async () => {
@@ -342,6 +413,30 @@ describe('role reporting tree', () => {
 
     const intern2 = await roleOf('intern');
     await owner.json('/api/owner/roles', { json: { id: intern2.id, rev: intern2.rev, parent: null, links: [] } });
+  });
+
+  it('does not draw an agent that claimed the role "owner" in warn mode as the owner on the map', async () => {
+    const settings = await owner.json<{ role_enforcement: string }>('/api/owner/connections');
+    assert.equal(settings.role_enforcement, 'warn');
+    const task = await owner.json<{ id: string }>('/api/owner/tasks', { json: { title: 'Lead work for fake owner', role: 'lead' } });
+    const commented = await call<{ warnings?: Warning[] }>(agent, 'comment_task', {
+      id: task.id,
+      body: 'Agent posing as owner',
+      claimed_role: 'owner',
+    });
+    assert.ok(commented.warnings?.some((w) => w.code === 'role_not_found'));
+    const ev = get<{ actor_kind: string; claimed_role: string }>(
+      env.svc.db,
+      "SELECT actor_kind, claimed_role FROM event WHERE action = 'task.commented' AND entity_id = ? ORDER BY id DESC LIMIT 1",
+      task.id,
+    )!;
+    assert.equal(ev.actor_kind, 'agent');
+    assert.equal(ev.claimed_role, 'owner');
+    const map = mapView(env.svc.db, memberId);
+    assert.ok(
+      !map.interactions.some((i) => i.from === 'owner' && i.to === 'lead' && i.kind === 'commented'),
+      'an agent claiming "owner" must not be drawn as the owner',
+    );
   });
 
   it('start and get expose parent but not interactions', async () => {

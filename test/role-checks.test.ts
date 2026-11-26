@@ -296,4 +296,48 @@ describe('role checks on writes', () => {
     const grok = list.connections.find((c) => c.client_id === clientId)!;
     assert.ok(!grok.roles.some((r) => r.slug === 'temp'));
   });
+
+  it('keeps a rejected role_check audit row after the write transaction rolls back (#80)', async () => {
+    await owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['lead', 'intern'], confirm: true } });
+    await owner.json(`/api/owner/roles/${encodeURIComponent(leadId)}/edit-any`, { json: { edit_any: false } });
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce' } });
+
+    const leadTask = await owner.json<{ id: string; rev: number; result: string | null }>('/api/owner/tasks', {
+      json: { title: 'Lead item for #80', role: 'lead' },
+    });
+    await assert.rejects(
+      () => call(agent, 'save_task', { id: leadTask.id, rev: leadTask.rev, result: 'intern must not write this', claimed_role: 'intern' }),
+      (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        return true;
+      },
+    );
+    const others = get<{ outcome: string; detail: string }>(
+      env.svc.db,
+      "SELECT outcome, detail FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%edit_others%' ORDER BY id DESC LIMIT 1",
+    );
+    assert.ok(others, 'expected a persisted rejected audit for edit_others');
+    assert.equal(JSON.parse(others.detail).reason, 'edit_others');
+    const unchanged = get<{ result: string | null }>(env.svc.db, 'SELECT result FROM task WHERE id = ?', leadTask.id)!;
+    assert.equal(unchanged.result, leadTask.result);
+
+    const beforeRules = await call<{ text: string }>(agent, 'get', { type: 'rules' });
+    await assert.rejects(
+      () => call(agent, 'update_rules', { text: 'Intern must not change the working rules.', claimed_role: 'intern' }),
+      (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        return true;
+      },
+    );
+    const rules = get<{ outcome: string; detail: string }>(
+      env.svc.db,
+      "SELECT outcome, detail FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%edit_rules%' ORDER BY id DESC LIMIT 1",
+    );
+    assert.ok(rules, 'expected a persisted rejected audit for edit_rules');
+    assert.equal(JSON.parse(rules.detail).reason, 'edit_rules');
+    const afterRules = await call<{ text: string }>(agent, 'get', { type: 'rules' });
+    assert.equal(afterRules.text, beforeRules.text);
+
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+  });
 });
