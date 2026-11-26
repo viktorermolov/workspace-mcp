@@ -394,7 +394,8 @@ export function setConnectionRoles(db: DB, actor: Actor, clientId: string, roleR
       if (!c.roles_suggested_at) {
         run(db, 'UPDATE connection SET roles_suggested_at = ? WHERE client_id = ?', now(), clientId);
       }
-      if (listChanged || beforeConfirmed) {
+      // Log when the list changed, when it was un-confirmed, or when this save first locks an empty draft.
+      if (listChanged || beforeConfirmed || !c.roles_suggested_at) {
         recordEvent(db, actor, 'connection', clientId, 'connection.roles_updated', `Allow-list updated for a connection`, {
           role_ids: ids,
           confirmed: false,
