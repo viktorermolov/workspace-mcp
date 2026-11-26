@@ -1,7 +1,7 @@
 import { diffLines } from 'diff';
 import { get, now, run, tx, type DB } from '../db/db.ts';
 import { addVersion, DomainError, getVersion, indexEntity, listVersions, notFound, recordEvent, type Actor, type VersionedType } from './core.ts';
-import { indexProject, indexRole, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
+import { indexProject, indexRole, logLabel, requireDocument, requireProject, requireRole, type ProjectRow, type RoleRow } from './entities.ts';
 
 export interface DiffLine {
   op: '+' | '-' | ' ';
@@ -99,7 +99,8 @@ export function rollback(db: DB, actor: Actor, type: VersionedType, ref: string 
       indexProject(db, get<ProjectRow>(db, 'SELECT * FROM project WHERE id = ?', id)!);
     }
     const action = type === 'rules' ? 'rules.updated' : type === 'role' ? 'role.instruction_updated' : `${type}.updated`;
-    recordEvent(db, actor, type, id, action, `${type} ${type === 'rules' ? '' : id + ' '}rolled back to version ${toNumber} (new version ${v.number})`, {
+    const label = type === 'rules' ? 'Working rules' : logLabel(db, type, id);
+    recordEvent(db, actor, type, id, action, `${label} rolled back to version ${toNumber} (new version ${v.number})`, {
       version: v.number,
       rollback_to: toNumber,
       changed: [type === 'role' ? 'instruction' : type === 'document' ? 'body' : type === 'project' ? 'description' : 'text'],

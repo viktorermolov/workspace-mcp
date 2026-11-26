@@ -8,6 +8,7 @@ import { createBackup, listBackups, restoreBackup, verifyDatabaseFile } from '..
 import { buildExport, readExport } from '../src/backup/export.ts';
 import { loadConfig } from '../src/config.ts';
 import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
+import { migrations } from '../src/db/schema.ts';
 import { ensureOwnerMember, saveRole, updateRules } from '../src/domain/entities.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService } from './helpers/harness.ts';
 
@@ -52,6 +53,46 @@ describe('data safety', () => {
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM role WHERE slug = 'legacy'")!.n, 1);
     assert.ok(verifyDatabaseFile(path.join(env.config.backupDir, pre[0]!.name)).ok);
     await env.close();
+  });
+
+  it('upgrades a database that holds data through a later app migration, with a backup first', async () => {
+    let env = await startService();
+    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(env.svc.db).id };
+    saveRole(env.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Survives the upgrade.' });
+    const dataDir = env.dataDir;
+    await env.close();
+
+    // A later release: one more app migration on top of the current ones (test-only, never shipped).
+    const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: role note', sql: "ALTER TABLE role ADD COLUMN fixture_note TEXT; UPDATE role SET fixture_note = 'migrated';" };
+    migrations.push(fixture);
+    try {
+      env = await startService({ dataDir });
+      const pre = listBackups(env.config).filter((b) => b.reason === 'pre-migration');
+      assert.equal(pre.length, 1);
+      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id)!.n, 1);
+      const role = get<{ instruction: string; fixture_note: string }>(env.svc.db, "SELECT r.fixture_note, v.body AS instruction FROM role r JOIN version v ON v.id = r.current_version WHERE r.slug = 'keeper'")!;
+      assert.deepEqual({ ...role }, { fixture_note: 'migrated', instruction: 'Survives the upgrade.' });
+
+      // The backup holds the database as it was before the migration.
+      const file = path.join(env.config.backupDir, pre[0]!.name);
+      assert.ok(verifyDatabaseFile(file).ok);
+      const before = openDatabase(file);
+      try {
+        assert.equal(get<{ n: number }>(before, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id)!.n, 0);
+        assert.equal(get<{ n: number }>(before, "SELECT count(*) AS n FROM role WHERE slug = 'keeper'")!.n, 1);
+      } finally {
+        before.close();
+      }
+      await env.close();
+
+      // Starting again applies nothing and makes no new pre-migration backup.
+      env = await startService({ dataDir });
+      assert.equal(listBackups(env.config).filter((b) => b.reason === 'pre-migration').length, 1);
+      assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id)!.n, 1);
+    } finally {
+      migrations.splice(migrations.indexOf(fixture), 1);
+      await env.close();
+    }
   });
 
   it('refuses to open a database upgraded by a newer release, so a rollback cannot damage it', async () => {

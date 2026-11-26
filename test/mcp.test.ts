@@ -353,6 +353,26 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('names the item in rollback log entries', async () => {
+    const a = (await connectAgent(env, owner, 'Platform RB')).client;
+    let d = await call(a, 'save_document', { title: 'Rollback notes', body: 'One' });
+    d = await call(a, 'save_document', { id: d.id, rev: d.rev, body: 'Two' });
+    await call(a, 'rollback', { type: 'document', id: d.id, to_version: 1, rev: d.rev });
+    const e = get<{ summary: string }>(env.svc.db, 'SELECT summary FROM event WHERE entity_id = ? ORDER BY id DESC LIMIT 1', d.id)!;
+    assert.equal(e.summary, 'Document "Rollback notes" rolled back to version 1 (new version 3)');
+    await a.close();
+  });
+
+  it('marks a matched phrase in a search snippet once', async () => {
+    const a = (await connectAgent(env, owner, 'Platform S')).client;
+    await call(a, 'save_document', { title: 'Snippet check', body: 'Notes for [TEST] Арина 25.11 meeting, and alpha beta gamma.' });
+    const phrase = await call(a, 'search', { types: ['document'], query: 'TEST Арина 25.11' });
+    assert.match(phrase.results[0].snippet, /\[\[TEST\] Арина 25\.11\] meeting/);
+    const apart = await call(a, 'search', { types: ['document'], query: 'Snippet alpha gamma' });
+    assert.match(apart.results[0].snippet, /\[alpha\] beta \[gamma\]/);
+    await a.close();
+  });
+
   it('records who did what: connection name and claimed role', async () => {
     const a = (await connectAgent(env, owner, 'Platform I')).client;
     await call(a, 'save_task', { title: 'Logged task', role: 'dev', claimed_role: 'lead' });

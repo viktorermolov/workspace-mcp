@@ -148,8 +148,10 @@ export function search(db: DB, memberId: string, input: SearchInput) {
     for (let scanned = 0; ; scanned += batch) {
       const rows = all<{ entity_type: string; entity_id: string; title: string; snip: string }>(
         db,
-        `SELECT entity_type, entity_id, title, snippet(search_fts, 4, '[', ']', '…', 12) AS snip FROM search_fts
+        `SELECT entity_type, entity_id, title, snippet(search_fts, 4, ?, ?, '…', 12) AS snip FROM search_fts
          WHERE search_fts MATCH ? AND member_id = ? AND entity_type IN (${types.map(() => '?').join(',')}) ORDER BY rank LIMIT ? OFFSET ?`,
+        MARK_OPEN,
+        MARK_CLOSE,
         fq,
         memberId,
         ...types,
@@ -158,7 +160,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
       );
       for (const r of rows) {
         const h = hydrate(db, r.entity_type, r.entity_id, input, roleId, projectId);
-        if (h) hits.push({ ...h, snippet: r.snip });
+        if (h) hits.push({ ...h, snippet: markSnippet(r.snip) });
       }
       if (rows.length < batch) break;
       if (hits.length > offset + limit || scanned + batch >= SEARCH_SCAN_MAX) {
@@ -173,6 +175,16 @@ export function search(db: DB, memberId: string, input: SearchInput) {
   const page = hits.slice(offset, offset + limit);
   // `total` counts every match unless the scan stopped early; then it is a lower bound.
   return { results: page, total: hits.length, total_exact: exact, has_more: offset + limit < hits.length, next_cursor: offset + limit < hits.length ? encodeCursor(offset + limit) : null };
+}
+
+// Snippets are marked with private characters first, so marks can be told apart from brackets in the text.
+const MARK_OPEN = '\u0001';
+const MARK_CLOSE = '\u0002';
+const MARK_GAP = /\u0002([^\p{L}\p{N}\n\u0001\u0002]{1,3})\u0001/gu;
+
+/** Marks each matched phrase once: matched words separated only by spaces or punctuation form one mark. */
+export function markSnippet(raw: string): string {
+  return raw.replace(MARK_GAP, '$1').replaceAll(MARK_OPEN, '[').replaceAll(MARK_CLOSE, ']');
 }
 
 function statusOk(input: SearchInput, status?: string): boolean {

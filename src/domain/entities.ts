@@ -548,7 +548,7 @@ const archTable: Record<ArchivableType, string> = { role: 'role', project: 'proj
 const nameColumn: Record<ArchivableType, string> = { role: 'name', project: 'name', document: 'title', task: 'title' };
 
 /** How the change log names an item, for example `Task "Fix login"`. */
-function logLabel(db: DB, type: ArchivableType, id: string): string {
+export function logLabel(db: DB, type: ArchivableType, id: string): string {
   const row = get<{ label: string | null }>(db, `SELECT ${nameColumn[type]} AS label FROM ${archTable[type]} WHERE id = ?`, id);
   const kind = type.charAt(0).toUpperCase() + type.slice(1);
   return row?.label ? `${kind} "${row.label}"` : `${kind} ${id}`;
