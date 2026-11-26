@@ -435,8 +435,8 @@ describe('data safety', () => {
     );
 
     const applied = runAppMigrations(db);
-    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4).
-    assert.equal(applied, 2);
+    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4, role_parent is 5).
+    assert.equal(applied, 3);
     const row = get<{ id: string; slug: string; title: string; is_default: number; project_id: string | null; member_id: string }>(
       db,
       'SELECT id, slug, title, is_default, project_id, member_id FROM rules WHERE member_id = ?',
