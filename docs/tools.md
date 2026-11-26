@@ -41,6 +41,7 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 | `versions` | read | Version list, one version, or a line-by-line comparison. |
 | `rollback` | write | Restore an earlier version as a new version. |
 | `checkpoint` | write | Record what was done, where work stopped, what is next. |
+| `set_issue_role` | write | Set or clear the local role label on a mirrored GitHub issue. |
 | `changes` | read | The change log, by cursor. |
 
 ### `start`
@@ -144,7 +145,16 @@ Input: `role` (required: the role this checkpoint belongs to), `claimed_role` (y
 
 The next `start` for this role returns the latest checkpoint, so another session or another platform continues from the same place.
 
+### `set_issue_role`
+
+Input: either `id` (the mirrored issue id from `get` or `search`) **or** `repo` (`owner/name`) and `number`, not both; `role` (slug or id to assign, or `null`/empty to clear); `claimed_role`.
+
+This changes only the local role label on a mirrored issue. Nothing is written to GitHub. The label does not grant or remove any rights.
+
+Allowed: the owner; a role the owner has marked as allowed to edit any item; or a role the owner has allowed to assign issue labels on that repository. The owner sets the default role and the assigner list on the GitHub screen; MCP cannot change those settings, nor the GitHub token, the selected repositories or sync. In warning mode (the default after an upgrade) a caller who is not allowed still succeeds and the response includes a warning; once enforcement is on, the call is `forbidden`. The connection's confirmed allow-list still applies: being an assigner does not bypass it.
+
 ### `changes`
+
 
 Input: `cursor` (event id, default 0), `limit` (up to 200), `entity_type`, `entity_id`.
 

@@ -305,9 +305,16 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   });
   api.get('/github/available', async (c) => c.json({ repos: await github.availableRepos(actor(c).memberId) }));
   api.post('/github/repos', async (c) => {
-    const b = await body<{ full_name?: string; project?: string | null }>(c);
-    const id = github.addRepo(actor(c), String(b.full_name ?? ''), b.project || null);
+    const b = await body<{ full_name?: string; project?: string | null; default_role?: string | null; assigners?: string[] }>(c);
+    const opts: { project?: string | null; default_role?: string | null; assigners?: string[] } = { default_role: b.default_role, assigners: b.assigners };
+    if (Object.prototype.hasOwnProperty.call(b, 'project')) opts.project = b.project || null;
+    const id = github.addRepo(actor(c), String(b.full_name ?? ''), opts);
     return c.json({ id, status: github.status(actor(c).memberId) });
+  });
+  api.post('/github/repos/:id', async (c) => {
+    const b = await body<{ project?: string | null; default_role?: string | null; assigners?: string[] }>(c);
+    github.updateRepo(actor(c), Number(c.req.param('id')), b);
+    return c.json({ ok: true, status: github.status(actor(c).memberId) });
   });
   api.delete('/github/repos/:id', (c) => {
     github.removeRepo(actor(c), Number(c.req.param('id')));

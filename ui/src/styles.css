@@ -709,6 +709,35 @@ fieldset .row select {
 .issue select {
   width: auto;
 }
+.github-screen .touch-target,
+.github-add .touch-target {
+  min-height: 44px;
+}
+.github-screen .repo-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.github-screen .repo-settings .version-row {
+  align-items: flex-start;
+  gap: 10px;
+}
+.github-screen label.touch-row,
+.github-add label.touch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+.github-screen label.touch-row input[type='checkbox'],
+.github-add label.touch-row input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
 .comments {
   list-style: none;
   padding: 0;

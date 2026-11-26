@@ -21,7 +21,7 @@ One instance serves one owner. It stores text (working rules, role instructions,
 ## Trust boundaries
 
 1. **The internet to the service.** Everything except `/healthz`, OAuth discovery documents and the sign-in pages needs either an OAuth access token (MCP) or the owner's session (web interface).
-2. **A connected platform to the workspace.** A connection can read all content. After the owner turns on enforcement, it can only write under a role on its confirmed allow-list, and only to items that role may edit. It cannot manage connections, webhooks, GitHub, backups or the owner account, cannot delete anything permanently and cannot change version history or the log.
+2. **A connected platform to the workspace.** A connection can read all content. After the owner turns on enforcement, it can only write under a role on its confirmed allow-list, and only to items that role may edit. It cannot manage connections, webhooks, backups or the owner account, cannot delete anything permanently and cannot change version history or the log. It cannot manage GitHub: it cannot change the token, the selected repositories, sync, the default role or the assigner list. It may only set or clear the local role label on a mirrored issue, through `set_issue_role`, and it writes nothing to GitHub.
 3. **Text inside the workspace to the agents that read it.** Content is written by agents and, through the issues mirror, by anyone who can open an issue in a mirrored repository. It is data, not instructions.
 4. **The service to the outside.** The service makes outbound requests only to fetch client metadata documents (CIMD), to deliver webhooks, and to the GitHub API when the owner connected it.
 5. **The host to the service.** Whoever controls the host or the container controls the workspace. The service does not defend against its own operator.
@@ -33,6 +33,8 @@ One instance serves one owner. It stores text (working rules, role instructions,
 Every write from an agent must name the role that is acting (`claimed_role`). The server checks that the role exists, is not archived, and is on the allow-list of that OAuth connection. The owner sets the list on the Connections page. One connection may be allowed to act as several roles, so several bots can share a platform connection and still sign their edits with their own names.
 
 A role may edit items that belong to it. A small set of roles the owner marks as allowed to edit any item may also edit everyone else's. The log records the connection and the role that made the change, and which role the item belonged to, so it is visible who edited whose work.
+
+The role on a mirrored GitHub issue is only a label. It does not grant or remove any rights, including `edit_any`. The owner, a role marked as allowed to edit any item, or a role the owner has allowed to assign labels on that repository may set or clear it. Being an assigner does not bypass the connection's confirmed allow-list. In warning mode (the default after an upgrade, until the owner turns on enforcement) a connected agent that is not allowed to assign the label still succeeds; the response includes a warning and the change is recorded in the log. That is the same policy as for other writes. Once enforcement is on, the call is `forbidden`.
 
 This is protection against mistakes and confusion, not against a hostile agent. A connected platform that is allowed several roles can still claim any of those roles; a compromised connection can act as every role on its list and can read the whole workspace. The server does not authenticate a person or a model behind the role name, and it does not hide content between roles. To cut a platform off, revoke the connection. To tighten who may sign as a role, remove that role from the connection's list.
 
@@ -51,7 +53,8 @@ Only the `instructions` block returned by `start` carries instructions. The serv
 
 ### What MCP cannot do
 
-- Manage connections, OAuth clients, webhooks, the GitHub token, backups, export, import or the owner account.
+- Manage connections, OAuth clients, webhooks, backups, export, import or the owner account.
+- Manage GitHub: the token, the selected repositories, sync, the default role for new issues, or the list of roles allowed to assign issue labels. MCP may only set or clear the local role label on a mirrored issue (`set_issue_role`) and never writes to GitHub.
 - Delete anything permanently. Agents can only archive; permanent deletion is an owner action in the web interface, offered only for archived items.
 - Change or delete version history or the log.
 - Read files, run commands or execute code on the host.

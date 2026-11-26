@@ -405,4 +405,21 @@ ALTER TABLE member ADD COLUMN role_enforcement TEXT NOT NULL DEFAULT 'warn'
 ALTER TABLE project ADD COLUMN owner_role_id TEXT REFERENCES role(id);
 `,
   },
+  // 5 is reserved for #55 (role_parent), 6 for #58 PR B. This migration is written as
+  // id 7 so it stays additive and standalone until those land; the runner applies
+  // pending ids regardless of gaps. After 5 and 6 are on master, keep this entry
+  // after them in this array (do not renumber).
+  {
+    id: 7,
+    name: 'github-issue-roles',
+    sql: `
+ALTER TABLE github_repo ADD COLUMN default_role_id TEXT REFERENCES role(id) ON DELETE SET NULL;
+CREATE TABLE github_repo_assigner (
+  repo_id INTEGER NOT NULL REFERENCES github_repo(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
+  PRIMARY KEY (repo_id, role_id)
+);
+CREATE INDEX github_repo_assigner_role ON github_repo_assigner (role_id);
+`,
+  },
 ];

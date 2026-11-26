@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Agents can set or clear the local role label on a mirrored GitHub issue with `set_issue_role` (by id, or by repository and number). Nothing is written to GitHub. The owner can set a default role for newly synced issues of a repository, and a list of roles allowed to assign labels on that repository, on the GitHub screen. Existing issues are left unchanged until someone sets them explicitly.
+
 ### Fixed
 
 - In warning mode, `claim_task` with an unknown `claimed_role` and no `role` now proceeds with a warning instead of failing with `not_found`.
