@@ -9,6 +9,9 @@ import { h, type ComponentChild } from 'preact';
 export const MAX_BLOCK_NESTING = 16;
 export const MAX_EMPHASIS_NESTING = 16;
 
+/** Forward searches stop after this many characters or at a newline. */
+const SEARCH_BOUND = 2048;
+
 const MAX_NORMALIZE_ROUNDS = 8;
 
 /** Named entities that matter for href smuggling or ordinary text escapes. */
@@ -603,9 +606,106 @@ function parseList(
 
 // ---------------------------------------------------------------- inline
 
+type Scan = {
+  find: (ch: string, from: number) => number;
+  limit: (from: number) => number;
+  soonest: (from: number, chars: string[]) => number;
+  skipSpace: (from: number) => number;
+};
+
+/** Next-index tables so a missing closer is O(1), not a rescan of the tail. */
+function buildScan(text: string): Scan {
+  const nextOf = (ch: string): Int32Array => {
+    const arr = new Int32Array(text.length + 1);
+    arr[text.length] = -1;
+    let nxt = -1;
+    for (let i = text.length - 1; i >= 0; i--) {
+      if (text[i] === ch) nxt = i;
+      arr[i] = nxt;
+    }
+    return arr;
+  };
+  const tables: Record<string, Int32Array> = {
+    '>': nextOf('>'),
+    ')': nextOf(')'),
+    '(': nextOf('('),
+    '"': nextOf('"'),
+    "'": nextOf("'"),
+    ']': nextOf(']'),
+    ' ': nextOf(' '),
+    '\t': nextOf('\t'),
+    '\n': nextOf('\n'),
+  };
+  const limit = (from: number): number => {
+    const cap = Math.min(text.length, from + SEARCH_BOUND);
+    if (from >= text.length) return cap;
+    const nl = tables['\n']![from];
+    return nl !== -1 && nl < cap ? nl : cap;
+  };
+  const find = (ch: string, from: number): number => {
+    if (from >= text.length) return -1;
+    const arr = tables[ch];
+    if (!arr) return -1;
+    const at = arr[from];
+    if (at === -1) return -1;
+    return at < limit(from) ? at : -1;
+  };
+  const soonest = (from: number, chars: string[]): number => {
+    const lim = limit(from);
+    let best = lim;
+    for (const ch of chars) {
+      const arr = tables[ch];
+      if (!arr || from >= text.length) continue;
+      const at = arr[from];
+      if (at !== -1 && at < best) best = at;
+    }
+    return best;
+  };
+  const skipSpace = (from: number): number => {
+    const lim = limit(from);
+    let i = from;
+    while (i < lim && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n')) i++;
+    return i;
+  };
+  return { find, limit, soonest, skipSpace };
+}
+
+/** Positions of backtick runs, grouped by length, for a single left-to-right pass. */
+function buildTickIndex(text: string): { findClose: (after: number, ticks: number) => number } {
+  const byLen = new Map<number, number[]>();
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === '`') {
+      let n = 0;
+      while (i + n < text.length && text[i + n] === '`') n++;
+      let list = byLen.get(n);
+      if (!list) {
+        list = [];
+        byLen.set(n, list);
+      }
+      list.push(i);
+      i += n;
+    } else {
+      i++;
+    }
+  }
+  const cursors = new Map<number, number>();
+  return {
+    findClose(after: number, ticks: number): number {
+      const list = byLen.get(ticks);
+      if (!list) return -1;
+      let k = cursors.get(ticks) ?? 0;
+      while (k < list.length && list[k]! < after) k++;
+      cursors.set(ticks, k);
+      return k < list.length ? list[k]! : -1;
+    },
+  };
+}
+
 function parseInline(text: string, refs: Map<string, string>, emphasisDepth: number): Inline[] {
   if (emphasisDepth > MAX_EMPHASIS_NESTING) throw new MarkdownLimitError('emphasis nesting limit');
   const out: Inline[] = [];
+  const ticks = buildTickIndex(text);
+  const scan = buildScan(text);
   const pushText = (t: string) => {
     if (!t) return;
     const last = out[out.length - 1];
@@ -627,20 +727,24 @@ function parseInline(text: string, refs: Map<string, string>, emphasisDepth: num
     }
 
     if (c === '`') {
-      let ticks = 0;
-      while (i + ticks < text.length && text[i + ticks] === '`') ticks++;
-      const close = findClosingTicks(text, i + ticks, ticks);
+      let n = 0;
+      while (i + n < text.length && text[i + n] === '`') n++;
+      const close = ticks.findClose(i + n, n);
       if (close !== -1) {
-        let code = text.slice(i + ticks, close);
+        let code = text.slice(i + n, close);
         if (code.startsWith(' ') && code.endsWith(' ') && code.trim()) code = code.slice(1, -1);
         out.push({ type: 'code', text: code });
-        i = close + ticks;
+        i = close + n;
         continue;
       }
+      // No closing run of this length: emit the whole opener as text (CommonMark).
+      pushText(text.slice(i, i + n));
+      i += n;
+      continue;
     }
 
     if (c === '!' && text[i + 1] === '[') {
-      const link = readLink(text, i + 1, refs, true);
+      const link = readLink(text, i + 1, refs, true, scan);
       if (link) {
         const alt = link.children.map(inlineText).join('') || link.rawUrl;
         const safe = link.safe;
@@ -652,7 +756,7 @@ function parseInline(text: string, refs: Map<string, string>, emphasisDepth: num
     }
 
     if (c === '[') {
-      const link = readLink(text, i, refs, false);
+      const link = readLink(text, i, refs, false, scan);
       if (link) {
         if (link.safe) out.push({ type: 'a', href: link.safe.href, kind: link.safe.kind, children: link.children });
         else for (const child of link.children) out.push(child);
@@ -662,8 +766,8 @@ function parseInline(text: string, refs: Map<string, string>, emphasisDepth: num
     }
 
     if (c === '<') {
-      const gt = text.indexOf('>', i + 1);
-      if (gt !== -1 && gt - i <= 2048 && !text.slice(i, gt).includes('\n')) {
+      const gt = scan.find('>', i + 1);
+      if (gt !== -1) {
         const inner = text.slice(i + 1, gt);
         const safe = looksLikeAutolink(inner) ? sanitizeHref(inner) : null;
         if (safe && looksLikeAutolink(inner)) {
@@ -679,12 +783,18 @@ function parseInline(text: string, refs: Map<string, string>, emphasisDepth: num
     }
 
     if (c === '*' || c === '_') {
-      const em = readEmphasis(text, i, refs, emphasisDepth);
+      const em = readEmphasis(text, i, refs, emphasisDepth, ticks);
       if (em) {
         out.push(em.node);
         i = em.end;
         continue;
       }
+      // No closer, or a run longer than 3: emit the whole delimiter run as text.
+      let run = 0;
+      while (i + run < text.length && text[i + run] === c) run++;
+      pushText(text.slice(i, i + run));
+      i += run;
+      continue;
     }
 
     if (c === '\n') {
@@ -712,21 +822,6 @@ function looksLikeAutolink(inner: string): boolean {
   return hasScheme(inner) !== null;
 }
 
-function findClosingTicks(text: string, from: number, ticks: number): number {
-  let i = from;
-  while (i < text.length) {
-    if (text[i] === '`') {
-      let n = 0;
-      while (i + n < text.length && text[i + n] === '`') n++;
-      if (n === ticks) return i;
-      i += n;
-      continue;
-    }
-    i++;
-  }
-  return -1;
-}
-
 function inlineText(n: Inline): string {
   if (n.type === 'text' || n.type === 'code') return n.text;
   if (n.type === 'br') return '\n';
@@ -734,21 +829,34 @@ function inlineText(n: Inline): string {
   return '';
 }
 
-function readDestination(text: string, from: number): { url: string; end: number } | null {
-  let i = from;
-  while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n')) i++;
-  if (i >= text.length) return null;
+function readDestination(text: string, from: number, scan: Scan): { url: string; end: number } | null {
+  const i0 = scan.skipSpace(from);
+  if (i0 >= text.length) return null;
+  let i = i0;
   if (text[i] === '<') {
-    const gt = text.indexOf('>', i + 1);
+    const gt = scan.find('>', i + 1);
     if (gt === -1) return null;
     return { url: text.slice(i + 1, gt), end: gt + 1 };
   }
   // Bare destination: up to the first unescaped ) or whitespace, with balanced parens.
-  let depth = 0;
   const start = i;
-  while (i < text.length) {
+  const lim = scan.limit(start);
+  const stop = scan.soonest(start, [')', ' ', '\t', '\n', '(']);
+  const escaped = text.slice(start, Math.min(stop, lim)).includes('\\');
+  if (!escaped && (stop >= lim || text[stop] !== '(')) {
+    // No opening paren to balance: the destination ends at the first terminator, or at the bound.
+    if (stop < lim && (text[stop] === ')' || text[stop] === ' ' || text[stop] === '\t' || text[stop] === '\n')) {
+      if (stop === start) return null;
+      return { url: text.slice(start, stop), end: stop };
+    }
+    if (start >= lim) return null;
+    return { url: text.slice(start, lim), end: lim };
+  }
+  let depth = 0;
+  i = start;
+  while (i < lim) {
     const c = text[i];
-    if (c === '\\' && i + 1 < text.length) {
+    if (c === '\\' && i + 1 < lim) {
       i += 2;
       continue;
     }
@@ -769,12 +877,14 @@ function readLink(
   openBracket: number,
   refs: Map<string, string>,
   _image: boolean,
+  scan: Scan,
 ): { children: Inline[]; rawUrl: string; safe: SafeHref | null; end: number } | null {
-  // Find the matching close bracket with a linear scan (nested [] counted).
+  // Matching close bracket, bounded so a flood of '[' cannot rescan the rest of the text.
   let i = openBracket + 1;
   let depth = 1;
-  while (i < text.length && depth > 0) {
-    if (text[i] === '\\' && i + 1 < text.length) {
+  const labelLimit = Math.min(text.length, openBracket + 1 + SEARCH_BOUND);
+  while (i < labelLimit && depth > 0) {
+    if (text[i] === '\\' && i + 1 < labelLimit) {
       i += 2;
       continue;
     }
@@ -789,22 +899,20 @@ function readLink(
   let url: string | null = null;
   let end = close + 1;
   if (text[close + 1] === '(') {
-    const dest = readDestination(text, close + 2);
+    const dest = readDestination(text, close + 2, scan);
     if (!dest) return null;
-    let j = dest.end;
-    while (j < text.length && (text[j] === ' ' || text[j] === '\t' || text[j] === '\n')) j++;
+    let j = scan.skipSpace(dest.end);
     if (text[j] === '"' || text[j] === "'" || text[j] === '(') {
       const q = text[j] === '(' ? ')' : text[j];
-      const qend = text.indexOf(q, j + 1);
+      const qend = scan.find(q, j + 1);
       if (qend === -1) return null;
-      j = qend + 1;
+      j = scan.skipSpace(qend + 1);
     }
-    while (j < text.length && (text[j] === ' ' || text[j] === '\t' || text[j] === '\n')) j++;
     if (text[j] !== ')') return null;
     url = dest.url;
     end = j + 1;
   } else if (text[close + 1] === '[') {
-    const endLab = text.indexOf(']', close + 2);
+    const endLab = scan.find(']', close + 2);
     if (endLab === -1) return null;
     const key = normalizeLabel(text.slice(close + 2, endLab) || label);
     const dest = refs.get(key);
@@ -826,19 +934,17 @@ function readEmphasis(
   from: number,
   refs: Map<string, string>,
   emphasisDepth: number,
+  ticks: { findClose: (after: number, ticks: number) => number },
 ): { node: Inline; end: number } | null {
   const ch = text[from];
   if (ch !== '*' && ch !== '_') return null;
   let run = 0;
   while (from + run < text.length && text[from + run] === ch) run++;
   if (run > 3) return null;
-  // Find a matching closer of the same character, same length (1 = em, 2 = strong, 3 = strong+em).
-  // Linear scan; no backtracking.
-  const want = run === 3 ? 1 : run; // parse *** as em wrapping a later strong, or try exact first
   // Prefer the longest match of 2 then 1 for '**text**'.
   const tryLen = run >= 2 ? [Math.min(run, 2), 1] : [1];
   for (const len of tryLen) {
-    const close = findEmphasisClose(text, from + run, ch, len);
+    const close = findEmphasisClose(text, from + run, ch, len, ticks);
     if (close === -1) continue;
     const inner = text.slice(from + len, close);
     const children = parseInline(inner, refs, emphasisDepth + 1);
@@ -848,7 +954,13 @@ function readEmphasis(
   return null;
 }
 
-function findEmphasisClose(text: string, from: number, ch: string, len: number): number {
+function findEmphasisClose(
+  text: string,
+  from: number,
+  ch: string,
+  len: number,
+  ticks: { findClose: (after: number, ticks: number) => number },
+): number {
   let i = from;
   while (i < text.length) {
     if (text[i] === '\\' && i + 1 < text.length) {
@@ -856,10 +968,10 @@ function findEmphasisClose(text: string, from: number, ch: string, len: number):
       continue;
     }
     if (text[i] === '`') {
-      let ticks = 0;
-      while (i + ticks < text.length && text[i + ticks] === '`') ticks++;
-      const close = findClosingTicks(text, i + ticks, ticks);
-      i = close === -1 ? i + ticks : close + ticks;
+      let n = 0;
+      while (i + n < text.length && text[i + n] === '`') n++;
+      const close = ticks.findClose(i + n, n);
+      i = close === -1 ? i + n : close + n;
       continue;
     }
     if (text[i] === ch) {

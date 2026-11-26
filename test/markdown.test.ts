@@ -164,29 +164,86 @@ describe('autolinks, images and internal links', () => {
   });
 });
 
+function unclosedBacktickRuns(n: number): string {
+  let s = '';
+  for (let len = 1; s.length < n; len++) s += '`'.repeat(len) + 'x';
+  if (s.length > n) {
+    const cut = s.lastIndexOf('x', n - 1);
+    s = s.slice(0, cut + 1) + 'y'.repeat(n - (cut + 1));
+  }
+  return s;
+}
+
+function withinMs(name: string, src: string, limitMs: number, check: (tree: ReturnType<typeof renderMarkdown>) => void): number {
+  const t0 = performance.now();
+  const tree = renderMarkdown(src);
+  const ms = performance.now() - t0;
+  check(tree);
+  assert.ok(ms < limitMs, `${name} took ${ms.toFixed(1)} ms (limit ${limitMs})`);
+  return ms;
+}
+
 describe('pathological and large inputs', () => {
   it('parses a 200k-character document in linear time', () => {
     const chunk = '## Head\n\nA paragraph with a [link](https://example.com/x) and `code`.\n\n> quote\n\n';
     const src = chunk.repeat(Math.ceil(200_000 / chunk.length)).slice(0, 200_000);
-    const t0 = performance.now();
-    const tree = renderMarkdown(src);
-    const ms = performance.now() - t0;
-    assert.ok(collectTags(tree).includes('h2'));
-    assert.ok(ms < 2_000, `200k parse took ${ms} ms`);
+    withinMs('200k mixed document', src, 2_000, (tree) => {
+      assert.ok(collectTags(tree).includes('h2'));
+    });
   });
 
   it('handles 10k * , [ and > without hanging and without leaking a bad href', () => {
     for (const ch of ['*', '[', '>']) {
-      const src = ch.repeat(10_000);
-      const t0 = performance.now();
-      const tree = renderMarkdown(src);
-      const ms = performance.now() - t0;
-      assert.ok(ms < 1_000, `${ch} x 10k took ${ms} ms`);
-      assert.ok(collectHrefs(tree).every(isAllowedHref));
+      withinMs(`${ch} x 10k`, ch.repeat(10_000), 1_000, (tree) => {
+        assert.ok(collectHrefs(tree).every(isAllowedHref));
+      });
     }
     const mixed = `${'*['.repeat(5_000)}>`.repeat(1);
     const tree = renderMarkdown(mixed);
     assert.ok(collectHrefs(tree).every(isAllowedHref));
+  });
+
+  it('parses 200k unclosed backtick runs, [a]( repeats and < in well under a second', () => {
+    const backticks = unclosedBacktickRuns(200_000);
+    withinMs('200k unclosed backtick runs', backticks, 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('code'), false);
+      assert.equal(collectHrefs(tree).length, 0);
+      assert.equal(collectText(tree).length, 200_000);
+      assert.match(collectText(tree), /x/);
+    });
+
+    const links = '[a]('.repeat(50_000);
+    withinMs('200k [a]( repeats', links, 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('a'), false);
+      assert.equal(collectHrefs(tree).length, 0);
+      assert.equal(collectText(tree), links);
+    });
+
+    const angles = '<'.repeat(200_000);
+    withinMs('200k <', angles, 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('a'), false);
+      assert.equal(collectHrefs(tree).length, 0);
+      assert.equal(collectText(tree), angles);
+    });
+  });
+
+  it('parses 200k unmatched emphasis delimiters and brackets in well under a second', () => {
+    // A leading "a" keeps a long run of * or _ from becoming a thematic break.
+    withinMs('200k unmatched *', 'a' + '*'.repeat(199_999), 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('em'), false);
+      assert.equal(collectTags(tree).includes('strong'), false);
+      assert.equal(collectText(tree).length, 200_000);
+    });
+    withinMs('200k unmatched _', 'a' + '_'.repeat(199_999), 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('em'), false);
+      assert.equal(collectTags(tree).includes('strong'), false);
+      assert.equal(collectText(tree).length, 200_000);
+    });
+    withinMs('200k [', '['.repeat(200_000), 1_000, (tree) => {
+      assert.equal(collectTags(tree).includes('a'), false);
+      assert.equal(collectHrefs(tree).length, 0);
+      assert.equal(collectText(tree).length, 200_000);
+    });
   });
 });
 
