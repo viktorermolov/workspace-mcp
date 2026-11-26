@@ -49,17 +49,23 @@ docker build -t workspace-mcp:local . && scripts/container-smoke.sh workspace-mc
 - Branch from `master` and open a pull request. Every change goes through a pull request; `master` is never pushed to directly.
 - Every pull request must include `Fixes #N` in its description. A pull request without an issue is not accepted. Open the issue first, then the pull request.
 - Describe what changes for a user, and how you tested it.
-- A pull request is merged when CI is green and it has been reviewed.
+- A pull request is merged when CI is green and it has been reviewed. See [Releasing](#releasing) for the extra requirement on a release pull request, and for when nothing else may merge.
 
 
 ## Releasing
 
-Releases are made by merging, only from `master`, with no tag to push by hand:
+Releases are made by merging, only from `master`, with no tag to push by hand.
 
-1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md`, `docs/deployment.md` (published images) and `docs/runbook-raspberry-pi.md`. Merge it. That merge commit is the release.
+A release pull request is one that changes the version in `package.json` or `package-lock.json`, or that adds a `## [X.Y.Z]` section to `CHANGELOG.md`. It is merged only after Viktor's explicit yes, relayed by Арина, plus Dev Guardian's PASS and green CI. Every other pull request is merged after Dev Guardian's PASS and green CI.
+
+1. In a release pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md`, `docs/deployment.md` (published images) and `docs/runbook-raspberry-pi.md`. Merge it only under the rule above. That merge does not itself publish the release: the release is cut from the first `master` push that the release workflow processes while `package.json` names that unreleased version and `CHANGELOG.md` has a section for it.
 2. After the first release only: GitHub creates the container package as private. Make it public in the package settings (Package settings → Change visibility), so `docker pull` works without signing in.
 
+While `master` holds an unreleased version (the version in `package.json` has a `## [X.Y.Z]` changelog section and no published GitHub Release yet), do not merge any other pull request into `master`, documentation included, until that Release is published. Otherwise the release is cut from a later, unrelated commit.
+
 On every push to `master`, the release workflow checks whether the version in `package.json` is released yet; if it is, it does nothing. If not, that commit is the release: it requires a non-empty `CHANGELOG.md` section for that version (a missing one fails the run rather than skipping the release), `package-lock.json` to match and the version to be absent from the registry and from git tags elsewhere, runs the full CI on that commit, builds and tests the images, signs them, then tags them, and creates the git tag `vX.Y.Z` on that commit and the GitHub Release from the changelog section. If a release fails before its images are tagged, fix the cause and merge again, or run the workflow manually on `master` (Actions → release → Run workflow); if it fails after that, re-run its failed jobs, which finishes the same signed image. `latest` moves only when the new version is the highest. A released version is never rebuilt or republished: to fix one, release a new version.
+
+Tags matching `v*` are protected by a [repository ruleset](https://github.com/viktorermolov/workspace-mcp/rules/28173546): they can be created, but they cannot be moved or deleted.
 
 ## Issue standard
 
@@ -83,5 +89,4 @@ Use the issue forms when they apply. A documentation issue must include a `file:
 This repository is public. Do not disclose details of a security issue until a fix exists. A public issue, if any, should have only a general title and a note that the details were sent separately. Send the details privately to Арина or Viktor, outside the public issue.
 
 By contributing, you agree that your contributions are licensed under the project's license, the [GNU Affero General Public License v3.0 only](LICENSE).
-
 
