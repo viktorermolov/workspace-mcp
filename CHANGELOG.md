@@ -12,7 +12,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Re-anchoring a review comment on repeated lines no longer jumps up to 20 lines away: context is compared the way it is stored (including the separating newline), a fuzzy tie picks the hit nearest the old line, and a unique occurrence outside the window is accepted only when the stored context matches.
+- Re-anchoring a review comment on repeated lines no longer jumps up to 20 lines away: context is compared the way it is stored (including the separating newline), a fuzzy tie picks the hit nearest the old line, and a unique occurrence outside the window is accepted when at least one adjacent line matches.
+- A unique hit outside the re-anchor window is no longer rejected just because the quoted paragraph is longer than 500 characters or only one neighbouring line moved with the block: `ctx_after` is stored after the truncated quote, and the far-hit check compares only the adjacent line on each side.
+- Review comment quotes no longer keep a trailing `\r` on CRLF text, so editing the commented line keeps the same anchor as on LF text.
 - In warning mode, `claim_task` with an unknown `claimed_role` and no `role` now proceeds with a warning instead of failing with `not_found`.
 - `GET /api/owner/connections` no longer writes a suggested role list. Suggestions are still shown from that connection's history until the owner saves or confirms the list, or turns on enforcement.
 - Saving a connection's role list without confirming it now records a log event.

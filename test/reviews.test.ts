@@ -256,6 +256,117 @@ describe('review comments', () => {
     }
   });
 
+  it('keeps a comment on the nearest repeated line when the body uses CRLF endings', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const lines = Array.from({ length: 100 }, (_, i) => ((i + 1) % 5 === 0 ? '  return null;' : `  step${i + 1}();`));
+      const doc = saveDocument(db, owner, { title: 'CRLF returns', body: lines.join('\r\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'fix this return', line_start: 50, line_end: 50 });
+      assert.equal(c.quote, '  return null;');
+      const next = [...lines];
+      next[49] = '  return null; // fixed';
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\r\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_line_start, 50, `jumped to line ${after.anchor_line_start} (${after.anchor_state})`);
+      assert.ok(after.anchor_state === 'exact' || after.anchor_state === 'moved', after.anchor_state);
+    } finally {
+      close();
+    }
+  });
+
+  it('still finds a unique paragraph longer than 500 characters when the diff hits maxEditLength', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const paragraph = 'LONG_PARAGRAPH_START ' + 'x'.repeat(780) + ' END';
+      assert.ok(paragraph.length > 500);
+      const oldLines = Array.from({ length: 4000 }, (_, i) => `old-${i}-aaaaaaaa`);
+      oldLines[99] = 'UNIQUE_CTX_BEFORE'.padEnd(80, 'X');
+      oldLines[100] = paragraph;
+      oldLines[101] = 'UNIQUE_CTX_AFTER'.padEnd(80, 'Y');
+      const newLines = Array.from({ length: 4000 }, (_, i) => `new-${i}-bbbbbbbb`);
+      newLines[3499] = 'UNIQUE_CTX_BEFORE'.padEnd(80, 'X');
+      newLines[3500] = paragraph;
+      newLines[3501] = 'UNIQUE_CTX_AFTER'.padEnd(80, 'Y');
+      const role = saveRole(db, owner, { name: 'Writer', slug: 'writer', instruction: oldLines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'role', target_id: role.id, field: 'instruction', body: 'long para', line_start: 101, line_end: 101 });
+      assert.equal(c.quote, paragraph.slice(0, 500));
+      const map = computeLineMap(oldLines.join('\n'), newLines.join('\n'), { timeoutMs: 200, maxEditLength: DIFF_MAX_EDIT_LENGTH });
+      assert.equal(map.limited, true);
+      saveRole(db, owner, { id: role.id, rev: role.rev, instruction: newLines.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_state, 'exact');
+      assert.equal(after.anchor_line_start, 3501);
+    } finally {
+      close();
+    }
+  });
+
+  it('keeps a long unique paragraph exact when it moves more than 20 lines with its neighbours', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      // Short lines so 64 characters of context span more than the one neighbour that moved.
+      const paragraph = 'LONG_PARAGRAPH_START ' + 'y'.repeat(780) + ' END';
+      assert.ok(paragraph.length > 500);
+      const lines = Array.from({ length: 4000 }, (_, i) => `old ${i + 1}`);
+      lines[19] = 'NEIGHBOUR_BEFORE';
+      lines[20] = paragraph; // line 21
+      lines[21] = 'NEIGHBOUR_AFTER';
+      const next = Array.from({ length: 3997 }, (_, i) => `new ${i + 1}`);
+      next.push('NEIGHBOUR_BEFORE', paragraph, 'NEIGHBOUR_AFTER');
+      const map = computeLineMap(lines.join('\n'), next.join('\n'), { timeoutMs: 200, maxEditLength: DIFF_MAX_EDIT_LENGTH });
+      assert.equal(map.limited, true);
+      const doc = saveDocument(db, owner, { title: 'Long move', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'the paragraph', line_start: 21, line_end: 21 });
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_state, 'exact', after.anchor_state);
+      assert.equal(after.anchor_line_start, 3999);
+    } finally {
+      close();
+    }
+  });
+
+  it('keeps a 3-line range exact when it moves to the end with one neighbour on each side', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      // Same geometry as a 200-line file landing at 197–199, but long enough that the diff is limited
+      // and the unique-hit path runs. Short lines so 64 characters span past the one neighbour.
+      const lines = Array.from({ length: 4000 }, (_, i) => `old ${i + 1}`);
+      const next = Array.from({ length: 3995 }, (_, i) => `new ${i + 1}`);
+      next.push(...lines.slice(8, 13)); // orig 9–13 land at 3996–4000; range is 3997–3999
+      const map = computeLineMap(lines.join('\n'), next.join('\n'), { timeoutMs: 200, maxEditLength: DIFF_MAX_EDIT_LENGTH });
+      assert.equal(map.limited, true);
+      const doc = saveDocument(db, owner, { title: 'Block edge', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'this block', line_start: 10, line_end: 12 });
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_state, 'exact', after.anchor_state);
+      assert.equal(after.anchor_line_start, 3997);
+      assert.equal(after.anchor_line_end, 3999);
+    } finally {
+      close();
+    }
+  });
+
+  it('keeps a single line exact when it moves with one neighbour on each side', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const lines = Array.from({ length: 4000 }, (_, i) => `old ${i + 1}`);
+      const next = Array.from({ length: 3997 }, (_, i) => `new ${i + 1}`);
+      next.push(...lines.slice(9, 12)); // orig 10–12 land at 3998–4000; the commented line is 3999
+      const map = computeLineMap(lines.join('\n'), next.join('\n'), { timeoutMs: 200, maxEditLength: DIFF_MAX_EDIT_LENGTH });
+      assert.equal(map.limited, true);
+      const doc = saveDocument(db, owner, { title: 'Single with neighbours', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'this line', line_start: 11, line_end: 11 });
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_state, 'exact', after.anchor_state);
+      assert.equal(after.anchor_line_start, 3999);
+    } finally {
+      close();
+    }
+  });
+
   it('still runs exact-quote search when the diff hits maxEditLength', () => {
     const { db, owner, close } = memoryDb();
     try {

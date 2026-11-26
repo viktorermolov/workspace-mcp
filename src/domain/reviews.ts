@@ -124,17 +124,80 @@ function extractRange(text: string, start: number, end: number): string {
   return extractRangeIndexed(text, lineStarts(text), start, end);
 }
 
-function contextAround(text: string, start: number, end: number): { ctx_before: string; ctx_after: string } {
+function stripTrailingCR(s: string): string {
+  return s.endsWith('\r') ? s.slice(0, -1) : s;
+}
+
+/** The last line in a stored before-slice, ignoring a separating newline and a trailing CR. */
+function lastAdjacentLine(stored: string): string {
+  let s = stored;
+  if (s.endsWith('\n')) s = s.slice(0, -1);
+  if (s.endsWith('\r')) s = s.slice(0, -1);
+  const i = s.lastIndexOf('\n');
+  let line = i < 0 ? s : s.slice(i + 1);
+  if (line.endsWith('\r')) line = line.slice(0, -1);
+  return line.length > CONTEXT_CHARS ? line.slice(-CONTEXT_CHARS) : line;
+}
+
+/** The first line in a stored after-slice, ignoring a separating newline and a trailing CR. */
+function firstAdjacentLine(stored: string): string {
+  let s = stored;
+  if (s.startsWith('\r\n')) s = s.slice(2);
+  else if (s.startsWith('\n') || s.startsWith('\r')) s = s.slice(1);
+  const i = s.indexOf('\n');
+  let line = i < 0 ? s : s.slice(0, i);
+  if (line.endsWith('\r')) line = line.slice(0, -1);
+  return line.slice(0, CONTEXT_CHARS);
+}
+
+function adjacentLineBeforeAt(text: string, index: number): string {
+  let end = index;
+  if (end > 0 && text[end - 1] === '\n') end--;
+  if (end > 0 && text[end - 1] === '\r') end--;
+  const start = end === 0 ? 0 : text.lastIndexOf('\n', end - 1) + 1;
+  return lastAdjacentLine(text.slice(start, end));
+}
+
+function adjacentLineAfterAt(text: string, afterIndex: number): string {
+  let start = afterIndex;
+  if (text.startsWith('\r\n', start)) start += 2;
+  else if (text[start] === '\n' || text[start] === '\r') start += 1;
+  const nl = text.indexOf('\n', start);
+  const end = nl < 0 ? text.length : nl;
+  return firstAdjacentLine(text.slice(start, end));
+}
+
+function adjacentBeforeMatch(stored: string, hitLine: string): boolean {
+  const a = lastAdjacentLine(stored);
+  if (!a && !hitLine) return true;
+  if (!a || !hitLine) return false;
+  return a === hitLine || hitLine.endsWith(a) || a.endsWith(hitLine);
+}
+
+function adjacentAfterMatch(stored: string, hitLine: string): boolean {
+  const a = firstAdjacentLine(stored);
+  if (!a && !hitLine) return true;
+  if (!a || !hitLine) return false;
+  return a === hitLine || hitLine.startsWith(a) || a.startsWith(hitLine);
+}
+
+/** Unique out-of-window hits: compare only the adjacent line on each side and accept if either matches. */
+function uniqueHitContextOk(text: string, index: number, quote: string, ctxBefore: string, ctxAfter: string): boolean {
+  const beforeOk = adjacentBeforeMatch(ctxBefore, adjacentLineBeforeAt(text, index));
+  const afterOk = adjacentAfterMatch(ctxAfter, adjacentLineAfterAt(text, index + quote.length));
+  return beforeOk || afterOk;
+}
+
+function contextAround(text: string, start: number, end: number, quote: string): { ctx_before: string; ctx_after: string } {
   const starts = lineStarts(text);
   if (start < 1 || end < start || end > starts.length) {
     throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
   }
-  // Same slices findExact compares against: characters immediately before the quote
-  // (including the newline that ends the previous line) and immediately after it
-  // (including the newline that ends the quoted line).
+  // ctx_after is taken right after the stored (possibly truncated) quote, not after the
+  // full line range, so a paragraph longer than QUOTE_MAX still has a matching after-slice.
   const from = offsetOfLine(starts, text.length, start);
-  const to = endOfLine(starts, text.length, end);
-  return { ctx_before: text.slice(Math.max(0, from - CONTEXT_CHARS), from), ctx_after: text.slice(to, to + CONTEXT_CHARS) };
+  const after = from + quote.length;
+  return { ctx_before: text.slice(Math.max(0, from - CONTEXT_CHARS), from), ctx_after: text.slice(after, after + CONTEXT_CHARS) };
 }
 
 /** True if stored context matches a slice next to a hit, with or without the separating newline.
@@ -196,7 +259,7 @@ function extractRangeIndexed(text: string, starts: number[], start: number, end:
   if (start < 1 || end < start || end > starts.length) {
     throw invalid(`line range ${start}-${end} is outside the text (${starts.length} lines)`);
   }
-  return text.slice(offsetOfLine(starts, text.length, start), endOfLine(starts, text.length, end));
+  return stripTrailingCR(text.slice(offsetOfLine(starts, text.length, start), endOfLine(starts, text.length, end)));
 }
 
 /** Character window around a hint line: ±FUZZY_LINE_WINDOW lines, capped at FUZZY_CHAR_CAP. */
@@ -436,7 +499,7 @@ export function createReviewComment(
           const raw = extractRange(text, lineStart, lineEnd);
           quote = raw.slice(0, QUOTE_MAX);
           hashQ = quoteHash(quote);
-          const ctx = contextAround(text, lineStart, lineEnd);
+          const ctx = contextAround(text, lineStart, lineEnd, quote);
           ctx_before = ctx.ctx_before;
           ctx_after = ctx.ctx_after;
           state = 'exact';
@@ -461,7 +524,7 @@ export function createReviewComment(
           const raw = extractRange(wanted.body, lineStart, lineEnd);
           quote = raw.slice(0, QUOTE_MAX);
           hashQ = quoteHash(quote);
-          const ctx = contextAround(wanted.body, lineStart, lineEnd);
+          const ctx = contextAround(wanted.body, lineStart, lineEnd, quote);
           ctx_before = ctx.ctx_before;
           ctx_after = ctx.ctx_after;
           state = 'exact';
@@ -928,7 +991,7 @@ function findExact(
     if (i < 0) return null;
     if (clock() >= deadline) return 'timeout';
     if (text.indexOf(quote, i + 1) >= 0) return null;
-    if ((ctxBefore || ctxAfter) && !hitContextOk(text, i, quote, ctxBefore, ctxAfter)) return null;
+    if ((ctxBefore || ctxAfter) && !uniqueHitContextOk(text, i, quote, ctxBefore, ctxAfter)) return null;
     return { start: lineAtIndex(starts, i), end: lineAtIndex(starts, i + Math.max(quote.length - 1, 0)) };
   }
   if (hits.length === 1) return { start: hits[0]!.start, end: hits[0]!.end };
