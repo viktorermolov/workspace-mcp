@@ -583,4 +583,23 @@ describe('MCP behaviour', () => {
     assert.equal(detached.project, null);
     await a.close();
   });
+
+  it('sets versioned.id to the rule set id in the owner change feed', async () => {
+    const a = (await connectAgent(env, owner, 'Platform Rules60')).client;
+    const created = await call(a, 'update_rules', { slug: 'feed-set-60', title: 'Feed set 60', text: 'First text of the named set.' });
+    const latest = (await owner.json<{ latest_event_id: number }>('/api/owner/changes')).latest_event_id;
+    await owner.json('/api/owner/changes/reviewed', { json: { up_to: latest } });
+    const updated = await call(a, 'update_rules', { id: created.id, text: 'Updated text of the named set.', rev: created.rev });
+    assert.equal(updated.id, created.id);
+    const feed = await owner.json<{
+      items: { action: string; entity_id: string; versioned: { type: string; id: string | null; version: number } | null }[];
+    }>('/api/owner/changes');
+    const ev = feed.items.find((i) => i.action === 'rules.updated' && i.entity_id === created.id);
+    assert.ok(ev, 'expected a rules.updated event for the named set');
+    assert.equal(ev!.versioned?.type, 'rules');
+    assert.equal(ev!.versioned?.id, created.id);
+    const def = await call(a, 'get', { type: 'rules' });
+    assert.notEqual(ev!.versioned?.id, def.id, 'must not point at the default working-rules set');
+    await a.close();
+  });
 });

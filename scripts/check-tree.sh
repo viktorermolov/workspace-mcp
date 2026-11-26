@@ -12,4 +12,8 @@ patterns='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Z
 if git grep -nE -e "$patterns" -- . ':!scripts/check-tree.sh' ':!package-lock.json'; then
   echo "secret-looking value in the tree (above)"; fail=1
 fi
+# The owner interface must never insert markup from strings.
+if git grep -nE -e 'innerHTML|outerHTML|insertAdjacentHTML|dangerouslySetInnerHTML|document\.write' -- ui/; then
+  echo "forbidden HTML insertion in ui/ (above)"; fail=1
+fi
 exit $fail
