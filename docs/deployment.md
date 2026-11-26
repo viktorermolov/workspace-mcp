@@ -178,7 +178,7 @@ SHA="$(git ls-remote https://github.com/viktorermolov/workspace-mcp refs/tags/vX
 cosign verify ghcr.io/viktorermolov/workspace-mcp:X.Y.Z \
   --certificate-identity https://github.com/viktorermolov/workspace-mcp/.github/workflows/release.yml@refs/heads/master \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-github-workflow-sha "$SHA"
+  --certificate-github-workflow-sha "${SHA:?no git tag vX.Y.Z}"
 docker buildx imagetools inspect ghcr.io/viktorermolov/workspace-mcp:X.Y.Z --format '{{ json .SBOM }}'
 ```
 

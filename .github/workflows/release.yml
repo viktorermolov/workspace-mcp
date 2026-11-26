@@ -4,8 +4,8 @@ name: release
 # checks whether package.json names a version that CHANGELOG.md has a section for and that is not released
 # yet. If so, this run releases that exact commit; otherwise it ends after the guard. In order:
 #   guard    the run is on master; if the package.json version is already released, the run ends here;
-#            otherwise it needs CHANGELOG notes, a matching package-lock.json, and no draft Release, no git tag
-#            elsewhere and no registry tag for it yet
+#            otherwise it needs CHANGELOG notes, a matching package-lock.json, and no git tag elsewhere
+#            and no registry tag for it yet
 #   ci       the full CI (typecheck, unit tests, UI build, tree check, e2e) on the same commit
 #   build    per architecture: builds the image with SBOM and provenance, pushes it by digest (no tag),
 #            then pulls exactly that digest and runs the smoke test and the upgrade test from the previous release
@@ -71,9 +71,6 @@ jobs:
           fi
           # From here on package.json names an unreleased version, so this commit is meant to be its release,
           # and anything inconsistent stops it loudly instead of skipping it.
-          if grep -qxF "${TAG} true" <<<"$RELEASES"; then
-            fail "A draft GitHub Release ${TAG} exists. Delete it; the release workflow creates the Release itself."
-          fi
           node scripts/release-version.ts notes "$VERSION" >/dev/null \
             || fail "package.json names ${VERSION}, which is not released, but CHANGELOG.md has no non-empty section \"## [${VERSION}]\"."
           LOCK="$(node -p 'const l=require("./package-lock.json"); l.version + " " + l.packages[""].version')"
