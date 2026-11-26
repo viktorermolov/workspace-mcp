@@ -162,7 +162,7 @@ If the newer release migrated the database, the older release refuses to start a
 
 ## Published images
 
-Each release `vX.Y.Z` publishes one multi-arch image (`linux/amd64` and `linux/arm64`) to the GitHub Container Registry, with a GitHub Release and its notes. Until the first release exists, build from source as above.
+Each release `vX.Y.Z` publishes one multi-arch image (`linux/amd64` and `linux/arm64`) to the GitHub Container Registry, with a GitHub Release and its notes. You can also build from source as above.
 
 | Tag | Points to |
 | --- | --- |

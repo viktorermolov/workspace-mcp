@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Workspace MCP has no release yet. Until 1.0, security fixes go into the latest release and `master` only.
+Only the latest release is supported. Until 1.0, security fixes go into the latest release and `master` only.
 
 ## Reporting a vulnerability
 

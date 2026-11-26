@@ -56,7 +56,7 @@ docker build -t workspace-mcp:local . && scripts/container-smoke.sh workspace-mc
 
 Releases are made by the maintainer, and only from `master`:
 
-1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md` and `docs/deployment.md` (published images). Merge it.
+1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md`, `docs/deployment.md` (published images) and `docs/runbook-raspberry-pi.md`. Merge it.
 2. Tag that commit on `master` and push the tag: `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
 3. After the first release only: GitHub creates the container package as private. Make it public in the package settings (Package settings → Change visibility), so `docker pull` works without signing in.
 

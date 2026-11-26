@@ -68,7 +68,7 @@ git log -1 --oneline
 
 Expected: the clone succeeds and the last line shows a commit. All later commands run in `~/workspace-mcp`.
 
-To deploy a specific release instead of the latest `master`, run `git checkout vX.Y.Z` now. Once releases exist, prefer a release: it passed the full CI and an upgrade test before it was published ([Versions and compatibility](../README.md#versions-and-compatibility)).
+To deploy a specific release instead of the latest `master`, run `git checkout vX.Y.Z` now. Prefer a release: it passed the full CI and an upgrade test before it was published ([Versions and compatibility](../README.md#versions-and-compatibility)).
 
 ## Step 4. Configure
 
