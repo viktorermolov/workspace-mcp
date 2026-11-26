@@ -22,7 +22,7 @@ export function RulesScreen() {
     });
   };
   return (
-    <Page title="Working rules" actions={r && r.version > 0 ? <a href={histHref('rules')}>History</a> : undefined}>
+    <Page title="Working rules" actions={<><a href="/read/rules">Read</a>{r && r.version > 0 ? <a href={histHref('rules')}>History</a> : null}</>}>
       <p class="muted">
         Shared by every role on every platform. Agents receive them in the <code>instructions</code> of <code>start</code>. Changes here are versioned.
       </p>
@@ -104,7 +104,7 @@ export function RoleScreen({ id }: { id: string }) {
   const choices = useData(() => api<{ roles: { slug: string; name: string }[] }>('/choices'));
   const r = role.data;
   return (
-    <Page title={isNew ? 'New role' : (r?.name ?? 'Role')} back="/roles" actions={r ? <a href={histHref('role', r.id)}>History</a> : undefined}>
+    <Page title={isNew ? 'New role' : (r?.name ?? 'Role')} back="/roles" actions={r ? <><a href={`/read/role/${enc(r.id)}`}>Read</a><a href={histHref('role', r.id)}>History</a></> : undefined}>
       <Loading error={role.error} loading={role.loading}>
         {(isNew || r) && (
           <RoleForm
@@ -284,7 +284,7 @@ export function ProjectScreen({ id }: { id: string }) {
   const project = useData(() => (isNew ? Promise.resolve(null) : api<ProjectFull>(`/entity/project/${enc(id)}`)), [id]);
   const p = project.data;
   return (
-    <Page title={isNew ? 'New project' : (p?.name ?? 'Project')} back="/projects" actions={p ? <a href={histHref('project', p.id)}>History</a> : undefined}>
+    <Page title={isNew ? 'New project' : (p?.name ?? 'Project')} back="/projects" actions={p ? <><a href={`/read/project/${enc(p.id)}`}>Read</a><a href={histHref('project', p.id)}>History</a></> : undefined}>
       <Loading error={project.error} loading={project.loading}>
         {(isNew || p) && <ProjectForm key={p?.rev ?? 'new'} project={p ?? undefined} onSaved={(s) => (isNew ? navigate(`/projects/${enc(s.id)}`, true) : project.reload())} />}
         {p && (
@@ -424,6 +424,7 @@ export function DocumentScreen({ id }: { id: string }) {
       actions={
         d && (
           <>
+            <a href={`/read/document/${enc(d.id)}`}>Read</a>
             <a href={histHref('document', d.id)}>History</a>
             {!editing && <Button onClick={() => setEditing(true)}>Edit</Button>}
           </>
@@ -579,7 +580,7 @@ export function HistoryScreen({ type, id }: { type: VType; id?: string }) {
       await versions.reload();
     });
   };
-  const back = type === 'rules' ? '/rules' : type === 'role' ? `/roles/${enc(id!)}` : type === 'project' ? `/projects/${enc(id!)}` : `/documents/${enc(id!)}`;
+  const back = type === 'rules' ? (id ? `/read/rules/${enc(id)}` : '/rules') : type === 'role' ? `/roles/${enc(id!)}` : type === 'project' ? `/projects/${enc(id!)}` : `/documents/${enc(id!)}`;
   const name = type === 'rules' ? (entity.data?.title ?? 'Working rules') : (entity.data?.name ?? entity.data?.title ?? type);
   const who = (v: VersionInfo) => (v.author?.connection ? `${v.author.connection}${v.author.role ? ` as @${v.author.role}` : ''}` : 'you');
   return (
