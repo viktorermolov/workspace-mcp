@@ -1,4 +1,5 @@
 import { all, get, type DB } from '../db/db.ts';
+import { editedWhoseLabel } from '../domain/access.ts';
 import { actorLabel, parseEvent, type VersionedType } from '../domain/core.ts';
 import { listRoles, roleLinks } from '../domain/entities.ts';
 import { lastCheckpoint, taskSummary, type TaskRow } from '../domain/tasks.ts';

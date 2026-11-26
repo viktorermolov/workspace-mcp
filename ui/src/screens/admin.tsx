@@ -47,6 +47,18 @@ interface Client {
   registration: string;
   created_at: string | null;
 }
+interface AllowedRole {
+  id: string;
+  slug: string;
+  name: string;
+  source: 'owner' | 'suggested';
+}
+interface WorkspaceRole {
+  id: string;
+  slug: string;
+  name: string;
+  edit_any: boolean;
+}
 interface Connection {
   client_id: string;
   name: string;
@@ -57,6 +69,17 @@ interface Connection {
   revoked_at: string | null;
   client: Client | null;
   active: boolean;
+  roles?: AllowedRole[];
+  roles_confirmed_at?: string | null;
+  roles_suggested_at?: string | null;
+  roles_confirmed?: boolean;
+}
+interface ConnectionsPayload {
+  connections: Connection[];
+  pending_clients: Client[];
+  role_enforcement: 'warn' | 'enforce';
+  unconfirmed_active: { client_id: string; name: string }[];
+  roles: WorkspaceRole[];
 }
 interface Me {
   member_id: string;
@@ -79,7 +102,7 @@ const REG: Record<string, string> = {
 export function ConnectionsScreen() {
   const welcome = new URLSearchParams(location.search).has('welcome');
   const me = useMe();
-  const list = useData(() => api<{ connections: Connection[]; pending_clients: Client[] }>('/connections'));
+  const list = useData(() => api<ConnectionsPayload>('/connections'));
   const [diagFor, setDiagFor] = useState<string | null>(null);
   const [showManual, setShowManual] = useState(false);
   const act = useAction();
@@ -134,6 +157,14 @@ export function ConnectionsScreen() {
       {showManual && <ManualClient onCreated={() => list.reload()} />}
       {act.error && <Alert>{act.error}</Alert>}
       <Loading error={list.error} loading={list.loading}>
+        {list.data && (
+          <RoleAccessSettings
+            data={list.data}
+            busy={act.busy}
+            onChange={() => list.reload()}
+            run={act.run}
+          />
+        )}
         <h2>Active</h2>
         {!active.length && <Empty>No platform is connected yet.</Empty>}
         <ul class="list">
@@ -165,6 +196,16 @@ export function ConnectionsScreen() {
                 </div>
               </div>
               {diagFor === c.client_id && <Diagnostics clientId={c.client_id} />}
+              {list.data && (
+                <ConnectionRoleList
+                  key={`${c.client_id}:${c.roles_confirmed_at ?? ''}`}
+                  connection={c}
+                  workspaceRoles={list.data.roles}
+                  busy={act.busy}
+                  run={act.run}
+                  onSaved={() => list.reload()}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -228,6 +269,155 @@ export function ConnectionsScreen() {
         <Diagnostics />
       </Loading>
     </Page>
+  );
+}
+
+function RoleAccessSettings({
+  data,
+  busy,
+  onChange,
+  run,
+}: {
+  data: ConnectionsPayload;
+  busy: boolean;
+  onChange: () => void;
+  run: (fn: () => Promise<void>) => void;
+}) {
+  const [mode, setMode] = useState(data.role_enforcement);
+  const [override, setOverride] = useState(false);
+  const pending = data.unconfirmed_active;
+  const blocked = mode === 'enforce' && data.role_enforcement !== 'enforce' && pending.length > 0 && !override;
+  const saveMode = () =>
+    run(async () => {
+      await post('/settings/role-enforcement', { mode, override });
+      setOverride(false);
+      onChange();
+    });
+  const toggleEditAny = (r: WorkspaceRole, edit_any: boolean) =>
+    run(async () => {
+      await post(`/roles/${enc(r.id)}/edit-any`, { edit_any });
+      onChange();
+    });
+  return (
+    <>
+      {data.role_enforcement === 'warn' && (
+        <Card class="notice">
+          <p>
+            Role checks are in <strong>warning</strong> mode: writes still go through, but the server records a warning when a
+            role is missing, unknown, archived, not on a confirmed list, or used to edit someone else’s item. Review each
+            connection’s list, mark the roles that may edit any item, then switch to enforce. A week is a reasonable window;
+            only you can turn enforcement on, and it does not switch automatically.
+          </p>
+        </Card>
+      )}
+      <Card>
+        <h2>Role enforcement</h2>
+        <p class="muted small">
+          Each agent write must name a role that exists, is not archived, and is on that connection’s confirmed list. A
+          suggested list from history is a draft and has no effect until you confirm it.
+        </p>
+        <label class="row">
+          <input type="radio" name="role_enforcement" checked={mode === 'warn'} onChange={() => setMode('warn')} /> Warning
+          mode (default after an upgrade)
+        </label>
+        <label class="row">
+          <input type="radio" name="role_enforcement" checked={mode === 'enforce'} onChange={() => setMode('enforce')} />{' '}
+          Enforce
+        </label>
+        {mode === 'enforce' && pending.length > 0 && data.role_enforcement !== 'enforce' && (
+          <>
+            <p class="muted small">These active connections do not yet have a confirmed list:</p>
+            <ul class="small">
+              {pending.map((c) => (
+                <li key={c.client_id}>{c.name}</li>
+              ))}
+            </ul>
+            <label class="row">
+              <input type="checkbox" checked={override} onChange={(e) => setOverride((e.target as HTMLInputElement).checked)} />{' '}
+              Turn on enforcement anyway (recorded in the log). Writes on an unconfirmed connection will be refused until
+              you confirm its list.
+            </label>
+          </>
+        )}
+        {mode !== data.role_enforcement && (
+          <Button kind="primary" onClick={saveMode} busy={busy} disabled={blocked}>
+            Save enforcement
+          </Button>
+        )}
+      </Card>
+      <Card>
+        <h2>Roles that may edit any item</h2>
+        <p class="muted small">
+          A role may edit items that belong to it. Tick a role here if it may also edit everyone else’s (for example an
+          entry or chief-of-staff role). Only you can change this; agents cannot grant it through MCP.
+        </p>
+        {!data.roles.length && <p class="muted small">No roles yet.</p>}
+        <ul class="list">
+          {data.roles.map((r) => (
+            <li key={r.id}>
+              <label class="row">
+                <input type="checkbox" checked={r.edit_any} disabled={busy} onChange={(e) => toggleEditAny(r, (e.target as HTMLInputElement).checked)} />{' '}
+                <strong>{r.name}</strong>
+                <span class="muted small">@{r.slug}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </>
+  );
+}
+
+function ConnectionRoleList({
+  connection,
+  workspaceRoles,
+  busy,
+  run,
+  onSaved,
+}: {
+  connection: Connection;
+  workspaceRoles: WorkspaceRole[];
+  busy: boolean;
+  run: (fn: () => Promise<void>) => void;
+  onSaved: () => void;
+}) {
+  const initial = new Set((connection.roles ?? []).map((r) => r.id));
+  const suggested = new Set((connection.roles ?? []).filter((r) => r.source === 'suggested').map((r) => r.id));
+  const [selected, setSelected] = useState<Set<string>>(initial);
+  const toggle = (id: string) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const save = () =>
+    run(async () => {
+      await post(`/connections/${enc(connection.client_id)}/roles`, { roles: [...selected], confirm: true });
+      onSaved();
+    });
+  return (
+    <div class="connection-roles">
+      <p class="small muted">
+        Roles this connection may sign writes as.
+        {connection.roles_confirmed ? ' List confirmed.' : ' Not confirmed — a suggested list is a draft and has no effect in enforce.'}
+      </p>
+      {!workspaceRoles.length && <p class="small muted">Create a role first, then add it here.</p>}
+      <ul class="plain">
+        {workspaceRoles.map((r) => (
+          <li key={r.id}>
+            <label class="row">
+              <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /> {r.name}{' '}
+              <span class="muted small">@{r.slug}</span>
+              {suggested.has(r.id) && !connection.roles_confirmed && <Badge>from this connection’s history</Badge>}
+            </label>
+          </li>
+        ))}
+      </ul>
+      <Button kind="default" onClick={save} busy={busy}>
+        Save and confirm this list
+      </Button>
+    </div>
   );
 }
 
@@ -366,6 +556,8 @@ interface LogRow {
   actor_kind?: string;
   connection_name?: string | null;
   claimed_role?: string | null;
+  owner_role?: string | null;
+  whose?: string | null;
   entity_type: string;
   entity_id: string | null;
   action: string;
@@ -409,8 +601,9 @@ export function LogScreen() {
   return (
     <Page title={filtered ? 'History of one item' : 'Log'} back={filtered ? entityHref(et!, eid) ?? undefined : undefined}>
       <p class="muted">
-        {filtered ? 'Every recorded change to this item, newest first.' : 'Everything that happened in the workspace, newest first, with who did it.'} A role named by an
-        agent is what the agent said about itself.
+        {filtered ? 'Every recorded change to this item, newest first.' : 'Everything that happened in the workspace, newest first, with who did it and whose item it was.'} The
+        role is the name the agent gave for the change. After you turn on enforcement, the server only accepts a role that
+        exists, is not archived, and is on that connection’s confirmed list.
       </p>
       {filtered && (
         <p>
@@ -427,7 +620,8 @@ export function LogScreen() {
                 <div class="log-main">{href ? <a href={href}>{r.summary}</a> : r.summary}</div>
                 <div class="small muted">
                   <Time at={r.at} /> · {r.by}
-                  {r.claimed_role ? ` as @${r.claimed_role}` : ''} · <code>{r.action}</code>
+                  {r.claimed_role ? ` as @${r.claimed_role}` : ''}
+                  {r.whose ? ` · ${r.whose}` : r.owner_role && r.owner_role !== r.claimed_role ? ` · item of @${r.owner_role}` : ''} · <code>{r.action}</code>
                 </div>
               </li>
             );
