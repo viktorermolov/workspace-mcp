@@ -5,6 +5,13 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  # The release workflow runs the same checks on the tagged commit before it publishes anything.
+  workflow_call:
+    inputs:
+      skip_image:
+        description: Skip the image job (the release workflow builds, tests and publishes its own images).
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,8 +25,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -34,8 +41,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -45,7 +52,7 @@ jobs:
       - run: npm run test:e2e
         env:
           CI: 'true'
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.2
         if: failure()
         with:
           name: playwright-report
@@ -54,9 +61,11 @@ jobs:
             test-results/
           retention-days: 7
 
-  # Builds the image natively on amd64 and arm64 (the Raspberry Pi target) and runs the container smoke test.
+  # Builds the image natively on amd64 and arm64 (the Raspberry Pi target), runs the container smoke test,
+  # and upgrades the newest published release to it (scripts/container-upgrade.sh).
   # Nothing is pushed: publishing an image happens only in the release workflow.
   image:
+    if: ${{ !inputs.skip_image }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,9 +76,12 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -80,3 +92,25 @@ jobs:
         run: test "$(docker image inspect -f '{{.Architecture}}' workspace-mcp:local)" = "${{ matrix.arch }}"
       - name: Container smoke test
         run: scripts/container-smoke.sh workspace-mcp:local
+      - name: Find the release to upgrade from
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          PREVIOUS="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
+            --json tagName --jq '.[].tagName' | node scripts/release-version.ts previous "$VERSION")"
+          echo "tag=${PREVIOUS}" >> "$GITHUB_OUTPUT"
+          if [ -z "$PREVIOUS" ]; then
+            echo "::notice::No published release up to ${VERSION} yet, so there is nothing to upgrade from: upgrade test skipped."
+          fi
+      - name: Upgrade test from ${{ steps.previous.outputs.tag || 'the previous release' }}
+        if: steps.previous.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${PREVIOUS}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker pull "$IMAGE"
+          scripts/container-upgrade.sh "$IMAGE" workspace-mcp:local

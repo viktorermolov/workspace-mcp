@@ -19,4 +19,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - Consistent backups, offline restore, and a backup before every migration. The service refuses to start on a database from a newer release.
 - Versioned export to Markdown and JSON with checksums, and import.
 - A Docker image for amd64 and arm64 and Docker Compose with an optional Cloudflare Tunnel service.
+- A release pipeline: a `vX.Y.Z` tag on `master` runs the full CI on that commit, publishes the tested multi-arch image to GHCR signed with cosign and with SBOM and provenance, moves `latest` only for the highest version, and creates a GitHub Release from this changelog. CI and every release also upgrade the previous release's image to the new one with data in place.
+- Versions and compatibility rules for 0.x in the README.
 - Documentation: deployment, a Raspberry Pi runbook, first-time setup, guides for Claude, ChatGPT and Grok, tools, configuration, webhooks, backups, the security model and architecture.
