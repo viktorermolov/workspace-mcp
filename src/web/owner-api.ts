@@ -201,7 +201,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     c.json(
       search(db, actor(c).memberId, {
         query: c.req.query('q') || undefined,
-        types: (c.req.queries('type') as EntityType[] | undefined) ?? undefined,
+        types: c.req.queries('type')?.filter(Boolean),
         status: c.req.queries('status') ?? undefined,
         role: c.req.query('role') || undefined,
         project: c.req.query('project') || undefined,

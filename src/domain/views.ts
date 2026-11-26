@@ -18,6 +18,8 @@ import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from
 
 export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
+/** Types that `search` covers. Working rules and checkpoints are read with `get` and `start`. */
+export const SEARCH_TYPES = ['role', 'project', 'document', 'task', 'issue'] as const;
 
 export function issueView(db: DB, memberId: string, id: string) {
   const i = get<Record<string, unknown>>(
@@ -89,7 +91,7 @@ function need(id?: string): string {
 
 export interface SearchInput {
   query?: string;
-  types?: EntityType[];
+  types?: string[];
   status?: string[];
   role?: string;
   project?: string;
@@ -127,7 +129,11 @@ const SEARCH_SCAN_MAX = 20_000;
 export function search(db: DB, memberId: string, input: SearchInput) {
   const limit = Math.min(Math.max(input.limit ?? LIMITS.listDefault, 1), LIMITS.listMax);
   const offset = decodeCursor(input.cursor);
-  const types = (input.types?.length ? input.types : ['role', 'project', 'document', 'task', 'issue']).filter((t) => t !== 'rules' && t !== 'checkpoint');
+  const unsupported = (input.types ?? []).filter((t) => !(SEARCH_TYPES as readonly string[]).includes(t));
+  if (unsupported.length) {
+    throw invalid(`search covers ${SEARCH_TYPES.join(', ')}; not ${unsupported.join(', ')}. Read working rules with get, and checkpoints with start (last_checkpoint), changes (entity_type checkpoint) or get by id.`);
+  }
+  const types: string[] = input.types?.length ? input.types : [...SEARCH_TYPES];
   const roleId = input.role ? findRole(db, memberId, input.role)?.id ?? '__none__' : undefined;
   const projectId = input.project ? findProject(db, memberId, input.project)?.id ?? '__none__' : undefined;
   const fq = input.query ? ftsQuery(input.query) : null;
@@ -327,7 +333,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   let seenUpTo = latest;
   if (prev) {
     const ch = changes(db, memberId, { cursor: prev.last_event_id, limit: 30 });
-    since = { since_event: prev.last_event_id, events: ch.events, more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
+    since = { since_event: prev.last_event_id, events: ch.events, has_more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
     if (ch.has_more) seenUpTo = ch.next_cursor;
   }
   run(
