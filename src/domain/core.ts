@@ -253,7 +253,9 @@ export function getVersion(db: DB, type: VersionedType, entityId: string, number
 
 export function indexEntity(db: DB, memberId: string, type: string, id: string, title: string, body: string): void {
   run(db, 'DELETE FROM search_fts WHERE entity_type = ? AND entity_id = ?', type, id);
-  run(db, 'INSERT INTO search_fts (entity_type, entity_id, member_id, title, body) VALUES (?,?,?,?,?)', type, id, memberId, title, body);
+  // U+0001 and U+0002 mark matches in search snippets, so they are kept out of the index.
+  const clean = (t: string) => t.replace(/[\u0001\u0002]/g, ' ');
+  run(db, 'INSERT INTO search_fts (entity_type, entity_id, member_id, title, body) VALUES (?,?,?,?,?)', type, id, memberId, clean(title), clean(body));
 }
 
 export function unindexEntity(db: DB, type: string, id: string): void {

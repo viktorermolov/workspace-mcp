@@ -68,7 +68,7 @@ Input: `query` (optional full-text query), `types` (any of `role`, `project`, `d
 
 Working rules and checkpoints are not searched, and asking for them is an error: read the rules with `get`, and checkpoints with `start` (`last_checkpoint`) or with `get` by id; `changes` with `entity_type: "checkpoint"` lists the ids of earlier ones.
 
-With a query, results are ranked by SQLite FTS5 relevance with a short snippet. `total` counts the matches; when `total_exact` is `false`, the search stopped early (the page was full, or a very common query hit the work limit per request) and `total` is a lower bound. Without a query, it lists items by most recent update, filtered by the other fields. Archived items are left out unless `include_archived` is true.
+With a query, results are ranked by SQLite FTS5 relevance with a short snippet, where each matched word or phrase is marked once in square brackets (words separated only by spaces or punctuation count as one phrase). `total` counts the matches; when `total_exact` is `false`, the search stopped early (the page was full, or a very common query hit the work limit per request) and `total` is a lower bound. Without a query, it lists items by most recent update, filtered by the other fields. Archived items are left out unless `include_archived` is true.
 
 Like `changes`, a page ends with `has_more` and `next_cursor`: while `has_more` is true, pass `next_cursor` to read on; otherwise `has_more` is false and `next_cursor` is `null`. If `total_exact` is also `false`, the search stopped early and there may be more matches: narrow the query or the filters to find them.
 
