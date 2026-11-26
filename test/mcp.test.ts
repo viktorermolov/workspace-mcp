@@ -268,12 +268,12 @@ describe('MCP behaviour', () => {
     for (const types of [['checkpoint'], ['rules'], ['task', 'checkpoint']]) {
       await assert.rejects(
         call(a, 'search', { types }),
-        (e) => /Invalid arguments for tool search/.test((e as Error).message) && /"role"\|"project"\|"document"\|"task"\|"issue"/.test((e as Error).message),
+        (e) => /Invalid arguments for tool search/.test((e as Error).message) && /"role"\|"project"\|"document"\|"task"\|"issue"\|"routine"/.test((e as Error).message),
         `types ${types.join(',')} is refused with the list of searchable types`,
       );
     }
     // The owner interface uses the same search and gets a clear refusal too.
-    await assert.rejects(() => owner.json('/api/owner/search?type=checkpoint'), /search covers role, project, document, task, issue; not checkpoint/);
+    await assert.rejects(() => owner.json('/api/owner/search?type=checkpoint'), /search covers role, project, document, task, issue, routine; not checkpoint/);
     const viaOwner = await owner.json('/api/owner/search?type=');
     assert.ok(viaOwner.results.length > 0, 'an empty type filter lists every searchable type');
     const cps = await call(a, 'changes', { entity_type: 'checkpoint' });
@@ -400,6 +400,46 @@ describe('MCP behaviour', () => {
     assert.match(phrase.results[0].snippet, /\[\[TEST\] Арина 25\.11\] meeting/);
     const apart = await call(a, 'search', { types: ['document'], query: 'Snippet alpha gamma' });
     assert.match(apart.results[0].snippet, /\[alpha\] beta \[gamma\]/);
+    await a.close();
+  });
+
+  it('creates, lists and updates routines, including in start', async () => {
+    const a = (await connectAgent(env, owner, 'Platform routines')).client;
+    const created = await call(a, 'save_routine', {
+      name: 'Morning briefing',
+      role: 'lead',
+      schedule: '0 8 * * *',
+      timezone: 'America/Los_Angeles',
+      external_id: 'luma-morning',
+    });
+    assert.equal(created.status, 'enabled');
+    assert.equal(created.role, 'lead');
+    assert.equal(created.timezone, 'America/Los_Angeles');
+    const started = await call(a, 'start', { role: 'lead' });
+    assert.ok(started.data.routines.some((r: { name: string }) => r.name === 'Morning briefing'));
+    assert.ok(started.data.role_routines.some((r: { id: string; schedule: string }) => r.id === created.id && r.schedule === '0 8 * * *'));
+    const listed = await call(a, 'search', { types: ['routine'], query: 'briefing' });
+    assert.equal(listed.results[0].id, created.id);
+    const got = await call(a, 'get', { type: 'routine', id: created.id });
+    assert.equal(got.external_id, 'luma-morning');
+    const paused = await call(a, 'save_routine', {
+      id: created.id,
+      rev: created.rev,
+      status: 'paused',
+      last_run_at: '2026-11-26T16:00:00Z',
+      last_run_result: 'Sent.',
+    });
+    assert.equal(paused.status, 'paused');
+    assert.equal(paused.last_run_result, 'Sent.');
+    await assert.rejects(
+      call(a, 'save_routine', { name: 'Bad tz', role: 'lead', schedule: 'daily', timezone: 'Not/AZone' }),
+      (e) => err(e).error === 'invalid' && /unknown timezone/.test(err(e).message),
+    );
+    await call(a, 'archive', { type: 'routine', id: created.id });
+    const hidden = await call(a, 'search', { types: ['routine'], query: 'briefing' });
+    assert.equal(hidden.results.length, 0);
+    const still = await call(a, 'start', { role: 'lead' });
+    assert.ok(!still.data.routines.some((r: { id: string }) => r.id === created.id));
     await a.close();
   });
 
