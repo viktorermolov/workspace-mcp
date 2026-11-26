@@ -97,6 +97,114 @@ describe('data safety', () => {
     }
   });
 
+  it('restores the pre-migration backup to the state before a later app migration', async () => {
+    const first = await startService();
+    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(first.svc.db).id };
+    saveRole(first.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Before the upgrade.' });
+    const dataDir = first.dataDir;
+    await first.close();
+    let env: Awaited<ReturnType<typeof startService>> | undefined;
+
+    const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: notes table', sql: "CREATE TABLE fixture_note (body TEXT NOT NULL); INSERT INTO fixture_note (body) VALUES ('migrated');" };
+    migrations.push(fixture);
+    try {
+      env = await startService({ dataDir });
+      // A change made after the upgrade, which the restore must undo.
+      saveRole(env.svc.db, owner, { name: 'Newcomer', slug: 'newcomer', instruction: 'After the upgrade.' });
+      const pre = listBackups(env.config).filter((b) => b.reason === 'pre-migration');
+      assert.equal(pre.length, 1);
+      const config = env.config;
+      await env.close();
+      env = undefined;
+
+      const { saved } = await restoreBackup(config, path.join(config.backupDir, pre[0]!.name));
+      assert.ok(saved, 'the upgraded database is saved before the restore');
+      const db = openOffline(config.dbPath);
+      try {
+        assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id)!.n, 0);
+        assert.equal(get<{ n: number }>(db, "SELECT count(*) AS n FROM sqlite_master WHERE name = 'fixture_note'")!.n, 0);
+        const roles = db.prepare('SELECT slug FROM role ORDER BY slug').all().map((r) => (r as { slug: string }).slug);
+        assert.ok(roles.includes('keeper'));
+        assert.ok(!roles.includes('newcomer'));
+      } finally {
+        db.close();
+      }
+    } finally {
+      migrations.splice(migrations.indexOf(fixture), 1);
+      await env?.close();
+    }
+
+    // The release before the upgrade runs on the restored database with nothing to migrate.
+    env = await startService({ dataDir });
+    try {
+      assert.equal(listBackups(env.config).filter((b) => b.reason === 'pre-migration').length, 1);
+      assert.equal(get<{ instruction: string }>(env.svc.db, "SELECT v.body AS instruction FROM role r JOIN version v ON v.id = r.current_version WHERE r.slug = 'keeper'")!.instruction, 'Before the upgrade.');
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('leaves the database untouched when a later app migration fails', async () => {
+    const first = await startService();
+    const owner = { kind: 'owner' as const, memberId: ensureOwnerMember(first.svc.db).id };
+    saveRole(first.svc.db, owner, { name: 'Keeper', slug: 'keeper', instruction: 'Survives a failed upgrade.' });
+    const dataDir = first.dataDir;
+    const config = first.config;
+    await first.close();
+    const count = (db: ReturnType<typeof openDatabase>, sql: string, ...p: unknown[]) => get<{ n: number }>(db, sql, ...p)!.n;
+
+    // The first statement succeeds, the second fails: the whole migration must be rolled back.
+    const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: broken', sql: "ALTER TABLE role ADD COLUMN fixture_note TEXT; CREATE TABLE fixture_partial (x TEXT); INSERT INTO no_such_table VALUES (1);" };
+    migrations.push(fixture);
+    try {
+      await assert.rejects(startService({ dataDir }), /no_such_table/);
+    } finally {
+      migrations.splice(migrations.indexOf(fixture), 1);
+    }
+
+    const db = openOffline(config.dbPath);
+    try {
+      assert.equal(count(db, 'SELECT count(*) AS n FROM app_migration WHERE id = ?', fixture.id), 0);
+      assert.equal(count(db, "SELECT count(*) AS n FROM sqlite_master WHERE name = 'fixture_partial'"), 0);
+      assert.equal(count(db, "SELECT count(*) AS n FROM pragma_table_info('role') WHERE name = 'fixture_note'"), 0);
+      assert.equal(count(db, "SELECT count(*) AS n FROM role WHERE slug = 'keeper'"), 1);
+    } finally {
+      db.close();
+    }
+    // The backup made before the attempt is there, and the release without the migration starts normally.
+    assert.equal(listBackups(config).filter((b) => b.reason === 'pre-migration').length, 1);
+    const env = await startService({ dataDir });
+    try {
+      assert.equal(count(env.svc.db, "SELECT count(*) AS n FROM role WHERE slug = 'keeper'"), 1);
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('makes a first backup at start when there is none yet, and not again on the next start', async () => {
+    let env = await startService({ jobs: true });
+    try {
+      const first = listBackups(env.config);
+      assert.equal(first.length, 1);
+      assert.equal(first[0]!.reason, 'scheduled');
+      assert.ok(verifyDatabaseFile(path.join(env.config.backupDir, first[0]!.name)).ok);
+      await env.close();
+      env = await startService({ dataDir: env.dataDir, jobs: true });
+      assert.deepEqual(listBackups(env.config).map((b) => b.name), first.map((b) => b.name));
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('makes no backup at start when scheduled backups are off', async () => {
+    const env = await startService({ jobs: true, env: { BACKUP_INTERVAL_HOURS: '0' } });
+    try {
+      assert.equal(listBackups(env.config).length, 0);
+    } finally {
+      await env.close();
+    }
+  });
+
   it('refuses to open a database upgraded by a newer release, so a rollback cannot damage it', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wsmcp-newer-'));
     const config = loadConfig({ PUBLIC_URL: 'http://localhost:1', SECRET_KEY: Buffer.alloc(32, 3).toString('base64'), DATA_DIR: dir, LOG_LEVEL: 'error' });
