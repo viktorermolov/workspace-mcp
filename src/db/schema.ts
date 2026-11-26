@@ -405,4 +405,14 @@ ALTER TABLE member ADD COLUMN role_enforcement TEXT NOT NULL DEFAULT 'warn'
 ALTER TABLE project ADD COLUMN owner_role_id TEXT REFERENCES role(id);
 `,
   },
+  // After #61's `connection_roles` (id 4) on master. #58 PR B takes the next free id after this.
+  {
+    id: 5,
+    name: 'role_parent',
+    sql: `
+ALTER TABLE role ADD COLUMN parent_id TEXT REFERENCES role(id);
+CREATE INDEX role_parent ON role (parent_id);
+CREATE INDEX event_member_action ON event (member_id, action, id);
+`,
+  },
 ];
