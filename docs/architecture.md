@@ -47,7 +47,7 @@ Workspace MCP is a modular monolith: one Node.js process, one SQLite file, one c
 | `src/config.ts` | Environment variables, validation, keys derived from `SECRET_KEY` with HKDF. |
 | `src/cli.ts`, `bin/` | Offline administration: version, backups, restore, verify, export, import, recovery code. |
 | `src/db/` | Opening the database (WAL, foreign keys, exclusive lock) and the numbered migrations. |
-| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `core.ts` (ids, limits, events, versions, search index). |
+| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
 | `src/mcp/` | The MCP server and its 16 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
 | `src/auth/` | better-auth setup (`auth.ts`), connections and revocation (`connections.ts`), OAuth diagnostics (`diagnostics.ts`), setup and recovery codes (`setup.ts`). |
 | `src/web/` | The HTTP app with security headers and rate limits (`app.ts`), the owner API (`owner-api.ts`) and its read models (`owner-views.ts`). |
@@ -66,10 +66,10 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 
 | Table | Holds |
 | --- | --- |
-| `member` | The owner (and, later, others). Linked to the better-auth user that holds the passkeys. |
+| `member` | The owner (and, later, others). Linked to the better-auth user that holds the passkeys. Holds `role_enforcement` (`warn` or `enforce`). |
 | `rules` | The working rules of a member: one versioned text. |
-| `role`, `role_link` | Roles with area, instruction (versioned), setup notes and optional webhook; typed links between roles. |
-| `project` | Projects with a versioned description, current state (focus, where work stopped) and repository links. |
+| `role`, `role_link` | Roles with area, instruction (versioned), setup notes and optional webhook; typed links between roles. A role may be marked `edit_any` by the owner. |
+| `project` (optional `owner_role_id`) | Projects with a versioned description, current state (focus, where work stopped) and repository links. |
 | `document` | Markdown documents attached to the workspace, a project or a role; versioned. |
 | `version` | Immutable versions of rules, role instructions, project descriptions and documents: number, body, author (connection, claimed role or owner), time, note. |
 | `task`, `task_dependency`, `task_comment` | Tasks with status, role, project, parent, dependencies, priority, due date, result, blocking reason; comments. |
@@ -78,7 +78,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `event` | The log: who changed what and when. Read by cursor. |
 | `idempotency` | Keys that make creates safe to retry. |
 | `start_cursor` | Per connection and role, the event id of the previous `start`, for "changes since your last call". |
-| `connection` | OAuth clients the owner approved and named, with last activity and revocation. |
+| `connection`, `connection_role` | OAuth clients the owner approved and named, with last activity and revocation, and the confirmed or suggested list of roles each connection may sign writes as. |
 | `oauth_diag` | Steps of authorization attempts, without secrets. |
 | `setup_code` | Hashes of setup and recovery codes. |
 | `search_fts` | FTS5 index of titles and bodies. |

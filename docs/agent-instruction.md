@@ -11,6 +11,7 @@ At the start of every conversation, before anything else, call the Workspace `st
 
 While working:
 - Fetch details by id with `get`, or find them with `search`. Do not guess what is in the workspace.
+- On every write (`save_task`, `save_document`, `claim_task`, `checkpoint`, and the other write tools), pass `claimed_role` with your role slug.
 - When you take a task, claim it with `claim_task`. Keep its status, result and blocking reason current with `save_task`.
 - Record decisions and findings in documents (`save_document`) and keep project focus current (`save_project`).
 - If an update fails with a conflict, read the item again, merge, and retry. Never overwrite someone else's change blindly.

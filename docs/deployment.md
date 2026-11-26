@@ -151,6 +151,8 @@ curl -s http://127.0.0.1:8080/healthz   # shows the new version
 
 Migrations run automatically at start. If the database already holds data, a `pre-migration` backup is made first.
 
+After upgrading to 0.2.0 (or later, the first time role checks are present): open **Connections**, review each connection's suggested role list and confirm it, tick the roles that may edit any item, then turn on enforcement when you are ready. Role checks stay in warning mode until you do.
+
 To roll back:
 
 ```sh
