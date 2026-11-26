@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { CommentableMarkdown, CommentsPane, type ReviewComment } from './reviews.tsx';
 import { api, enc, searchAll } from '../api.ts';
 import { Markdown } from '../markdown.ts';
 import { navigate, useLocation } from '../router.ts';
@@ -272,6 +273,17 @@ export function ReadItem({ type, id }: { type: Kind; id?: string }) {
   const list = versions.data?.versions ?? [];
   const latest = list[0]?.number ?? (type === 'role' ? e?.instruction_version : type === 'project' ? e?.description_version : e?.version) ?? 0;
   const viewing = wanted > 0 && wanted !== latest ? wanted : 0;
+  const [selInstr, setSelInstr] = useState<{ start: number; end: number } | null>(null);
+  const [selNotes, setSelNotes] = useState<{ start: number; end: number } | null>(null);
+  const fieldForType = type === 'rules' ? 'text' : type === 'role' ? 'instruction' : type === 'project' ? 'description' : 'body';
+  const comments = useData(
+    () => (id || type === 'rules' ? api<{ comments: ReviewComment[] }>(`/reviews?target_type=${type}&target_id=${enc((entity.data?.id ?? id) || '')}&status=all&limit=100${viewing ? `&version=${viewing}` : ''}`) : Promise.resolve({ comments: [] as ReviewComment[] })),
+    [type, id, entity.data?.id, viewing],
+  );
+  const notesHistory = useData(
+    () => (type === 'role' && id ? api<{ history: { id: number; body: string; actor_kind: string; connection_name: string | null; claimed_role: string | null; created_at: string }[]; starts_at_upgrade: boolean }>(`/roles/${enc(id)}/setup-notes-history`) : Promise.resolve(null)),
+    [type, id],
+  );
   const past = useData(
     () => (viewing ? api<{ body: string; number: number; note: string | null; created_at: string }>(versionPath(type, id, viewing)) : Promise.resolve(null)),
     [type, id, viewing],
@@ -370,13 +382,40 @@ export function ReadItem({ type, id }: { type: Kind; id?: string }) {
                 {type === 'role' ? (
                   <>
                     <h2>Instruction</h2>
-                    <Markdown text={body} />
+                    <CommentableMarkdown text={body} comments={(comments.data?.comments ?? []).filter((c) => c.field === 'instruction')} selected={selInstr} onSelect={setSelInstr}>
+                      <Markdown text={body} />
+                    </CommentableMarkdown>
+                    <CommentsPane targetType="role" targetId={e.id} field="instruction" version={shownVersion || undefined} comments={(comments.data?.comments ?? []).filter((c) => c.field === 'instruction')} selected={selInstr} onSelect={setSelInstr} onChanged={() => comments.reload()} />
                     <h2>Setup notes</h2>
-                    <p class="muted small">Current text only. This field is not versioned.</p>
-                    <Markdown text={e.setup_notes ?? ''} />
+                    <p class="muted small">History of this field starts at the upgrade that added it; earlier text was not recorded. Comments attach to a history row.</p>
+                    <CommentableMarkdown text={e.setup_notes ?? ''} comments={(comments.data?.comments ?? []).filter((c) => c.field === 'setup_notes')} selected={selNotes} onSelect={setSelNotes}>
+                      <Markdown text={e.setup_notes ?? ''} />
+                    </CommentableMarkdown>
+                    <CommentsPane targetType="role" targetId={e.id} field="setup_notes" comments={(comments.data?.comments ?? []).filter((c) => c.field === 'setup_notes')} selected={selNotes} onSelect={setSelNotes} onChanged={() => comments.reload()} />
+                    {notesHistory.data?.history?.length ? (
+                      <section class="read-group">
+                        <h3>Setup notes history</h3>
+                        <p class="muted small">This history starts at the upgrade; earlier values are not listed.</p>
+                        <ul class="list">
+                          {notesHistory.data.history.map((h) => (
+                            <li key={h.id}>
+                              <span class="muted small">
+                                #{h.id} · {h.actor_kind === 'owner' ? 'you' : h.connection_name || h.claimed_role || h.actor_kind} · <Time at={h.created_at} />
+                              </span>
+                              <pre class="setup-notes-hist">{h.body}</pre>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ) : null}
                   </>
                 ) : (
-                  <Markdown text={body} />
+                  <>
+                    <CommentableMarkdown text={body} comments={comments.data?.comments ?? []} selected={selInstr} onSelect={setSelInstr}>
+                      <Markdown text={body} />
+                    </CommentableMarkdown>
+                    <CommentsPane targetType={type} targetId={e.id} field={fieldForType} version={shownVersion || undefined} comments={comments.data?.comments ?? []} selected={selInstr} onSelect={setSelInstr} onChanged={() => comments.reload()} />
+                  </>
                 )}
                 {type === 'project' && <ProjectRules id={e.id} archivedOk={archivedOk} />}
                 <HistoryBlock type={type} id={id} versions={list} latest={latest} currentHref={(n) => withV(n)} />

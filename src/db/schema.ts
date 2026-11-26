@@ -405,4 +405,75 @@ ALTER TABLE member ADD COLUMN role_enforcement TEXT NOT NULL DEFAULT 'warn'
 ALTER TABLE project ADD COLUMN owner_role_id TEXT REFERENCES role(id);
 `,
   },
+  // 5 is reserved for #55 (not on master yet). The runner does not require contiguous ids.
+  {
+    id: 6,
+    name: 'review-comments',
+    sql: `
+CREATE TABLE setup_notes_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  role_id TEXT NOT NULL REFERENCES role(id),
+  body TEXT NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('owner','agent','system')),
+  connection_id TEXT,
+  connection_name TEXT,
+  claimed_role TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX setup_notes_history_role ON setup_notes_history (role_id, id);
+CREATE TRIGGER setup_notes_history_immutable_update BEFORE UPDATE ON setup_notes_history
+BEGIN SELECT RAISE(ABORT, 'setup notes history is immutable'); END;
+CREATE TRIGGER setup_notes_history_immutable_delete BEFORE DELETE ON setup_notes_history
+WHEN NOT EXISTS (SELECT 1 FROM purge_guard)
+BEGIN SELECT RAISE(ABORT, 'setup notes history can only be deleted during a purge'); END;
+
+CREATE TABLE review_comment (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  field TEXT NOT NULL,
+  body TEXT NOT NULL,
+  version_id INTEGER REFERENCES version(id),
+  line_start INTEGER,
+  line_end INTEGER,
+  quote TEXT NOT NULL DEFAULT '',
+  quote_hash TEXT NOT NULL DEFAULT '',
+  ctx_before TEXT NOT NULL DEFAULT '',
+  ctx_after TEXT NOT NULL DEFAULT '',
+  text_hash TEXT,
+  setup_notes_id INTEGER REFERENCES setup_notes_history(id),
+  anchor_version_id INTEGER REFERENCES version(id),
+  anchor_line_start INTEGER,
+  anchor_line_end INTEGER,
+  anchor_state TEXT NOT NULL DEFAULT 'none' CHECK (anchor_state IN ('none','exact','moved','outdated')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','resolved')),
+  rev INTEGER NOT NULL DEFAULT 1,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('owner','agent','system')),
+  connection_id TEXT,
+  connection_name TEXT,
+  claimed_role TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX review_comment_target ON review_comment (member_id, target_type, target_id, field, status);
+CREATE INDEX review_comment_status ON review_comment (member_id, status, created_at);
+CREATE INDEX review_comment_version ON review_comment (version_id);
+CREATE INDEX review_comment_anchor ON review_comment (anchor_version_id);
+
+CREATE TABLE review_reply (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  comment_id TEXT NOT NULL REFERENCES review_comment(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('owner','agent','system')),
+  connection_id TEXT,
+  connection_name TEXT,
+  claimed_role TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX review_reply_comment ON review_reply (comment_id, created_at, id);
+`,
+  },
 ];

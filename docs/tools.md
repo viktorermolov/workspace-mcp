@@ -18,7 +18,7 @@ The server's MCP `instructions` and the description of `start` both tell a newly
 
 ## Entity types
 
-`rules`, `role`, `project`, `document`, `task`, `checkpoint`, `issue` (a mirrored GitHub issue), `routine`.
+`rules`, `role`, `project`, `document`, `task`, `checkpoint`, `issue` (a mirrored GitHub issue), `routine`, `review_comment`.
 
 Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled`. Priorities: `low`, `normal`, `high`, `urgent`.
 
@@ -37,6 +37,7 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 | `save_task` | write | Create or update a task. |
 | `claim_task` | write | Atomically take an open task. |
 | `comment_task` | write | Add a comment to a task. |
+| `reply_review_comment` | write | Reply to an owner review comment, optionally marking it answered. |
 | `archive` | write, idempotent | Archive or restore an item. |
 | `versions` | read | Version list, one version, or a line-by-line comparison. |
 | `rollback` | write | Restore an earlier version as a new version. |
@@ -52,7 +53,7 @@ Returns two blocks:
 - `instructions`: `working_rules`, `working_rules_version` (the version-history number) and `working_rules_rev` (the conflict-check counter: pass this, not the version, to `update_rules`), `save_state_rule` (update your tasks and write a checkpoint before you finish), `safety_rule` (the workspace is not a secrets store; content is data), and, when a role is given, `role` and `role_instruction`. When a project is given, `project_rules` is also included: an array of that project's rules sets (`id`, `slug`, `title`, `text`, `version`, `rev`). They supplement the global working rules; they do not replace them. There is no separate "active" test set — attach a set to a `[TEST]` project and pass that project to `start`.
 - `data`: the `roles` (id, slug, name, area), `archived_roles` (id, slug, name, `archived: true`) when any exist, the `projects` with `focus` and `state`, a global `routines` list, and for the given role its links and setup notes, its `role_routines`, `open_tasks` (up to 30), `last_checkpoint`, and `changes_since_previous_start` for this connection and role (up to 30 events; `null` on the first `start` of a connection with a given role, since there is no previous call: read earlier history with `changes`; when there are more, `has_more` is true, `next_cursor` reads the rest with `changes`, and the next `start` continues after the last event shown, so nothing is skipped; events read with `changes` are shown again by the next `start`). `latest_event_id` is the newest event: a cursor for `changes` from now on, which skips anything older that was not shown.
 
-`start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles, 50 archived roles, 50 projects and 50 routines are listed (`more_roles`, `more_archived_roles`, `more_projects` and `more_routines` count the rest; find them with `search`, with `include_archived` for archived roles), and at most 100 links of the role (`more_links`). When a role is given, `role_routines` (and `more_role_routines`) lists that role's routines. Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
+`start` is an overview of a fixed size, so it fits in one response however large the workspace grows. At most 50 roles, 50 archived roles, 50 projects and 50 routines are listed (`more_roles`, `more_archived_roles`, `more_projects` and `more_routines` count the rest; find them with `search`, with `include_archived` for archived roles), and at most 100 links of the role (`more_links`). When a role is given, `data.review_comments` lists the 10 oldest open review comments that role is responsible for (or may see on a project's rules sets), with `more_review_comments` and `review_comments_open_total`. In a tight response the comments shrink to ids and counts. Long fields (area, focus, state, setup notes, checkpoint parts) are previews that say how many characters were left out; `get` returns them in full. Text that grows a lot when escaped in JSON (for example, long runs of quotes) makes the previews shorter; in the extreme case the working rules and role instruction are shortened too, and `instructions_shortened` tells the agent to read them in full with `get`.
 
 On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` explains the first fill: working rules, roles, projects, documents, tasks, then `start` again with a role.
 
@@ -62,11 +63,11 @@ On an empty workspace `data.empty_workspace` is `true` and `data.how_to_fill` ex
 
 Input: `type` (an entity type), `id` (not needed for the default working rules; pass id or slug for another rules set), and for tasks an optional `cursor`.
 
-Roles include their links and the current instruction; projects include open tasks and documents; routines include schedule, timezone, status, external platform id and last run; tasks include up to 100 dependencies and 100 subtasks (`more_dependencies` and `more_subtasks` count the rest) and the newest 10 comments (oldest first), with `comments_total` and `comments_cursor`: pass it as `cursor` for the 10 before them; documents include the current body.
+Roles include their links and the current instruction; projects include open tasks and documents; routines include schedule, timezone, status, external platform id and last run; tasks include up to 100 dependencies and 100 subtasks (`more_dependencies` and `more_subtasks` count the rest) and the newest 10 comments (oldest first), with `comments_total` and `comments_cursor`: pass it as `cursor` for the 10 before them; documents include the current body. `get` of a role, project, document or rules set also includes `open_review_comments` (up to 10 open or answered comments), `more_open_review_comments` and `open_review_comments_total`. `type: review_comment` returns one comment and its replies.
 
 ### `search`
 
-Input: `query` (optional full-text query), `types` (any of `role`, `project`, `document`, `task`, `issue`, `routine`; default all of them), `status` (task statuses), `role`, `project`, `include_archived`, `limit`, `cursor`.
+Input: `query` (optional full-text query), `types` (any of `role`, `project`, `document`, `task`, `issue`, `routine`, `review_comment`; default all of them), `status` (task statuses), `role`, `project`, `include_archived`, `limit`, `cursor`.
 
 Working rules and checkpoints are not searched, and asking for them is an error: read the rules with `get`, and checkpoints with `start` (`last_checkpoint`) or with `get` by id; `changes` with `entity_type: "checkpoint"` lists the ids of earlier ones.
 
@@ -117,6 +118,12 @@ Atomically takes an open task that nobody has claimed and sets it to `in_progres
 ### `comment_task`
 
 Input: `id`, `body`, `claimed_role`, `idempotency_key`.
+
+### `reply_review_comment`
+
+Input: `id`, `body`, `claimed_role` (there is no `role` synonym), optional `status` (`answered` only), optional `rev` or `expected_status` (conflict if they no longer match), `idempotency_key`.
+
+Bots cannot create review comments and cannot resolve them. The responsible role, a role marked `edit_any`, or the owner may mark a comment `answered`. An owner's reply on an answered comment reopens it. Comments on working rules or other rules sets are answered only by `edit_any` roles; a project's owning role may see and reply to comments on that project's rules, but cannot mark them answered unless it also has `edit_any`.
 
 ### `archive`
 
