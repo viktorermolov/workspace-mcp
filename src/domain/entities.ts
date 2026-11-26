@@ -343,8 +343,28 @@ function resolveParentId(db: DB, memberId: string, ref: string | null | undefine
   if (ref == null || ref === '') return null;
   const p = findRole(db, memberId, ref, true);
   if (!p) throw invalid(`parent role not found: ${ref}`);
-  if (p.archived_at) throw invalid(`parent role "${p.slug}" is archived and cannot be set as a parent`);
   return p.id;
+}
+
+/** Longest downward path in edges from `rootId` (0 for a leaf or a role not yet inserted). */
+function roleSubtreeHeight(db: DB, memberId: string, rootId: string): number {
+  const rows = all<{ id: string; parent_id: string | null }>(db, 'SELECT id, parent_id FROM role WHERE member_id = ?', memberId);
+  const byParent = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.parent_id) continue;
+    const list = byParent.get(r.parent_id) ?? [];
+    list.push(r.id);
+    byParent.set(r.parent_id, list);
+  }
+  let max = 0;
+  const walk = (id: string, depth: number, seen: Set<string>) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (depth > max) max = depth;
+    for (const child of byParent.get(id) ?? []) walk(child, depth + 1, seen);
+  };
+  walk(rootId, 0, new Set());
+  return max;
 }
 
 /** Walk ancestors of `startId` (inclusive) inside the current transaction, scoped to this workspace. */
@@ -376,7 +396,9 @@ function assertRoleParent(db: DB, memberId: string, roleId: string, parentId: st
   if (parent.archived_at) throw invalid(`parent role "${parent.slug}" is archived and cannot be set as a parent`);
   const { ids, hitCeiling } = roleAncestorChain(db, memberId, parentId);
   if (ids.includes(roleId)) throw invalid('this parent would create a cycle in the reporting tree');
-  if (hitCeiling || ids.length > MAX_ROLE_PARENT_DEPTH) {
+  const height = roleSubtreeHeight(db, memberId, roleId);
+  // ancestor depth of the new parent (ids.length, inclusive) + downward height of the moved subtree must be ≤ 16
+  if (hitCeiling || ids.length + height > MAX_ROLE_PARENT_DEPTH) {
     throw invalid(`a role parent chain cannot be deeper than ${MAX_ROLE_PARENT_DEPTH} levels`);
   }
 }
@@ -413,14 +435,10 @@ export function saveRole(db: DB, actor: Actor, input: SaveRoleInput) {
         const id = newId('role');
         const at = now();
         let parentId: string | null = null;
-        if (input.parent !== undefined) {
-          if (input.parent) {
-            assertCanEdit(db, actor, null, { parent: true });
-            parentId = resolveParentId(db, actor.memberId, input.parent);
-            if (parentId) assertRoleParent(db, actor.memberId, id, parentId);
-          } else {
-            assertCanEdit(db, actor, null, { parent: true });
-          }
+        if (input.parent) {
+          assertCanEdit(db, actor, null, { parent: true });
+          parentId = resolveParentId(db, actor.memberId, input.parent);
+          if (parentId) assertRoleParent(db, actor.memberId, id, parentId);
         }
         run(
           db,

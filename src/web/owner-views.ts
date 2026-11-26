@@ -179,8 +179,9 @@ export function mapView(db: DB, memberId: string) {
   const creationAssigned = new Set<string>();
   const interactions = new Map<string, { from: string; to: string; kind: string; count: number; last_at: string }>();
   const actorSlug = (e: { claimed_role: string | null; actor_kind: string }): string | null => {
-    if (e.actor_kind === 'owner' && !e.claimed_role) return 'owner';
-    if (e.claimed_role === 'owner') return 'owner';
+    // Only a real owner session (or owner connection, recorded as actor_kind 'owner')
+    // is drawn as owner — never an agent whose claimed_role string is "owner".
+    if (e.actor_kind === 'owner') return 'owner';
     if (e.claimed_role && existingSlugs.has(e.claimed_role)) return e.claimed_role;
     return null;
   };
