@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strToU8, unzipSync, zipSync } from 'fflate';
 import { createBackup, listBackups, restoreBackup, verifyDatabaseFile } from '../src/backup/backup.ts';
 import { buildExport, readExport } from '../src/backup/export.ts';
@@ -10,6 +10,7 @@ import { loadConfig } from '../src/config.ts';
 import { DatabaseInUseError, get, NewerSchemaError, openDatabase, openOffline, run, runAppMigrations } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
 import { ensureOwnerMember, saveRole, updateRules } from '../src/domain/entities.ts';
+import { log } from '../src/util/log.ts';
 import { Browser, call, connectAgent, registerOwner, signIn, startService } from './helpers/harness.ts';
 
 describe('data safety', () => {
@@ -153,7 +154,7 @@ describe('data safety', () => {
     await first.close();
     const count = (db: ReturnType<typeof openDatabase>, sql: string, ...p: unknown[]) => get<{ n: number }>(db, sql, ...p)!.n;
 
-    // The first statement succeeds, the second fails: the whole migration must be rolled back.
+    // The first two statements succeed, the last of the three fails: the whole migration must be rolled back.
     const fixture = { id: Math.max(...migrations.map((m) => m.id)) + 1000, name: 'test fixture: broken', sql: "ALTER TABLE role ADD COLUMN fixture_note TEXT; CREATE TABLE fixture_partial (x TEXT); INSERT INTO no_such_table VALUES (1);" };
     migrations.push(fixture);
     try {
@@ -193,6 +194,27 @@ describe('data safety', () => {
       assert.deepEqual(listBackups(env.config).map((b) => b.name), first.map((b) => b.name));
     } finally {
       await env.close();
+    }
+  });
+
+  it('logs a failed backup at start and still starts', async () => {
+    // The backup is written to a temporary file and then renamed into place: make that last step fail.
+    const rename = mock.method(fs, 'renameSync', () => {
+      throw new Error('disk full (test)');
+    });
+    const errors = mock.method(log, 'error', () => undefined);
+    let env: Awaited<ReturnType<typeof startService>> | undefined;
+    try {
+      env = await startService({ jobs: true });
+      rename.mock.restore();
+      assert.ok(errors.mock.calls.some((c) => c.arguments[0] === 'background job failed' && c.arguments[1]?.job === 'backup' && /disk full \(test\)/.test(String(c.arguments[1]?.error))));
+      assert.equal(listBackups(env.config).length, 0);
+      const res = await fetch(`${env.base}/healthz`);
+      assert.equal(res.status, 200);
+    } finally {
+      rename.mock.restore();
+      errors.mock.restore();
+      await env?.close();
     }
   });
 
