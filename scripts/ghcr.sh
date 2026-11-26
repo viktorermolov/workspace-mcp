@@ -33,7 +33,10 @@ case "$cmd" in
       jq -r '.tags // [] | .[]' "$body"
       # The next page, if any, is in the Link header: </v2/...?last=...&n=...>; rel="next"
       path="$(tr -d '\r' <"$headers" | sed -n 's/^[Ll]ink: *<\(\/v2\/[^>]*\)>; *rel="next".*/\1/p' | tail -n1)"
-      [ -n "$path" ] || exit 0
+      if [ -z "$path" ]; then
+        if grep -qi '^link:' "$headers"; then echo "ghcr.sh: unexpected Link header when listing tags of ${repo}" >&2; exit 1; fi
+        exit 0
+      fi
     done
     echo "ghcr.sh: too many pages of tags for ${repo}" >&2; exit 1
     ;;

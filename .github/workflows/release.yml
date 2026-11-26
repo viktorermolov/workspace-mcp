@@ -2,7 +2,7 @@ name: release
 
 # Runs only when the owner pushes a version tag vX.Y.Z on a commit from master. In order:
 #   guard    the tag is vX.Y.Z on a commit from master, matches package.json, has CHANGELOG notes, and the
-#            version is not released or in the registry yet; decides whether it becomes `latest`
+#            version is not released or in the registry yet
 #   ci       the full CI (typecheck, unit tests, UI build, tree check, e2e) on the same commit
 #   build    per architecture: builds the image with SBOM and provenance, pushes it by digest (no tag),
 #            then pulls exactly that digest and runs the smoke test and the upgrade test from the previous release
@@ -35,7 +35,6 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
       previous: ${{ steps.check.outputs.previous }}
-      latest: ${{ steps.check.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,9 +81,8 @@ jobs:
           {
             echo "version=${VERSION}"
             echo "previous=${PREVIOUS}"
-            echo "latest=${LATEST}"
           } >> "$GITHUB_OUTPUT"
-          echo "Release ${TAG} from ${GITHUB_SHA}: upgrade test from ${PREVIOUS:-nothing (first release)}, latest=${LATEST}."
+          echo "Release ${TAG} from ${GITHUB_SHA}: upgrade test from ${PREVIOUS:-nothing (first release)}; would be latest now: ${LATEST} (decided again when tagging)."
 
   ci:
     needs: guard
@@ -272,8 +270,10 @@ jobs:
           # Decided again here, not taken from the guard: a re-run of failed jobs reuses the guard's outputs,
           # and a newer version may have been released since.
           EXISTING="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
+          # A version tag that already exists is accepted only if it is this run's signed image (a re-run after
+          # a failure partway through tagging); anything else stops the release.
           for T in "$TAG" "$VERSION"; do
-            if grep -qxF "$T" <<<"$EXISTING"; then echo "::error::${IMAGE}:${T} appeared in the registry during this run"; exit 1; fi
+            if grep -qxF "$T" <<<"$EXISTING"; then check "$T"; echo "${IMAGE}:${T} already points to this signed image"; fi
           done
           RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
             --json tagName --jq '.[].tagName')"
@@ -281,7 +281,7 @@ jobs:
           docker buildx imagetools create -t "${IMAGE}:${TAG}" -t "${IMAGE}:${VERSION}" "${IMAGE}@${DIGEST}"
           check "$TAG"
           check "$VERSION"
-          # latest moves last, in its own step, only once the version tags are in place.
+          # latest moves last, in a separate push, only once both version tags are in place and checked.
           if [ "$LATEST" = "true" ]; then
             docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
             check latest
