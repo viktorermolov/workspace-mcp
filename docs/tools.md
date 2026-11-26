@@ -77,9 +77,13 @@ Like `changes`, a page ends with `has_more` and `next_cursor`: while `has_more` 
 
 ### `save_role`
 
-Input: `id` and `rev` (for updates), `name`, `slug`, `area` (area of responsibility), `instruction`, `setup_notes` (what a new platform must recreate by hand: connectors, wake-up triggers; structured schedules belong in `save_routine`), `links` (array of `{to, type}`; the type is free-form, for example `delegates_to` or `reviews`; replaces all links of the role), `note` (stored with a new instruction version), `claimed_role`, `idempotency_key`.
+Input: `id` and `rev` (for updates), `name`, `slug`, `area` (area of responsibility), `instruction`, `setup_notes` (what a new platform must recreate by hand: connectors, wake-up triggers; structured schedules belong in `save_routine`), `links` (array of `{to, type}`; the type is free-form, for example `delegates_to` or `reviews`; replaces all links of the role), `parent` (slug or id of the role this one reports to, or `null` to clear; omitted, the parent is left unchanged), `note` (stored with a new instruction version), `claimed_role`, `idempotency_key`.
+
+`parent` is the canonical reporting line. Only the owner or a role marked `edit_any` may set or clear it, including when creating a role. A role cannot set its own parent. There is no `reports_to` argument for this field: that name is already a declared link type. Existing `reports_to` links are kept and still shown as declared links, but the UI no longer offers that type for new links.
 
 The instruction is versioned. Edits to instructions are highlighted to the owner, because they change the behaviour of every later session. A slug stays reserved after the role is archived; creating or renaming a role to that slug fails with a conflict that says the existing role is archived and gives its id.
+
+`get` with `type: "role"` and `start` include `parent` (`{ id, slug, name }` on the current role, and a parent slug on each item in `data.roles`). They do not include map interactions, which are owner-only on `GET /api/owner/map`.
 
 ### `save_routine`
 

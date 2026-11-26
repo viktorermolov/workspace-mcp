@@ -163,7 +163,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     'save_role',
     {
       title: 'Create or update a role',
-      description: 'Create a role (omit id) or update one (id + rev). The instruction is versioned. links replace all links of the role.',
+      description: 'Create a role (omit id) or update one (id + rev). The instruction is versioned. links replace all links of the role. parent is the reporting line (slug or id, or null to clear); only the owner or an edit_any role may set it. Existing reports_to links are unrelated and stay as declared links.',
       inputSchema: z.object({
         id: id.optional(),
         rev: rev.optional(),
@@ -173,6 +173,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         instruction: z.string().max(LIMITS.instruction).optional(),
         setup_notes: z.string().max(LIMITS.text).optional().describe('What a new platform must recreate by hand: connectors, wake-up triggers. Structured schedules belong in save_routine.'),
         links: z.array(z.object({ to: id, type: z.string().min(1).max(100) })).max(50).optional(),
+        parent: z.string().max(200).nullable().optional().describe('Role this one reports to (slug or id). null clears it. Only the owner or a role marked edit_any may set this, including on create. There is no reports_to synonym.'),
         note: note.optional(),
         claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
         idempotency_key: idem.optional(),

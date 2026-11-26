@@ -51,6 +51,7 @@ describe('role checks on writes', () => {
         [2, 'routines'],
         [3, 'titled-rules-sets'],
         [4, 'connection_roles'],
+        [5, 'role_parent'],
         [6, 'review-comments'],
       ],
     );
@@ -95,6 +96,34 @@ describe('role checks on writes', () => {
     assert.equal(get(env.svc.db, 'SELECT 1 FROM connection_role WHERE client_id = ?', clientId), undefined);
     assert.equal(get(env.svc.db, 'SELECT 1 FROM connection_role WHERE client_id = ?', otherConn.client_id), undefined);
     otherClientId = otherConn.client_id;
+  });
+
+
+  it('logs saving an already-empty unconfirmed connection role list', async () => {
+    const before = get<{ n: number }>(
+      env.svc.db,
+      "SELECT count(*) AS n FROM event WHERE action = 'connection.roles_updated' AND entity_id = ?",
+      otherClientId,
+    )!.n;
+    await owner.json(`/api/owner/connections/${encodeURIComponent(otherClientId)}/roles`, { json: { roles: [], confirm: false } });
+    const ev = get<{ actor_kind: string; data: string }>(
+      env.svc.db,
+      "SELECT actor_kind, data FROM event WHERE action = 'connection.roles_updated' AND entity_id = ? ORDER BY id DESC LIMIT 1",
+      otherClientId,
+    )!;
+    assert.equal(ev.actor_kind, 'owner');
+    const data = JSON.parse(ev.data) as { role_ids: string[]; confirmed: boolean };
+    assert.equal(data.confirmed, false);
+    assert.deepEqual(data.role_ids, []);
+    assert.equal(
+      get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM event WHERE action = 'connection.roles_updated' AND entity_id = ?", otherClientId)!.n,
+      before + 1,
+    );
+    const other = (
+      await owner.json<{ connections: { client_id: string; roles_confirmed: boolean; roles_suggested_at: string | null }[] }>('/api/owner/connections')
+    ).connections.find((c) => c.client_id === otherClientId)!;
+    assert.equal(other.roles_confirmed, false);
+    assert.ok(other.roles_suggested_at, 'saving an empty draft still locks it');
   });
 
   it('logs saving a connection role list without confirming it', async () => {
@@ -273,6 +302,25 @@ describe('role checks on writes', () => {
     assert.equal(out.claimed_by?.role, 'no-such-role');
   });
 
+
+  it('in enforce mode, claim_task with an unknown claimed_role and no role is forbidden', async () => {
+    await owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['lead'], confirm: true } });
+    if (otherClientId) {
+      await owner.json(`/api/owner/connections/${encodeURIComponent(otherClientId)}/roles`, { json: { roles: ['intern'], confirm: true } });
+    }
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce' } });
+    try {
+      const task = await call<{ id: string }>(agent, 'save_task', { title: 'Claim unknown in enforce', role: 'lead', claimed_role: 'lead' });
+      await assert.rejects(() => call(agent, 'claim_task', { id: task.id, claimed_role: 'no-such-role' }), (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        assert.match(err(e).message, /role not found: no-such-role/);
+        return true;
+      });
+    } finally {
+      await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+    }
+  });
+
   it('lets the owner write as before, and a role removed from the list is refused in enforce', async () => {
     const created = await owner.json<{ id: string; title: string }>('/api/owner/tasks', { json: { title: 'Owner task', role: 'lead' } });
     assert.equal(created.title, 'Owner task');
@@ -295,5 +343,49 @@ describe('role checks on writes', () => {
     const list = await owner.json<{ connections: { client_id: string; roles: { slug: string }[] }[] }>('/api/owner/connections');
     const grok = list.connections.find((c) => c.client_id === clientId)!;
     assert.ok(!grok.roles.some((r) => r.slug === 'temp'));
+  });
+
+  it('keeps a rejected role_check audit row after the write transaction rolls back (#80)', async () => {
+    await owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['lead', 'intern'], confirm: true } });
+    await owner.json(`/api/owner/roles/${encodeURIComponent(leadId)}/edit-any`, { json: { edit_any: false } });
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce' } });
+
+    const leadTask = await owner.json<{ id: string; rev: number; result: string | null }>('/api/owner/tasks', {
+      json: { title: 'Lead item for #80', role: 'lead' },
+    });
+    await assert.rejects(
+      () => call(agent, 'save_task', { id: leadTask.id, rev: leadTask.rev, result: 'intern must not write this', claimed_role: 'intern' }),
+      (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        return true;
+      },
+    );
+    const others = get<{ outcome: string; detail: string }>(
+      env.svc.db,
+      "SELECT outcome, detail FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%edit_others%' ORDER BY id DESC LIMIT 1",
+    );
+    assert.ok(others, 'expected a persisted rejected audit for edit_others');
+    assert.equal(JSON.parse(others.detail).reason, 'edit_others');
+    const unchanged = get<{ result: string | null }>(env.svc.db, 'SELECT result FROM task WHERE id = ?', leadTask.id)!;
+    assert.equal(unchanged.result, leadTask.result);
+
+    const beforeRules = await call<{ text: string }>(agent, 'get', { type: 'rules' });
+    await assert.rejects(
+      () => call(agent, 'update_rules', { text: 'Intern must not change the working rules.', claimed_role: 'intern' }),
+      (e: unknown) => {
+        assert.equal(err(e).error, 'forbidden');
+        return true;
+      },
+    );
+    const rules = get<{ outcome: string; detail: string }>(
+      env.svc.db,
+      "SELECT outcome, detail FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%edit_rules%' ORDER BY id DESC LIMIT 1",
+    );
+    assert.ok(rules, 'expected a persisted rejected audit for edit_rules');
+    assert.equal(JSON.parse(rules.detail).reason, 'edit_rules');
+    const afterRules = await call<{ text: string }>(agent, 'get', { type: 'rules' });
+    assert.equal(afterRules.text, beforeRules.text);
+
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
   });
 });
