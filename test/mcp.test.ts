@@ -506,4 +506,81 @@ describe('MCP behaviour', () => {
     assert.equal(ev.claimed_role, 'lead');
     await a.close();
   });
+
+  it('supports additional titled rules sets and project_rules on start', async () => {
+    const a = (await connectAgent(env, owner, 'Platform Rules49')).client;
+    const baseline = await call(a, 'get', { type: 'rules' });
+    assert.equal(baseline.slug, 'working-rules');
+    assert.equal(baseline.title, 'Working rules');
+    assert.equal(baseline.is_default, true);
+    assert.equal(baseline.project, null);
+    assert.ok(String(baseline.id).startsWith('rul_'));
+
+    const startBare = await call(a, 'start');
+    assert.equal(startBare.instructions.working_rules, baseline.text);
+    assert.equal(startBare.instructions.project_rules, undefined);
+    assert.equal(startBare.instructions.working_rules_rev, baseline.rev);
+
+    await call(a, 'save_project', { name: 'TEST', slug: 'test-rules-49' });
+    const created = await call(a, 'update_rules', {
+      slug: 'test-voice',
+      title: 'Test voice',
+      project: 'test-rules-49',
+      text: 'Use a playful tone in tests.',
+    });
+    assert.equal(created.slug, 'test-voice');
+    assert.equal(created.title, 'Test voice');
+    assert.equal(created.is_default, false);
+    assert.equal(created.project, 'test-rules-49');
+    assert.equal(created.version, 1);
+    assert.equal(created.unchanged, false);
+
+    const startProj = await call(a, 'start', { project: 'test-rules-49' });
+    assert.equal(startProj.instructions.working_rules, baseline.text, 'project rules supplement global rules');
+    assert.equal(startProj.instructions.project_rules.length, 1);
+    assert.equal(startProj.instructions.project_rules[0].slug, 'test-voice');
+    assert.equal(startProj.instructions.project_rules[0].title, 'Test voice');
+    assert.equal(startProj.instructions.project_rules[0].text, 'Use a playful tone in tests.');
+    assert.equal(startProj.instructions.project_rules[0].version, 1);
+
+    const bySlug = await call(a, 'get', { type: 'rules', id: 'test-voice' });
+    assert.equal(bySlug.id, created.id);
+    const byId = await call(a, 'get', { type: 'rules', id: created.id });
+    assert.equal(byId.slug, 'test-voice');
+    const stillDefault = await call(a, 'get', { type: 'rules' });
+    assert.equal(stillDefault.id, baseline.id);
+    assert.equal(stillDefault.text, baseline.text);
+
+    await assert.rejects(
+      call(a, 'update_rules', { id: stillDefault.id, slug: 'test-voice', text: stillDefault.text, rev: stillDefault.rev }),
+      (e) => err(e).error === 'conflict' && /test-voice/.test(err(e).message),
+    );
+    await assert.rejects(
+      call(a, 'update_rules', { project: 'test-rules-49', text: stillDefault.text, rev: stillDefault.rev }),
+      (e) => err(e).error === 'invalid' && /default/.test(err(e).message),
+    );
+    await assert.rejects(call(a, 'start', { project: 'no-such-project-49' }), (e) => err(e).error === 'not_found');
+
+    const named = await call(a, 'update_rules', { id: created.id, text: 'Use a playful tone in tests. Be brief.', rev: created.rev });
+    const hist = await call(a, 'versions', { type: 'rules', id: 'test-voice' });
+    assert.equal(hist.versions.length, 2);
+    const rolled = await call(a, 'rollback', { type: 'rules', id: 'test-voice', to_version: 1, rev: named.rev });
+    assert.equal(rolled.new_version, 3);
+    const afterRb = await call(a, 'get', { type: 'rules', id: 'test-voice' });
+    assert.equal(afterRb.text, 'Use a playful tone in tests.');
+
+    const defHist = await call(a, 'versions', { type: 'rules' });
+    assert.ok(defHist.versions.length >= 1);
+
+    await call(a, 'archive', { type: 'project', id: 'test-rules-49' });
+    await assert.rejects(
+      owner.json('/api/owner/purge', { json: { type: 'project', id: 'test-rules-49' } }),
+      (e) => e instanceof Error && /rules sets/.test(e.message),
+    );
+    await call(a, 'update_rules', { id: afterRb.id, project: null, rev: afterRb.rev });
+    await owner.json('/api/owner/purge', { json: { type: 'project', id: 'test-rules-49' } });
+    const detached = await call(a, 'get', { type: 'rules', id: 'test-voice' });
+    assert.equal(detached.project, null);
+    await a.close();
+  });
 });
