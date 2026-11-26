@@ -535,8 +535,9 @@ describe('role reporting tree: scale, cap and upgrade', () => {
     assert.ok(!colsBefore.includes('parent_id'));
 
     const applied = runAppMigrations(db);
-    assert.equal(applied, 1);
+    assert.equal(applied, 2);
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 5")?.name, 'role_parent');
+    assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 6")?.name, 'review-comments');
     const cols = all<{ name: string }>(db, 'PRAGMA table_info(role)').map((c) => c.name);
     assert.ok(cols.includes('parent_id'));
     const parents = all<{ slug: string; parent_id: string | null }>(db, 'SELECT slug, parent_id FROM role ORDER BY slug');

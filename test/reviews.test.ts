@@ -46,11 +46,8 @@ function memoryDb() {
 }
 
 describe('migration 6', () => {
-  it('uses id 6 and leaves 5 unused', () => {
-    // Id 5 is reserved for #55 (role parent). If #55 merges first, this assertion
-    // will fail: change it to expect migrations.find((m) => m.id === 5)?.name === 'role_parent'
-    // (or whatever name ships) and keep the id-6 check below.
-    assert.equal(migrations.some((m) => m.id === 5), false);
+  it('uses id 6 and id 5 is role_parent', () => {
+    assert.equal(migrations.find((m) => m.id === 5)?.name, 'role_parent');
     assert.equal(migrations.find((m) => m.id === 6)?.name, 'review-comments');
   });
 });
