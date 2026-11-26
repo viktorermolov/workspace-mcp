@@ -6,10 +6,11 @@ name: release
 #   ci       the full CI (typecheck, unit tests, UI build, tree check, e2e) on the same commit
 #   build    per architecture: builds the image with SBOM and provenance, pushes it by digest (no tag),
 #            then pulls exactly that digest and runs the smoke test and the upgrade test from the previous release
-#   publish  joins the tested digests into one multi-arch image under vX.Y.Z and X.Y.Z (and `latest` only
-#            when this is the highest version), signs it with cosign (keyless) and verifies the signature
+#   publish  joins the tested digests into one multi-arch index, uploads it by digest (no tag), checks the
+#            platforms, SBOM and provenance, signs it with cosign (keyless) and verifies the signature; only
+#            then tags it vX.Y.Z and X.Y.Z, and `latest` only when this is the highest version
 #   release  creates the GitHub Release with the notes from CHANGELOG.md
-# Nothing is tagged in the registry until every check has passed.
+# Nothing is tagged in the registry until every check has passed and the image is signed.
 on:
   push:
     tags: ['v*.*.*']
@@ -17,7 +18,9 @@ on:
 permissions:
   contents: read
 
-# One release at a time, never cancelled: the `latest` decision depends on the releases before it.
+# One release at a time, so the `latest` decision sees the releases before it. A running release is never
+# cancelled; if several tags are pushed while one runs, GitHub keeps only the newest waiting run and cancels
+# the others, which then publish nothing and need a re-run.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -56,6 +59,8 @@ jobs:
             || fail "${GITHUB_SHA} is not a commit on master. Tag a commit from master."
           VERSION="$(node -p 'require("./package.json").version')"
           [ "v${VERSION}" = "$TAG" ] || fail "package.json has version ${VERSION}, the tag is ${TAG}."
+          LOCK="$(node -p 'const l=require("./package-lock.json"); l.version + " " + l.packages[""].version')"
+          [ "$LOCK" = "${VERSION} ${VERSION}" ] || fail "package-lock.json has version ${LOCK}, expected ${VERSION}."
           node scripts/release-version.ts notes "$VERSION" >/dev/null \
             || fail "CHANGELOG.md has no section \"## [${VERSION}]\" with release notes."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -63,25 +68,22 @@ jobs:
           fi
           RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
             --json tagName --jq '.[].tagName')"
+          # Versions already tagged in the registry count too, so a release that published its image but not
+          # its GitHub Release still keeps an older version from taking `latest`.
+          REGISTRY_TAGS="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
+          for T in "$TAG" "$VERSION"; do
+            if grep -qxF "$T" <<<"$REGISTRY_TAGS"; then
+              fail "ghcr.io/${GITHUB_REPOSITORY,,}:${T} is already in the registry. A published version is never rebuilt."
+            fi
+          done
           PREVIOUS="$(node scripts/release-version.ts previous "$VERSION" <<<"$RELEASED")"
-          LATEST="$(node scripts/release-version.ts is-highest "$VERSION" <<<"$RELEASED")"
+          LATEST="$(printf '%s\n%s\n' "$RELEASED" "$REGISTRY_TAGS" | node scripts/release-version.ts is-highest "$VERSION")"
           {
             echo "version=${VERSION}"
             echo "previous=${PREVIOUS}"
             echo "latest=${LATEST}"
           } >> "$GITHUB_OUTPUT"
           echo "Release ${TAG} from ${GITHUB_SHA}: upgrade test from ${PREVIOUS:-nothing (first release)}, latest=${LATEST}."
-      - name: The version is not in the registry yet
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          if docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
-            echo "::error::${IMAGE}:${TAG} is already in the registry. A published version is never rebuilt."
-            exit 1
-          fi
 
   ci:
     needs: guard
@@ -159,7 +161,7 @@ jobs:
           scripts/container-upgrade.sh "$OLD" workspace-mcp:release
       - name: No previous release
         if: needs.guard.outputs.previous == ''
-        run: echo "::notice::First release, so there is nothing to upgrade from; upgrade test skipped."
+        run: echo "::notice::No published release up to ${VERSION}, so there is nothing to upgrade from; upgrade test skipped."
       - name: Record the tested digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -169,7 +171,8 @@ jobs:
           name: digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digest-${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 1
+          overwrite: true
+          retention-days: 7
 
   publish:
     needs: [guard, build]
@@ -197,8 +200,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-      - name: Publish the multi-arch tags
-        id: tags
+      - name: Upload the multi-arch index by digest, without a tag
+        id: index
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
@@ -208,20 +213,14 @@ jobs:
             [[ "$D" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for ${ARCH}"; exit 1; }
             SOURCES+=("${IMAGE}@${D}")
           done
-          TAGS=(-t "${IMAGE}:${TAG}" -t "${IMAGE}:${VERSION}")
-          if [ "$LATEST" = "true" ]; then
-            TAGS+=(-t "${IMAGE}:latest")
-          else
-            echo "::notice::${VERSION} is not the highest released version, so latest stays where it is."
-          fi
-          docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"
-          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for ${IMAGE}:${TAG}"; exit 1; }
+          docker buildx imagetools create --dry-run "${SOURCES[@]}" > "${RUNNER_TEMP}/index.json"
+          DIGEST="$(scripts/ghcr.sh put-index "$GITHUB_REPOSITORY" "${RUNNER_TEMP}/index.json")"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no index digest"; exit 1; }
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
       - name: Check platforms, SBOM and provenance
         env:
-          DIGEST: ${{ steps.tags.outputs.digest }}
+          DIGEST: ${{ steps.index.outputs.digest }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
@@ -229,7 +228,7 @@ jobs:
           PLATFORMS="$(jq -r '[.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"] | sort | join(",")' <<<"$RAW")"
           [ "$PLATFORMS" = "linux/amd64,linux/arm64" ] || { echo "::error::unexpected platforms: ${PLATFORMS}"; exit 1; }
           ATTESTATIONS="$(jq -r '.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") | .digest' <<<"$RAW")"
-          [ "$(grep -c . <<<"$ATTESTATIONS")" -eq 2 ] || { echo "::error::expected one attestation manifest per platform"; exit 1; }
+          [ "$(grep -c . <<<"$ATTESTATIONS" || true)" -eq 2 ] || { echo "::error::expected one attestation manifest per platform"; exit 1; }
           for A in $ATTESTATIONS; do
             TYPES="$(docker buildx imagetools inspect --raw "${IMAGE}@${A}" | jq -r '[.layers[].annotations["in-toto.io/predicate-type"]] | join(" ")')"
             grep -q 'spdx' <<<"$TYPES" || { echo "::error::no SBOM in ${A}: ${TYPES}"; exit 1; }
@@ -238,16 +237,45 @@ jobs:
           echo "SBOM and provenance attached for both platforms"
       - name: Sign the image (keyless) and verify the signature
         env:
-          DIGEST: ${{ steps.tags.outputs.digest }}
+          DIGEST: ${{ steps.index.outputs.digest }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
+          # The index is what `docker pull` of a tag resolves to; signing only it keeps the registry free of
+          # extra signature tags for each platform and attestation manifest.
+          cosign sign --yes "${IMAGE}@${DIGEST}"
           cosign verify \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "${IMAGE}@${DIGEST}" >/dev/null
           echo "Signed and verified ${IMAGE}@${DIGEST}"
+      - name: Tag the signed image
+        id: tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          EXISTING="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
+          for T in "$TAG" "$VERSION"; do
+            if grep -qxF "$T" <<<"$EXISTING"; then echo "::error::${IMAGE}:${T} appeared in the registry during this run"; exit 1; fi
+          done
+          NAMES=("$TAG" "$VERSION")
+          if [ "$LATEST" = "true" ]; then
+            NAMES+=(latest)
+          else
+            echo "::notice::${VERSION} is not the highest released version, so latest stays where it is."
+          fi
+          TAGS=()
+          for T in "${NAMES[@]}"; do TAGS+=(-t "${IMAGE}:${T}"); done
+          docker buildx imagetools create "${TAGS[@]}" "${IMAGE}@${DIGEST}"
+          for T in "${NAMES[@]}"; do
+            GOT="$(docker buildx imagetools inspect "${IMAGE}:${T}" --format '{{json .Manifest}}' | jq -r .digest)"
+            [ "$GOT" = "$DIGEST" ] || { echo "::error::${IMAGE}:${T} points to ${GOT}, not the signed ${DIGEST}"; exit 1; }
+          done
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Published ${IMAGE}@${DIGEST} as ${NAMES[*]}"
 
   release:
     needs: [guard, publish]
@@ -272,12 +300,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          NOW="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha)"
+          [ "$NOW" = "$GITHUB_SHA" ] || { echo "::error::the tag ${TAG} now points to ${NOW}, not ${GITHUB_SHA}"; exit 1; }
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           NOTES="${RUNNER_TEMP}/notes.md"
           {
             node scripts/release-version.ts notes "$VERSION"
             echo
-            echo "## Container image"
+            echo "### Container image"
             echo
             echo "For linux/amd64 and linux/arm64, signed with cosign (keyless, from this workflow), with SBOM and provenance attached."
             echo

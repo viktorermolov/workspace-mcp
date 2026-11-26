@@ -92,14 +92,23 @@ jobs:
         run: test "$(docker image inspect -f '{{.Architecture}}' workspace-mcp:local)" = "${{ matrix.arch }}"
       - name: Container smoke test
         run: scripts/container-smoke.sh workspace-mcp:local
+      - name: Registry lookup used by the release guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAGS="$(scripts/ghcr.sh tags "$GITHUB_REPOSITORY")"
+          echo "ghcr.io/${GITHUB_REPOSITORY,,} has $(grep -c . <<<"$TAGS" || true) tag(s)"
       - name: Find the release to upgrade from
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           VERSION="$(node -p 'require("./package.json").version')"
-          PREVIOUS="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
-            --json tagName --jq '.[].tagName' | node scripts/release-version.ts previous "$VERSION")"
+          RELEASED="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 \
+            --json tagName --jq '.[].tagName')"
+          PREVIOUS="$(node scripts/release-version.ts previous "$VERSION" <<<"$RELEASED")"
           echo "tag=${PREVIOUS}" >> "$GITHUB_OUTPUT"
           if [ -z "$PREVIOUS" ]; then
             echo "::notice::No published release up to ${VERSION} yet, so there is nothing to upgrade from: upgrade test skipped."

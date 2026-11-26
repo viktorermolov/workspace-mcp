@@ -56,10 +56,11 @@ docker build -t workspace-mcp:local . && scripts/container-smoke.sh workspace-mc
 
 Releases are made by the maintainer, and only from `master`:
 
-1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. Merge it.
+1. In a pull request, set `version` in `package.json` (and `package-lock.json`) to `X.Y.Z` and rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, with a new empty `## [Unreleased]` above it. For the first release, also update the pre-release wording in `README.md` (status), `SECURITY.md` and `docs/deployment.md` (published images). Merge it.
 2. Tag that commit on `master` and push the tag: `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
+3. After the first release only: GitHub creates the container package as private. Make it public in the package settings (Package settings → Change visibility), so `docker pull` works without signing in.
 
-The release workflow then refuses to publish unless the tag is `vX.Y.Z` on a commit from `master`, `package.json` has the same version, `CHANGELOG.md` has notes for it, and the version is not released or in the registry yet. It runs the full CI on the tagged commit, builds and tests the images, tags them, signs them and creates the GitHub Release from the changelog section. `latest` moves only when the new version is the highest. A released version is never rebuilt or republished: to fix one, release a new version.
+The release workflow then refuses to publish unless the tag is `vX.Y.Z` on a commit from `master`, `package.json` has the same version, `CHANGELOG.md` has notes for it, and the version is not released or in the registry yet. It runs the full CI on the tagged commit, builds and tests the images, signs them, then tags them and creates the GitHub Release from the changelog section. `latest` moves only when the new version is the highest. A released version is never rebuilt or republished: to fix one, release a new version.
 
 ## Issue standard
 
