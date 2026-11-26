@@ -903,3 +903,12 @@ table.diag tr.bad td {
   width: auto;
   flex: 1;
 }
+
+.connection-roles {
+  margin-top: 0.75rem;
+}
+.connection-roles ul {
+  margin: 0.25rem 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
