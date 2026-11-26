@@ -183,15 +183,94 @@ describe('review comments', () => {
     }
   });
 
+  it('keeps a comment on the nearest repeated line when the quote is still on that line', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      // Issue #89: every 5th line is the same quote; editing line 50 used to jump the
+      // comment 20 lines up to the first hit in the fuzzy window (line 30).
+      const lines = Array.from({ length: 100 }, (_, i) => ((i + 1) % 5 === 0 ? '  return null;' : `  step${i + 1}();`));
+      const doc = saveDocument(db, owner, { title: 'Repeated returns', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'fix this return', line_start: 50, line_end: 50 });
+      assert.equal(c.quote, '  return null;');
+      const next = [...lines];
+      next[49] = '  return null; // fixed';
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_line_start, 50, `jumped to line ${after.anchor_line_start} (${after.anchor_state})`);
+      assert.ok(after.anchor_state === 'exact' || after.anchor_state === 'moved', after.anchor_state);
+    } finally {
+      close();
+    }
+  });
+
+  it('re-anchors comments on a file of identical lines as exact after a line is prepended', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const body = Array.from({ length: 30 }, () => '}').join('\n');
+      const doc = saveDocument(db, owner, { title: 'Braces', body });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'on ten', line_start: 10, line_end: 10 });
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: 'x\n' + body });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.equal(after.anchor_state, 'exact', after.anchor_state);
+      assert.equal(after.anchor_line_start, 11);
+    } finally {
+      close();
+    }
+  });
+
+  it('breaks a fuzzy tie by picking the match nearest the old line, not the top of the window', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const lines = Array.from({ length: 100 }, (_, i) => ((i + 1) % 5 === 0 ? '  return null;' : `  step${i + 1}();`));
+      const doc = saveDocument(db, owner, { title: 'Fuzzy ties', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'this return is wrong', line_start: 50, line_end: 50 });
+      const next = [...lines];
+      // The quoted line is gone, so exact search misses; several identical copies remain in ±20.
+      next[49] = '  return false;';
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.notEqual(after.anchor_line_start, 30, `took the top of the window (${after.anchor_state} at ${after.anchor_line_start})`);
+      // Nearest remaining exact copies are lines 45 and 55.
+      assert.ok(after.anchor_line_start === 45 || after.anchor_line_start === 55, `expected 45 or 55, got ${after.anchor_line_start} (${after.anchor_state})`);
+    } finally {
+      close();
+    }
+  });
+
+  it('does not treat a unique leftover copy far away as exact when the context does not match', () => {
+    const { db, owner, close } = memoryDb();
+    try {
+      const lines = Array.from({ length: 80 }, (_, i) => `step ${i + 1} is distinct.`);
+      lines[9] = 'SHARED_QUOTE_LINE';
+      lines[69] = 'SHARED_QUOTE_LINE';
+      const doc = saveDocument(db, owner, { title: 'Two copies', body: lines.join('\n') });
+      const c = createReviewComment(db, owner, { target_type: 'document', target_id: doc.id, field: 'body', body: 'the first copy', line_start: 10, line_end: 10 });
+      const next = [...lines];
+      next[9] = 'the first copy was removed.';
+      saveDocument(db, owner, { id: doc.id, rev: doc.rev, body: next.join('\n') });
+      const after = getReviewComment(db, owner.memberId, c.id);
+      assert.notEqual(after.anchor_state, 'exact');
+      assert.notEqual(after.anchor_line_start, 70, `jumped to the leftover copy (${after.anchor_state} at ${after.anchor_line_start})`);
+    } finally {
+      close();
+    }
+  });
+
   it('still runs exact-quote search when the diff hits maxEditLength', () => {
     const { db, owner, close } = memoryDb();
     try {
-      // Two long, very different texts (edit length above 10_000) that still share one unique quote line.
+      // Two long, very different texts (edit length above 10_000) that still share one unique quote
+      // and the same neighbouring context, so exact search may accept the far unique hit.
       const quote = 'UNIQUE_ANCHOR_LINE_THAT_SURVIVES';
       const oldLines = Array.from({ length: 4000 }, (_, i) => `old-${i}-aaaaaaaa`);
+      // CONTEXT_CHARS is 64, so the identical neighbours must fill that window.
+      oldLines[99] = 'UNIQUE_CTX_BEFORE'.padEnd(80, 'X');
       oldLines[100] = quote;
+      oldLines[101] = 'UNIQUE_CTX_AFTER'.padEnd(80, 'Y');
       const newLines = Array.from({ length: 4000 }, (_, i) => `new-${i}-bbbbbbbb`);
+      newLines[3499] = 'UNIQUE_CTX_BEFORE'.padEnd(80, 'X');
       newLines[3500] = quote;
+      newLines[3501] = 'UNIQUE_CTX_AFTER'.padEnd(80, 'Y');
       const role = saveRole(db, owner, { name: 'Writer', slug: 'writer', instruction: oldLines.join('\n') });
       const c = createReviewComment(db, owner, { target_type: 'role', target_id: role.id, field: 'instruction', body: 'keep', line_start: 101, line_end: 101 });
       const map = computeLineMap(oldLines.join('\n'), newLines.join('\n'), { timeoutMs: 200, maxEditLength: DIFF_MAX_EDIT_LENGTH });
