@@ -411,14 +411,14 @@ describe('agents migration', () => {
     const apply = (id: number, at: string) =>
       tx(db, () => {
         const m = migrations.find((x) => x.id === id)!;
-        db.exec(m.sql);
+        db.exec(m.sql!);
         run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, at);
       });
     const pairs = () =>
       all<{ client_id: string; role: string }>(db, 'SELECT a.client_id, r.slug AS role FROM agent a JOIN agent_role ar ON ar.agent_id = a.id JOIN role r ON r.id = ar.role_id ORDER BY a.client_id, r.slug').map((p) => `${p.client_id}/${p.role}`);
     try {
       db.exec('CREATE TABLE app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
-      for (const m of migrations.filter((x) => x.id < 8)) tx(db, () => db.exec(m.sql));
+      for (const m of migrations.filter((x) => x.id < 8)) tx(db, () => db.exec(m.sql!));
       const t = '2026-01-01T00:00:00.000Z';
       run(db, "INSERT INTO member (id, name, is_owner, created_at) VALUES ('mem_1', 'Owner', 1, ?)", t);
       for (const [id, slug] of [['role_b', 'builder'], ['role_b2', 'builder-2'], ['role_x', 'extra']] as const) {
@@ -455,7 +455,7 @@ describe('agents migration', () => {
       db.exec('CREATE TABLE app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
       const t = '2026-01-01T00:00:00.000Z';
       for (const m of migrations.filter((x) => x.id < 12)) {
-        tx(db, () => db.exec(m.sql));
+        tx(db, () => db.exec(m.sql!));
         run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, '2026-02-01T00:00:00.000Z');
       }
       run(db, "INSERT INTO member (id, name, is_owner, created_at) VALUES ('mem_1', 'Owner', 1, ?)", t);
@@ -464,7 +464,7 @@ describe('agents migration', () => {
       run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('cA', 'role_b', 'owner')");
       // The owner removed the agent migration 8 made: the pair has no agent on purpose.
       run(db, "INSERT INTO event (member_id, at, actor_kind, entity_type, action, summary) VALUES ('mem_1', ?, 'owner', 'agent', 'agent.deleted', 'Agent removed')", t);
-      tx(db, () => db.exec(migrations.find((m) => m.id === 12)!.sql));
+      tx(db, () => db.exec(migrations.find((m) => m.id === 12)!.sql!));
       assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 0);
     } finally {
       db.close();
@@ -477,7 +477,7 @@ describe('agents migration', () => {
     const db = openDatabase(path.join(dir, 'w.sqlite'));
     try {
       db.exec('CREATE TABLE app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
-      for (const m of migrations.filter((x) => x.id < 8)) tx(db, () => db.exec(m.sql));
+      for (const m of migrations.filter((x) => x.id < 8)) tx(db, () => db.exec(m.sql!));
       const t = '2026-01-01T00:00:00.000Z';
       run(db, "INSERT INTO member (id, name, is_owner, created_at) VALUES ('mem_1', 'Owner', 1, ?)", t);
       const role = (id: string, slug: string, name: string, archived: string | null = null) =>
@@ -508,7 +508,7 @@ describe('agents migration', () => {
       // c3 is revoked: nothing is created for it.
       run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c3', 'role_a', 'owner')");
 
-      tx(db, () => db.exec(migrations.find((m) => m.id === 8)!.sql));
+      tx(db, () => db.exec(migrations.find((m) => m.id === 8)!.sql!));
 
       const agents = all<{ slug: string; name: string; client_id: string; role: string }>(
         db,

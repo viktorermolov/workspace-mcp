@@ -507,7 +507,7 @@ describe('role reporting tree: scale, cap and upgrade', () => {
     const db = openDatabase(path.join(dir, 'workspace.sqlite'));
     db.exec('CREATE TABLE IF NOT EXISTS app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
     for (const m of migrations.filter((mig) => mig.id <= 4)) {
-      db.exec(m.sql);
+      db.exec(m.sql!);
       run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, new Date().toISOString());
     }
     const at = '2026-06-01T00:00:00.000Z';
@@ -533,7 +533,7 @@ describe('role reporting tree: scale, cap and upgrade', () => {
     assert.ok(!colsBefore.includes('parent_id'));
 
     const applied = runAppMigrations(db);
-    assert.equal(applied, 9);
+    assert.equal(applied, 10);
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 5")?.name, 'role_parent');
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 6")?.name, 'review-comments');
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 7")?.name, 'github-issue-roles');
