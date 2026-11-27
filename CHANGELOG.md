@@ -4,11 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
 ### Added
 
-- A coordinating role can hand tasks to agents. On the Connections screen the owner marks roles that may address tasks to agents; such a role may set or change `for_agent` on a task of any role, in a call that changes nothing else, and the agent must be able to take the task's role. It is narrower than "may edit any item" and, like it, cannot be granted through MCP. Migration 11 adds the mark. (#148)
-- An agent has a page of its own (`/agents/<slug>`): the platform it runs on, the roles it may take, the open tasks addressed to it, other tasks it has taken, its own last checkpoint and its 20 most recent changes. The agent's name links to it from the Map, a role page and the Connections screen. Owner only (`GET /api/owner/agents/:id`). (#130)
-- Agents: a named bot on a platform (a connection) with the roles it may take. One platform can host several agents, and one role can be taken by agents on different platforms. The owner adds, edits and removes agents under each platform on the Connections screen; `start` lists them (`data.agents`), and MCP cannot change them. On upgrade, migration 8 creates one agent for each active connection and each active role the owner has confirmed for it; a role a connection only claimed in a call, or that is only suggested, is not granted, and a connection with no confirmed roles gets no agent until the owner adds one (#138). Checks on writes are unchanged. A zip export carries agents with their roles and without their platform, because connections are never exported; after an import they wait under "Agents without a platform" on the Connections screen until the owner attaches each to a platform (#146). (#107)
+- A coordinating role can hand tasks to agents. On the Platforms the owner marks roles that may address tasks to agents; such a role may set or change `for_agent` on a task of any role, in a call that changes nothing else, and the agent must be able to take the task's role. It is narrower than "may edit any item" and, like it, cannot be granted through MCP. Migration 11 adds the mark. (#148)
+- An agent has a page of its own (`/agents/<slug>`): the platform it runs on, the roles it may take, the open tasks addressed to it, other tasks it has taken, its own last checkpoint and its 20 most recent changes. The agent's name links to it from the Map, a role page and the Platforms. Owner only (`GET /api/owner/agents/:id`). (#130)
+- Agents: a named bot on a platform (a connection) with the roles it may take. One platform can host several agents, and one role can be taken by agents on different platforms. The owner adds, edits and removes agents under each platform on the Platforms; `start` lists them (`data.agents`), and MCP cannot change them. On upgrade, migration 8 creates one agent for each active connection and each active role the owner has confirmed for it; a role a connection only claimed in a call, or that is only suggested, is not granted, and a connection with no confirmed roles gets no agent until the owner adds one (#138). Checks on writes are unchanged. A zip export carries agents with their roles and without their platform, because connections are never exported; after an import they wait under "Agents without a platform" on the Platforms until the owner attaches each to a platform (#146). (#107)
 
 - Agents name themselves: `start` and every write tool take an optional `agent` (the agent's slug). The server checks that the agent runs on the calling platform and may take the named role, and records the agent in the log, version history, task comments, review replies and checkpoints, so two agents with the same role on one platform are told apart (`Grok: ada as developer`). A named agent answers with its own role list, which is always inside the list confirmed for its platform: the owner can give an agent only roles confirmed for the platform, and a role taken off the platform is taken off its agents (#140). A wrong agent or role is a warning in warning mode and `forbidden` with enforcement on. Calls that name no agent keep working. Migration 9 adds the `agent` column to those records. (#110)
 - A task can be addressed to one agent besides its role: `save_task` takes `for_agent` (an agent that may take the task's role, or `null` for any agent with the role), and the task form in the web interface has a "For agent" field. An agent that names itself in `start` sees the role's tasks addressed to it first, then those addressed to nobody, and not those addressed to another agent; `claim_task` by a different named agent is a `conflict`, and a claim records the agent. `start` also returns the agent's own last checkpoint, with `newer_checkpoint_by_another_agent` when another agent of the role wrote a later one. Callers that name no agent see everything, as before. Removing an agent leaves its tasks with the role. A zip export keeps a task's addressee (#146). Migration 10. (#116)
@@ -16,7 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- An agent's short name (slug) stays with it for good, because the log, checkpoints and claims are recorded under it: it can no longer be changed, and the slug of a removed agent that has history is not given to a new one. A name with no Latin letters or digits (for example in Cyrillic) no longer becomes `agent`, `agent-2`: the owner types a short name, and the form on the Connections screen has a field for it. `start` with `agent` lists only the roles that agent can really use. (#141)
+- An agent's short name (slug) stays with it for good, because the log, checkpoints and claims are recorded under it: it can no longer be changed, and the slug of a removed agent that has history is not given to a new one. A name with no Latin letters or digits (for example in Cyrillic) no longer becomes `agent`, `agent-2`: the owner types a short name, and the form on the Platforms has a field for it. `start` with `agent` lists only the roles that agent can really use. (#141)
 - A task addressed to an agent could be claimed by a call that named no agent, from any platform. Only the addressee can claim it now; the owner still can. (#139)
 - A document opened from Projects, an older version on the History screen and comments on a task page are rendered as Markdown instead of showing the Markdown source. They use the same built-in renderer as the reading pages. (#124)
 
@@ -34,6 +36,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)
 - Decision record 0006 also records how the decision was reached: what the review found, which proposals were withdrawn and why, and what a reviewer should check. (#111)
 - Decision record 0006 ends with what was delivered, by issue and pull request, where the result differs from the plan, which existing tests changed and what is not done. README and the architecture page say 18 tools, not 16. (#136)
+
+### Upgrade
+
+- Upgrading from 0.3.1 applies four additive migrations (8–11) automatically, after a pre-migration backup. Existing 0.3.1 data is kept.
+- **Breaking:** `start` returns `data.archived_role_slugs` instead of `data.archived_roles`. In `changes_since_previous_start`, empty event fields are omitted. MCP responses are compact JSON (no indentation).
+- A bot that passes `agent` acts only in that agent's roles. Migration 8 creates one agent for each confirmed platform+role pair; a platform without a confirmed list gets no agents until the owner adds one.
+- Rollback to 0.3.1 is possible only by restoring the pre-migration backup: 0.3.1 will not open a database that 0.4.0 has migrated.
 
 ## [0.3.1] - 2026-11-26
 

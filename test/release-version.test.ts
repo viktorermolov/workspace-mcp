@@ -70,7 +70,7 @@ describe('release versions', () => {
     assert.equal(releaseNotes('0.3.0', CHANGELOG), null);
     assert.equal(releaseNotes('0.1.0', '## [0.1.0]\n\n## [0.0.9]\n- old\n'), null, 'an empty section is not notes');
     assert.equal(releaseNotes('0.1.0', '## [0.1.00] - x\n- no\n'), null, 'the version must match exactly');
-    const missing = run(['notes', '0.4.0', fileURLToPath(new URL('../CHANGELOG.md', import.meta.url))]);
+    const missing = run(['notes', '0.5.0', fileURLToPath(new URL('../CHANGELOG.md', import.meta.url))]);
     assert.equal(missing.code, 1);
     assert.match(missing.err, /no non-empty section/);
   });

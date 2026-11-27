@@ -30,7 +30,7 @@ Workspace MCP reads its settings from environment variables once, at start. With
 | `WEBHOOK_ALLOW_PRIVATE_ADDRESSES` | `false` | Allow webhooks to loopback, private, link-local and other non-public addresses. Keep it off unless the receiver really runs on your own network. |
 | `ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token, `60` to `86400`. Platforms renew it with a refresh token that is replaced on every use; an unused refresh token expires after 60 days. |
 | `SOURCE_URL` | `https://github.com/viktorermolov/workspace-mcp` | Where users of this deployment can get its source code. Shown under **More**, in `/healthz` and in the MCP server information. See [Source code (AGPL)](#source-code-agpl). |
-| `UNUSED_CLIENT_TTL_DAYS` | `7` | Self-registered OAuth clients (dynamic registration or a client metadata document) that never completed a connection are removed after this many days, `1` to `365`. Clients you create under **More → Connections** are kept. |
+| `UNUSED_CLIENT_TTL_DAYS` | `7` | Self-registered OAuth clients (dynamic registration or a client metadata document) that never completed a connection are removed after this many days, `1` to `365`. Clients you create under **More → Platforms** are kept. |
 | `UI_DIR` | `dist/ui` next to the source (`/app/dist/ui` in the image) | Location of the built web interface. |
 
 ## Source code (AGPL)
