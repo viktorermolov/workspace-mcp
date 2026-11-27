@@ -477,7 +477,7 @@ describe('migration 15 repair-empty-active-duplicates', () => {
     }
   });
 
-  it('rollback of a migration 15 archive restores the duplicate and drops grants of the involved clients', () => {
+  it('rollback of a migration 15 archive un-archives the duplicate and leaves the original tokens valid', () => {
     const { db, close } = tmpDb();
     try {
       applyThrough(db, 13);
@@ -502,22 +502,29 @@ describe('migration 15 repair-empty-active-duplicates', () => {
       assert.equal(getConnection(db, 'CtvfJ')!.merged_into_client_id, 'BfLCn');
       assert.equal(get<{ n: number }>(db, "SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = 'BfLCn'")!.n, 1);
 
-      const started = Date.now() - 1000;
-      const iat = Math.floor(started / 1000) - 10;
+      const iat = Math.floor(Date.parse('2026-04-01T00:00:00.000Z') / 1000);
       rollbackClientTransfer(db, { kind: 'owner', memberId: 'mem_1' }, 'BfLCn');
 
       const orig = getConnection(db, 'BfLCn')!;
       const dup = getConnection(db, 'CtvfJ')!;
       assert.equal(orig.current_client_id, 'BfLCn');
-      assert.ok(Date.parse(orig.approved_at) >= started);
+      assert.equal(orig.approved_at, '2026-01-01T00:00:00.000Z');
       assert.equal(dup.merged_into_client_id, null);
       assert.equal(dup.revoked_at, null);
       assert.equal(dup.current_client_id, 'CtvfJ');
-      assert.ok(Date.parse(dup.approved_at) >= started);
+      assert.equal(dup.approved_at, '2026-03-01T00:00:00.000Z');
       assert.equal(pendingTransfer(db, 'BfLCn'), undefined);
-      assert.equal(checkAccess(db, 'BfLCn', iat).ok, false);
-      assert.equal(get(db, "SELECT 1 FROM oauthRefreshToken WHERE clientId = 'BfLCn'"), undefined);
-      assert.equal(get(db, "SELECT 1 FROM oauthConsent WHERE clientId IN ('BfLCn', 'CtvfJ')"), undefined);
+      assert.equal(checkAccess(db, 'BfLCn', iat).ok, true);
+      assert.equal(get<{ n: number }>(db, "SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = 'BfLCn' AND token = 'SECRETTOKEN_orig'")!.n, 1);
+      assert.equal(get(db, "SELECT 1 FROM oauthConsent WHERE clientId = 'CtvfJ'"), undefined);
+      assert.equal(get(db, "SELECT 1 FROM oauthRefreshToken WHERE clientId = 'CtvfJ'"), undefined);
+      const ev = get<{ action: string; summary: string; data: string }>(
+        db,
+        "SELECT action, summary, data FROM event WHERE action = 'connection.transfer_rolled_back' AND entity_id = 'BfLCn'",
+      );
+      assert.ok(ev);
+      assert.match(ev!.summary, /Rolled back a client transfer/);
+      assert.match(ev!.data, /"kind":"migration"/);
     } finally {
       close();
     }

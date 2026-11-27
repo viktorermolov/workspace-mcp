@@ -509,8 +509,6 @@ export function rollbackClientTransfer(db: DB, actor: Actor, platformClientId: s
     const transfer = pendingTransfer(db, platformClientId);
     if (!transfer) throw new DomainError('invalid', 'There is no client transfer to roll back on this platform');
     const t = now();
-    dropGrants(db, transfer.to_client_id);
-    dropGrants(db, transfer.from_client_id);
     const siblings = all<TransferRow>(
       db,
       `SELECT * FROM connection_transfer
@@ -522,25 +520,50 @@ export function rollbackClientTransfer(db: DB, actor: Actor, platformClientId: s
     const archivedIds = [transfer.archived_client_id, ...siblings.map((s) => s.archived_client_id)].filter(
       (id): id is string => !!id,
     );
-    for (const archivedId of archivedIds) dropGrants(db, archivedId);
-    run(
-      db,
-      'UPDATE connection SET current_client_id = ?, approved_at = ? WHERE client_id = ?',
-      transfer.from_client_id,
-      t,
-      platform.client_id,
-    );
-    for (const archivedId of archivedIds) {
+    // Migration 15 archives an empty duplicate without switching the accepted client
+    // (from_client_id = to_client_id). Undo must not drop the original's tokens or
+    // move approved_at / current_client_id, or every agent on that platform would
+    // have to reconnect. Real client switches (from != to) keep the 0007 behaviour.
+    const sameClientArchive =
+      transfer.from_client_id === transfer.to_client_id &&
+      transfer.kind === 'migration' &&
+      !!transfer.archived_client_id;
+    if (sameClientArchive) {
+      for (const archivedId of archivedIds) {
+        dropGrants(db, archivedId);
+        run(
+          db,
+          `UPDATE connection
+              SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL
+            WHERE client_id = ? AND merged_into_client_id = ?`,
+          archivedId,
+          archivedId,
+          platform.client_id,
+        );
+      }
+    } else {
+      dropGrants(db, transfer.to_client_id);
+      dropGrants(db, transfer.from_client_id);
+      for (const archivedId of archivedIds) dropGrants(db, archivedId);
       run(
         db,
-        `UPDATE connection
-            SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL, approved_at = ?
-          WHERE client_id = ? AND merged_into_client_id = ?`,
-        archivedId,
+        'UPDATE connection SET current_client_id = ?, approved_at = ? WHERE client_id = ?',
+        transfer.from_client_id,
         t,
-        archivedId,
         platform.client_id,
       );
+      for (const archivedId of archivedIds) {
+        run(
+          db,
+          `UPDATE connection
+              SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL, approved_at = ?
+            WHERE client_id = ? AND merged_into_client_id = ?`,
+          archivedId,
+          t,
+          archivedId,
+          platform.client_id,
+        );
+      }
     }
     run(db, 'UPDATE connection_transfer SET rolled_back_at = ? WHERE id = ?', t, transfer.id);
     for (const sib of siblings) {
