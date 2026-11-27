@@ -323,6 +323,55 @@ code.big {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.platforms {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  margin: 12px 0 16px;
+}
+.platform {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.platform-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.platform-agents li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.platform-agents {
+  margin-top: 8px;
+}
+.platform-agent {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.platform-roles {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.875rem;
+  min-height: 24px;
+}
 .cards {
   display: grid;
   gap: 12px;

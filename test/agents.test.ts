@@ -444,3 +444,48 @@ describe('owner comments reach the responsible agent', () => {
     assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM review_comment WHERE target_id = ?', routine.id)!.n, 0);
   });
 });
+
+describe('the map shows who runs where', () => {
+  let env: TestEnv;
+  let owner: Browser;
+
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    await owner.json('/api/owner/roles', { json: { name: 'Developer', slug: 'developer' } });
+    await owner.json('/api/owner/roles', { json: { name: 'Coordinator', slug: 'coordinator' } });
+    await connectAgent(env, owner, 'Grok');
+    await connectAgent(env, owner, 'Home server');
+    await connectAgent(env, owner, 'Gone');
+    const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
+    const id = (n: string) => list.connections.find((c) => c.name === n)!.client_id;
+    await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: id('Grok'), roles: ['coordinator', 'developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: id('Home server'), roles: ['developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Old', platform: id('Gone'), roles: ['developer'] } });
+    await owner.json(`/api/owner/connections/${encodeURIComponent(id('Gone'))}/revoke`, { json: {} });
+  });
+
+  after(async () => {
+    await env.close();
+  });
+
+  it('lists active platforms with their agents and roles, and on each role the agents that may take it', async () => {
+    const map = await owner.json<{
+      platforms: { name: string; agents: { slug: string; roles: { slug: string }[] }[] }[];
+      roles: { slug: string; agents: { slug: string; platform: string }[] }[];
+    }>('/api/owner/map');
+    assert.deepEqual(
+      map.platforms.map((p) => [p.name, p.agents.map((a) => [a.slug, a.roles.map((r) => r.slug)])]),
+      [
+        ['Grok', [['ada', ['coordinator', 'developer']]]],
+        ['Home server', [['hal', ['developer']]]],
+      ],
+    );
+    const role = (slug: string) => map.roles.find((r) => r.slug === slug)!.agents;
+    assert.deepEqual(role('developer'), [
+      { slug: 'ada', name: 'Ada', platform: 'Grok' },
+      { slug: 'hal', name: 'Hal', platform: 'Home server' },
+    ]);
+    assert.deepEqual(role('coordinator'), [{ slug: 'ada', name: 'Ada', platform: 'Grok' }]);
+  });
+});

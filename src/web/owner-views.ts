@@ -121,6 +121,39 @@ export function mapView(db: DB, memberId: string) {
     ).map((r) => [r.id, r.at]),
   );
 
+  // Who runs where: active platforms with their agents, and for each role the agents that may take it.
+  const agentRows = all<{ id: string; slug: string; name: string; client_id: string; platform: string }>(
+    db,
+    `SELECT a.id, a.slug, a.name, a.client_id, c.name AS platform FROM agent a JOIN connection c ON c.client_id = a.client_id
+     WHERE a.member_id = ? AND c.revoked_at IS NULL ORDER BY a.name, a.slug`,
+    memberId,
+  );
+  const agentRoleRows = all<{ agent_id: string; role_id: string; slug: string; name: string }>(
+    db,
+    `SELECT ar.agent_id, ar.role_id, r.slug, r.name FROM agent_role ar JOIN agent a ON a.id = ar.agent_id JOIN role r ON r.id = ar.role_id
+     WHERE a.member_id = ? AND r.archived_at IS NULL ORDER BY r.name, r.slug`,
+    memberId,
+  );
+  const agentById = new Map(agentRows.map((a) => [a.id, a]));
+  const rolesByAgent = new Map<string, { slug: string; name: string }[]>();
+  const agentsByRole = new Map<string, { slug: string; name: string; platform: string }[]>();
+  for (const ar of agentRoleRows) {
+    const a = agentById.get(ar.agent_id);
+    if (!a) continue;
+    rolesByAgent.set(a.id, [...(rolesByAgent.get(a.id) ?? []), { slug: ar.slug, name: ar.name }]);
+    agentsByRole.set(ar.role_id, [...(agentsByRole.get(ar.role_id) ?? []), { slug: a.slug, name: a.name, platform: a.platform }]);
+  }
+  const platforms = all<{ client_id: string; name: string; last_activity_at: string | null }>(
+    db,
+    'SELECT client_id, name, last_activity_at FROM connection WHERE member_id = ? AND revoked_at IS NULL ORDER BY name',
+    memberId,
+  ).map((c) => ({
+    id: c.client_id,
+    name: c.name,
+    last_activity_at: c.last_activity_at,
+    agents: agentRows.filter((a) => a.client_id === c.client_id).map((a) => ({ slug: a.slug, name: a.name, roles: rolesByAgent.get(a.id) ?? [] })),
+  }));
+
   const nodes = roles.map((r) => {
     const open = countByRole.get(r.id) ?? {};
     const listed = openByRole.get(r.id);
@@ -141,6 +174,7 @@ export function mapView(db: DB, memberId: string) {
       open_task_list: listed?.items ?? [],
       open_more: listed?.more ?? 0,
       routines: routinesByRole.get(r.id) ?? [],
+      agents: agentsByRole.get(r.id) ?? [],
       last_checkpoint: checkpointByRole.get(r.id) ?? null,
       last_activity_at: last ?? null,
     };
@@ -219,6 +253,7 @@ export function mapView(db: DB, memberId: string) {
   const unassigned = get<{ n: number }>(db, "SELECT count(*) AS n FROM task WHERE member_id = ? AND role_id IS NULL AND archived_at IS NULL AND status NOT IN ('done','cancelled')", memberId)!.n;
   return {
     roles: nodes,
+    platforms,
     links,
     interactions: [...interactions.values()],
     interactions_truncated: interactionsTruncated,
