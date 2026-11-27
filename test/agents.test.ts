@@ -101,11 +101,34 @@ describe('agents on a platform', () => {
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM agent WHERE name LIKE 'X%'")!.n, 0);
   });
 
-  it('makes a free slug from the name, also for names without Latin letters', async () => {
+  it('makes a free slug from the name, and asks for one when the name has no Latin letters', async () => {
+    const noLatin = await owner.fetch('/api/owner/agents', { json: { name: 'Арина', platform: grokId } });
+    assert.equal(noLatin.status, 400);
+    assert.match(((await noLatin.json()) as { message: string }).message, /no Latin letters or digits.*pass slug/);
     const made: AgentView[] = [];
-    for (const name of ['Арина', 'Вера', 'Bob']) made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name, platform: grokId } }));
-    assert.deepEqual(made.map((a) => [a.name, a.slug]), [['Арина', 'agent'], ['Вера', 'agent-2'], ['Bob', 'bob-2']]);
+    made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Арина', slug: 'arina', platform: grokId } }));
+    made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Bob', platform: grokId } }));
+    assert.deepEqual(made.map((a) => [a.name, a.slug]), [['Арина', 'arina'], ['Bob', 'bob-2']]);
     for (const a of made) await owner.json(`/api/owner/agents/${a.id}`, { method: 'DELETE' });
+  });
+
+  it('a slug stays with its agent: it cannot be changed, and a removed agent with history does not hand it on', async () => {
+    const tmp = await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Temp', platform: grokId, roles: ['developer'] } });
+    const renamed = await owner.fetch('/api/owner/agents', { json: { id: tmp.id, rev: tmp.rev, slug: 'temp-2' } });
+    assert.equal(renamed.status, 400);
+    assert.match(((await renamed.json()) as { message: string }).message, /slug cannot be changed/);
+    // Sending the same slug back is not a change.
+    const same = await owner.json<AgentView & { unchanged?: boolean }>('/api/owner/agents', { json: { id: tmp.id, rev: tmp.rev, slug: 'temp' } });
+    assert.equal(same.unchanged, true);
+    await call(grok, 'save_task', { title: 'By Temp', claimed_role: 'developer', agent: 'temp' });
+    await owner.json(`/api/owner/agents/${tmp.id}`, { method: 'DELETE' });
+    const reuse = await owner.fetch('/api/owner/agents', { json: { name: 'Other', slug: 'temp', platform: grokId } });
+    assert.equal(reuse.status, 409);
+    assert.match(((await reuse.json()) as { message: string }).message, /belonged to a removed agent/);
+    // A slug made from the name steps over it too, so the new agent does not inherit the old one's history.
+    const next = await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Temp', platform: grokId } });
+    assert.equal(next.slug, 'temp-2');
+    await owner.json(`/api/owner/agents/${next.id}`, { method: 'DELETE' });
   });
 
   it('start lists agents with their platform and roles, and MCP has no tool that changes them', async () => {

@@ -125,14 +125,29 @@ function setRoles(db: DB, agentId: string, roles: { id: string }[]): void {
 }
 
 /**
- * A slug made from the name. A name with no Latin letters or digits (for example in Cyrillic) has
- * nothing to build on, so it becomes "agent"; a slug that is taken gets the next free number.
+ * The log, checkpoints and claims record an agent by its slug, so a slug belongs to one agent for good:
+ * it cannot be changed, and the slug of a removed agent that has history is not given to a new one (#141).
+ */
+function slugHasHistory(db: DB, memberId: string, slug: string): boolean {
+  return (
+    !!get(db, 'SELECT 1 FROM event WHERE member_id = ? AND agent = ? LIMIT 1', memberId, slug) ||
+    !!get(db, 'SELECT 1 FROM checkpoint WHERE member_id = ? AND agent = ? LIMIT 1', memberId, slug)
+  );
+}
+
+const slugTaken = (db: DB, memberId: string, slug: string) => !!findAgent(db, memberId, slug) || slugHasHistory(db, memberId, slug);
+
+/**
+ * A slug made from the name; one that is taken gets the next free number. A name with no Latin letters
+ * or digits (for example in Cyrillic) has nothing to build on, and a made-up slug would be a handle
+ * nobody can remember, so the owner must pass one.
  */
 function freeSlug(db: DB, memberId: string, name: string): string {
   const made = slugify(name);
-  const base = (made === 'item' ? 'agent' : made).slice(0, 55);
-  if (!findAgent(db, memberId, base)) return base;
-  for (let n = 2; n < 1000; n++) if (!findAgent(db, memberId, `${base}-${n}`)) return `${base}-${n}`;
+  if (made === 'item' && !/item/i.test(name)) throw invalid(`the name "${name.trim()}" has no Latin letters or digits to make a slug from: pass slug (lowercase letters, digits and dashes), the short name the agent passes as agent`);
+  const base = made.slice(0, 55);
+  if (!slugTaken(db, memberId, base)) return base;
+  for (let n = 2; n < 1000; n++) if (!slugTaken(db, memberId, `${base}-${n}`)) return `${base}-${n}`;
   throw new DomainError('conflict', `could not find a free slug for "${name}"; pass slug`);
 }
 
@@ -148,6 +163,7 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       const platform = requirePlatform(db, actor.memberId, input.platform);
       const slug = input.slug ?? freeSlug(db, actor.memberId, input.name);
       if (findAgent(db, actor.memberId, slug)) throw new DomainError('conflict', `an agent with slug "${slug}" already exists`);
+      if (slugHasHistory(db, actor.memberId, slug)) throw new DomainError('conflict', `the slug "${slug}" belonged to a removed agent and its history is recorded under it; choose another slug`);
       const roles = resolveRoles(db, actor.memberId, input.roles ?? []);
       assertOnPlatform(db, platform, roles);
       const id = newId('agt');
@@ -169,11 +185,7 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       changed.push('name');
     }
     if (input.slug !== undefined && input.slug !== a.slug) {
-      const other = findAgent(db, actor.memberId, input.slug);
-      if (other && other.id !== a.id) throw new DomainError('conflict', `an agent with slug "${input.slug}" already exists`);
-      sets.push('slug = ?');
-      vals.push(input.slug);
-      changed.push('slug');
+      throw invalid(`an agent's slug cannot be changed: its history, checkpoints and claims are recorded under "${a.slug}". Change the name, or remove the agent and add a new one`);
     }
     const moved = input.platform !== undefined && input.platform !== a.client_id;
     const platform = requirePlatform(db, actor.memberId, moved ? input.platform! : a.client_id, moved);
@@ -224,7 +236,7 @@ export function agentSelf(db: DB, memberId: string, ref: string) {
   const a = findAgent(db, memberId, ref);
   if (!a) return undefined;
   const v = agentView(db, a);
-  return { slug: v.slug, name: v.name, platform: v.platform.name, roles: v.roles.filter((r) => !r.archived).map((r) => r.slug) };
+  return { slug: v.slug, name: v.name, platform: v.platform.name, roles: v.roles.filter((r) => r.usable).map((r) => r.slug) };
 }
 
 /**
