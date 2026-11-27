@@ -50,7 +50,7 @@ A lone platform — including one that has an agent, and one that is empty — i
 
 ### Deferred rebind
 
-The rebind itself (dropping the previous client's grants, switching `current_client_id`, bumping `approved_at`, and recording the transfer, including any archive of an empty duplicate) is not applied at the consent screen. It is stored as a pending binding with an expiry and is applied on the incoming client's first successful `authorization_code` exchange. Until then the previous client's access and refresh tokens keep working. A later consent for the same platform replaces the pending binding; it does not stack rebinds. If the code is never exchanged, the pending binding expires and the existing connection is unchanged. See issue #189.
+The rebind itself (dropping the previous client's grants, switching `current_client_id`, bumping `approved_at`, and recording the transfer, including any archive of an empty duplicate) is not applied at the consent screen. It is stored as a pending binding and is applied on the incoming client's first successful `authorization_code` exchange. Until then the previous client's access and refresh tokens keep working. A later consent for the same platform, or the same incoming client on another platform, replaces the pending row; it does not stack rebinds. The row records an `expires_at` 15 minutes after consent, but there is no background cleaner, and `expires_at` is not a gate: a successful exchange still applies the pending bind after that time, as long as the row has not been replaced. If the code is never exchanged, the existing connection stays unchanged, and the stale pending row remains until a later consent replaces it. See issue #189.
 
 ## Why
 

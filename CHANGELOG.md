@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-27
+
 ### Fixed
 
 - Re-authorizing a platform no longer drops the previous client's tokens at the consent screen. The rebind (switching the accepted client, revoking previous grants, and recording the transfer) waits until the new client completes the authorization-code exchange. Until then the previous access and refresh tokens keep working. A second consent for the same platform, or several new clients from repeated attempts, replaces the pending bind instead of stacking rebinds. After Approve, the consent page shows a continue link and hides the Approve button, so a page that stays open (for example on iPhone, when the platform's app is installed) is not left in an approvable state. (#189)
@@ -11,7 +13,11 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Upgrade
 
 - Upgrading from 0.6.1 applies one additive migration (16, `pending-client-bind`) automatically, after a pre-migration backup. Existing data is kept.
+- Make a consistent local backup of the database before upgrading, for example with `cli backup` or with the container stopped.
 - After the upgrade, reconnect a platform as usual from the product and approve the consent screen. The previous connection stays in use until the product finishes the authorization-code exchange. If you reconnect from Safari on iPhone and the product's app is installed, the phone may open the app and leave the consent page on screen: do not press Approve again. If access does not complete, long-press the continue link and open it in Safari. These iPhone steps follow Apple's documentation for choosing the browser instead of the app, and have not been tested on a real iPhone. See [Connecting Grok](docs/platforms/grok.md#reconnecting).
+- Upgrading from 0.6.0 applies migrations 15 and 16.
+- Upgrading from 0.5.0 applies migrations 14, 15 and 16.
+- Rollback to 0.6.1, 0.6.0 or 0.5.0 is possible only by restoring the pre-migration backup.
 
 ## [0.6.1] - 2026-11-27
 
