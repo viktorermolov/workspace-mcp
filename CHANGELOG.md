@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- The **Changes** screen groups what happened to one item into one card (a task that was created, assigned and claimed is one card with three lines, oldest first), so the feed is about half as long. Edits to working rules and role instructions still come first, each on its own. On desktop the sidebar is split into the main screens, **Content** and **Settings**. (#120)
 - Tool responses are smaller. Every MCP response is compact JSON without indentation. `start` lists archived roles by slug only (`data.archived_role_slugs` replaces `data.archived_roles`; the slug is what stays reserved, and the conflict error still gives the id), and events in `changes_since_previous_start` leave out fields that are empty. Clients that read `data.archived_roles` must switch to the new field. (#114)
 - The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)
 - Decision record 0006 also records how the decision was reached: what the review found, which proposals were withdrawn and why, and what a reviewer should check. (#111)

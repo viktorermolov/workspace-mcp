@@ -53,6 +53,8 @@ const TABS: { href: string; label: string; icon: string; also?: string[] }[] = [
   { href: '/changes', label: 'Changes', icon: 'M12 3a9 9 0 1 1-9 9h2a7 7 0 1 0 2.05-4.95L9 9H3V3l2.64 2.64A8.97 8.97 0 0 1 12 3Zm-1 4h2v5l3.5 2.1-1 1.7L11 13V7Z' },
   { href: '/more', label: 'More', icon: 'M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z', also: ['/github', '/log', '/connections', '/webhooks', '/data', '/passkeys'] },
 ];
+/** Index of the first settings entry in SIDE_EXTRA: content comes before it, settings from it on. */
+const SIDE_SETTINGS_FROM = 4;
 const SIDE_EXTRA = [
   ['/roles', 'Roles'],
   ['/rules', 'Working rules'],
@@ -147,12 +149,15 @@ function Shell({ path }: { path: string }) {
             {t.href === '/changes' && pending > 0 && <span class="count">{pending > 99 ? '99+' : pending}</span>}
           </a>
         ))}
-        <div class="side-sep" />
-        {SIDE_EXTRA.map(([href, label]) => (
-          <a key={href} href={href} class={path.startsWith(href!) ? 'on' : ''}>
-            {label}
-            {href === '/reviews' && answered > 0 && <span class="count">{answered > 99 ? '99+' : answered}</span>}
-          </a>
+        {SIDE_EXTRA.map(([href, label], i) => (
+          <>
+            {i === 0 && <div class="side-group">Content</div>}
+            {i === SIDE_SETTINGS_FROM && <div class="side-group">Settings</div>}
+            <a key={href} href={href} class={path.startsWith(href!) ? 'on' : ''}>
+              {label}
+              {href === '/reviews' && answered > 0 && <span class="count">{answered > 99 ? '99+' : answered}</span>}
+            </a>
+          </>
         ))}
         <a href="/more" class={path === '/more' ? 'on' : ''}>
           More
