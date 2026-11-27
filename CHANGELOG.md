@@ -4,9 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-### Fixed
-
-- The first `start` by agent name alone continued from the platform's role-less marker instead of the marker of the role the bot had been starting with, so changes were shown again or `changes_since_previous_start` was `null` and they were never shown. It now continues from the marker of the agent's role; for an agent with several roles from the oldest of their markers, so nothing is skipped and a change already seen under one role may be shown once more. (#172)
+## [0.5.0] - 2026-11-27
 
 ### Added
 
@@ -20,7 +18,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- The first `start` by agent name alone continued from the platform's role-less marker instead of the marker of the role the bot had been starting with, so changes were shown again or `changes_since_previous_start` was `null` and they were never shown. It now continues from the marker of the agent's role; for an agent with several roles from the oldest of their markers, so nothing is skipped and a change already seen under one role may be shown once more. (#172)
 - Two agents of one role on one platform shared the marker for "changes since your previous start", so the first to call `start` used up the changes for the other. A named agent now has its own marker; its first `start` by name continues from the platform's marker for the role. (#162)
+
+### Upgrade
+
+- Upgrading from 0.4.1 applies one additive migration (13) automatically, after a pre-migration backup. Existing data is kept.
+- Nothing changes for a bot until you act: `start` with a role works as before, and the one-agent mark is off for every platform.
+- To let a bot start by name alone, give it the new text from `docs/agent-instruction.md`. A client that connected before 0.4.0 has to be reconnected to see the `agent` argument.
+- If you tick "is the only agent on this platform", calls from that platform that name no agent are checked against that agent's roles instead of the platform's whole list. With enforcement on, a write under a role the platform has and the agent does not is then refused.
+- A named agent's first `start` after the upgrade continues from the platform's marker for its role, so no change is skipped. An agent with several roles that starts by name alone continues from the oldest of their markers and may see once more a change it already saw under one of them.
+- Rollback to 0.4.1 is possible only by restoring the pre-migration backup.
 
 ## [0.4.1] - 2026-11-27
 
