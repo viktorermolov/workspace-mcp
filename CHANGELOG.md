@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- A task addressed to an agent, or claimed by a named agent, can no longer have its status, result or blocking reason changed, be reopened, or be re-addressed to another agent of the same role, except by the addressee, the owner, or a coordinator re-addressing it. This holds in both warn and enforce mode. The refusal uses the same wording as claiming the task. (#180)
+- A task addressed to an agent, or claimed by a named agent, can no longer have its status, result, blocking reason or role changed, be reopened, archived, or re-addressed (including clearing the addressee or addressing someone else), except by the addressee, the owner, or a coordinator re-addressing it. This holds in both warn and enforce mode. The refusal uses the same wording as claiming the task. Re-addressing a claimed in-progress task clears the claim so the new addressee must claim it before continuing. (#180)
 
 ## [0.6.0] - 2026-11-27
 

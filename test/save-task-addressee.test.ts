@@ -16,6 +16,7 @@ type Task = {
   result: string;
   blocking_reason: string;
   for_agent: string | null;
+  role?: string | null;
   claimed_by: { agent?: string } | null;
   warnings?: { code: string; message: string }[];
 };
@@ -34,6 +35,19 @@ describe('save_task respects the addressee and the claimed agent', () => {
   async function addressed(title: string): Promise<Task> {
     return call<Task>(grok, 'save_task', { title, role: 'developer', for_agent: 'ada', claimed_role: 'developer', agent: 'ada' });
   }
+
+  const taskRow = (id: string) =>
+    get<{
+      status: string;
+      result: string;
+      blocking_reason: string;
+      rev: number;
+      agent_id: string | null;
+      role_id: string | null;
+      archived_at: string | null;
+      claimed_by: string | null;
+      claimed_agent: string | null;
+    }>(env.svc.db, 'SELECT status, result, blocking_reason, rev, agent_id, role_id, archived_at, claimed_by, claimed_agent FROM task WHERE id = ?', id)!;
 
   before(async () => {
     env = await startService();
@@ -60,7 +74,7 @@ describe('save_task respects the addressee and the claimed agent', () => {
   it('in enforce mode a second agent with the same role is refused for status, result, blocking reason, reopen and re-address to itself; the task and its rev stay the same', async () => {
     await setMode('enforce');
     const t = await addressed('Enforce Guard');
-    const snapshot = () => get<Task>(env.svc.db, 'SELECT status, result, blocking_reason, rev, agent_id FROM task WHERE id = ?', t.id)!;
+    const snapshot = () => taskRow(t.id);
 
     const attempts: Record<string, unknown>[] = [
       { status: 'in_progress' },
@@ -118,42 +132,46 @@ describe('save_task respects the addressee and the claimed agent', () => {
     assert.equal(toSelf.for_agent, 'ada');
   });
 
-  it('a coordinator can re-address the task, but cannot change its status or result', async () => {
+  it('a coordinator without the task role is forbidden from changing status or result, and the task and rev stay the same', async () => {
     await setMode('enforce');
-    const t = await addressed('Coordinator Route');
+    const t = await addressed('Coordinator Forbidden');
     const routed = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'hal', claimed_role: 'coordinator', agent: 'mia' });
     assert.equal(routed.for_agent, 'hal');
-    const row = () => get<{ status: string; result: string; rev: number }>(env.svc.db, 'SELECT status, result, rev FROM task WHERE id = ?', routed.id)!;
-
-    // Forbidden-first: acting as coordinator is refused by the role check.
-    const beforeForbidden = row();
+    const before = taskRow(routed.id);
     await assert.rejects(
       call(grok, 'save_task', { id: routed.id, rev: routed.rev, status: 'done', claimed_role: 'coordinator', agent: 'mia' }),
       (e) => err(e).error === 'forbidden' && /belongs to role "developer"/.test(err(e).message),
     );
-    assert.deepEqual(row(), beforeForbidden);
+    assert.deepEqual(taskRow(routed.id), before);
     await assert.rejects(
       call(grok, 'save_task', { id: routed.id, rev: routed.rev, result: 'Mia wrote this', claimed_role: 'coordinator', agent: 'mia' }),
       (e) => err(e).error === 'forbidden' && /belongs to role "developer"/.test(err(e).message),
     );
-    assert.deepEqual(row(), beforeForbidden);
-    assert.equal(row().rev, routed.rev);
+    assert.deepEqual(taskRow(routed.id), before);
+    assert.equal(taskRow(routed.id).rev, routed.rev);
+    assert.equal(taskRow(routed.id).status, t.status);
+    assert.equal(taskRow(routed.id).result, t.result);
+  });
 
-    // Conflict: even when the coordinator also takes the task's role, the addressee check refuses.
-    const beforeConflict = row();
+  it('a coordinator who also takes the task role is refused with conflict for status or result, and the task and rev stay the same', async () => {
+    await setMode('enforce');
+    const t = await addressed('Coordinator Conflict');
+    const routed = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'hal', claimed_role: 'coordinator', agent: 'mia' });
+    assert.equal(routed.for_agent, 'hal');
+    const before = taskRow(routed.id);
     await assert.rejects(
       call(grok, 'save_task', { id: routed.id, rev: routed.rev, status: 'done', claimed_role: 'developer', agent: 'mia' }),
       (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message),
     );
-    assert.deepEqual(row(), beforeConflict);
+    assert.deepEqual(taskRow(routed.id), before);
     await assert.rejects(
       call(grok, 'save_task', { id: routed.id, rev: routed.rev, result: 'Mia wrote this', claimed_role: 'developer', agent: 'mia' }),
       (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message),
     );
-    assert.deepEqual(row(), beforeConflict);
-    assert.equal(row().status, t.status);
-    assert.equal(row().result, t.result);
-    assert.equal(row().rev, routed.rev);
+    assert.deepEqual(taskRow(routed.id), before);
+    assert.equal(taskRow(routed.id).rev, routed.rev);
+    assert.equal(taskRow(routed.id).status, t.status);
+    assert.equal(taskRow(routed.id).result, t.result);
   });
 
   it('the owner can change status, result, reopen, and re-address an addressed task', async () => {
@@ -178,16 +196,30 @@ describe('save_task respects the addressee and the claimed agent', () => {
         (e) => err(e).error === 'conflict' && /addressed to agent "ada".*named no agent/.test(err(e).message),
       );
     }
-    const after = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', t.id)!;
+    const after = taskRow(t.id);
     assert.equal(after.status, t.status);
     assert.equal(after.rev, t.rev);
   });
 
-  it('a second agent may still comment on an addressed task', async () => {
+  it('a second agent may still comment on an addressed task, and may still edit title, description and priority', async () => {
     await setMode('enforce');
     const t = await addressed('Comment Ok');
     const out = await call<{ comment_id: string }>(home, 'comment_task', { id: t.id, body: 'A note from Hal.', claimed_role: 'developer', agent: 'hal' });
     assert.ok(out.comment_id);
+    const edited = await call<Task>(home, 'save_task', {
+      id: t.id,
+      rev: t.rev,
+      title: 'Hal renamed it',
+      description: 'A note in the description',
+      priority: 'high',
+      claimed_role: 'developer',
+      agent: 'hal',
+    });
+    assert.equal(edited.title, 'Hal renamed it');
+    assert.equal(edited.for_agent, 'ada');
+    const row = taskRow(t.id);
+    assert.equal(row.status, t.status);
+    assert.equal(row.agent_id, taskRow(t.id).agent_id);
   });
 
   it('a task with no for_agent behaves as today', async () => {
@@ -204,32 +236,126 @@ describe('save_task respects the addressee and the claimed agent', () => {
     const t = await call<Task>(grok, 'save_task', { title: 'Claimed Guard', role: 'developer', claimed_role: 'developer', agent: 'ada' });
     const claimed = await call<Task>(grok, 'claim_task', { id: t.id, claimed_role: 'developer', agent: 'ada' });
     assert.equal(claimed.claimed_by?.agent, 'ada');
-    const before = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', t.id)!;
+    const before = taskRow(t.id);
     await assert.rejects(
       call(home, 'save_task', { id: t.id, rev: claimed.rev, status: 'done', claimed_role: 'developer', agent: 'hal' }),
       (e) => err(e).error === 'conflict' && /claimed by agent "ada"/.test(err(e).message),
     );
+    assert.deepEqual(taskRow(t.id), before);
     await assert.rejects(
       call(home, 'save_task', { id: t.id, rev: claimed.rev, result: 'Hal finished it', claimed_role: 'developer', agent: 'hal' }),
       (e) => err(e).error === 'conflict' && /claimed by agent "ada"/.test(err(e).message),
     );
+    assert.deepEqual(taskRow(t.id), before);
     const done = await call<Task>(grok, 'save_task', { id: t.id, rev: claimed.rev, status: 'done', claimed_role: 'developer', agent: 'ada' });
+    const afterDone = taskRow(t.id);
     await assert.rejects(
       call(home, 'save_task', { id: t.id, rev: done.rev, status: 'open', claimed_role: 'developer', agent: 'hal' }),
       (e) => err(e).error === 'conflict' && /claimed by agent "ada"/.test(err(e).message),
     );
-    const after = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', t.id)!;
-    assert.equal(after.status, 'done');
-    assert.equal(after.rev, done.rev);
-    assert.ok(after.rev >= before.rev);
-    const routed = await call<Task>(grok, 'save_task', { id: t.id, rev: done.rev, for_agent: 'hal', claimed_role: 'coordinator', agent: 'mia' });
+    assert.deepEqual(taskRow(t.id), afterDone);
+    assert.equal(taskRow(t.id).status, 'done');
+    assert.equal(taskRow(t.id).rev, done.rev);
+  });
+
+  it('a second agent cannot clear the addressee or address a third agent, in warn or enforce mode; claim_task still fails after the refusal', async () => {
+    for (const mode of ['enforce', 'warn'] as const) {
+      await setMode(mode);
+      const t = await addressed(`Bypass ${mode}`);
+      const before = taskRow(t.id);
+      await assert.rejects(
+        call(home, 'save_task', { id: t.id, rev: t.rev, for_agent: null, claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(taskRow(t.id), before, `cleared for_agent in ${mode}`);
+      await assert.rejects(
+        call(home, 'claim_task', { id: t.id, claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(taskRow(t.id), before);
+      await assert.rejects(
+        call(home, 'save_task', { id: t.id, rev: t.rev, for_agent: 'mia', claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(taskRow(t.id), before, `addressed a third agent in ${mode}`);
+      assert.equal(taskRow(t.id).rev, t.rev);
+    }
+  });
+
+  it('a second agent cannot archive or change the role of an addressed task, in warn or enforce mode; title, description and priority stay editable', async () => {
+    for (const mode of ['enforce', 'warn'] as const) {
+      await setMode(mode);
+      const t = await addressed(`Archive Role ${mode}`);
+      const before = taskRow(t.id);
+      await assert.rejects(
+        call(home, 'archive', { type: 'task', id: t.id, claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(taskRow(t.id), before, `archived in ${mode}`);
+      assert.equal(taskRow(t.id).archived_at, null);
+      await assert.rejects(
+        call(home, 'save_task', { id: t.id, rev: t.rev, role: 'coordinator', claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(taskRow(t.id), before, `role changed in ${mode}`);
+      assert.equal(taskRow(t.id).rev, t.rev);
+      const edited = await call<Task>(home, 'save_task', {
+        id: t.id,
+        rev: t.rev,
+        title: `Still editable ${mode}`,
+        description: 'ok',
+        priority: 'low',
+        claimed_role: 'developer',
+        agent: 'hal',
+      });
+      assert.equal(edited.title, `Still editable ${mode}`);
+      assert.equal(edited.for_agent, 'ada');
+      assert.equal(taskRow(t.id).status, before.status);
+      assert.equal(taskRow(t.id).agent_id, before.agent_id);
+    }
+  });
+
+  it('re-addressing a claimed in_progress task clears the claim so the new addressee must claim it', async () => {
+    await setMode('enforce');
+    const t = await addressed('Reset Claim Owner');
+    const claimed = await call<Task>(grok, 'claim_task', { id: t.id, claimed_role: 'developer', agent: 'ada' });
+    assert.equal(claimed.status, 'in_progress');
+    assert.equal(claimed.claimed_by?.agent, 'ada');
+    const routed = await owner.json<Task>('/api/owner/tasks', { json: { id: t.id, rev: claimed.rev, for_agent: 'hal' } });
     assert.equal(routed.for_agent, 'hal');
+    assert.equal(routed.status, 'open');
+    assert.equal(routed.claimed_by, null);
+    const ev = get<{ action: string; summary: string }>(
+      env.svc.db,
+      "SELECT action, summary FROM event WHERE entity_id = ? AND action = 'task.claim_reset'",
+      t.id,
+    );
+    assert.ok(ev, 'expected a task.claim_reset journal event after the owner re-addressed');
+    assert.match(ev.summary, /cleared after it was re-addressed/);
+    const taken = await call<Task>(home, 'claim_task', { id: t.id, claimed_role: 'developer', agent: 'hal' });
+    assert.equal(taken.status, 'in_progress');
+    assert.equal(taken.claimed_by?.agent, 'hal');
+
+    const t2 = await addressed('Reset Claim Coordinator');
+    const claimed2 = await call<Task>(grok, 'claim_task', { id: t2.id, claimed_role: 'developer', agent: 'ada' });
+    const routed2 = await call<Task>(grok, 'save_task', { id: t2.id, rev: claimed2.rev, for_agent: 'hal', claimed_role: 'coordinator', agent: 'mia' });
+    assert.equal(routed2.for_agent, 'hal');
+    assert.equal(routed2.status, 'open');
+    assert.equal(routed2.claimed_by, null);
+    const ev2 = get<{ action: string }>(
+      env.svc.db,
+      "SELECT action FROM event WHERE entity_id = ? AND action = 'task.claim_reset'",
+      t2.id,
+    );
+    assert.ok(ev2, 'expected a task.claim_reset journal event after the coordinator re-addressed');
+    const taken2 = await call<Task>(home, 'claim_task', { id: t2.id, claimed_role: 'developer', agent: 'hal' });
+    assert.equal(taken2.claimed_by?.agent, 'hal');
   });
 
   it('in warn mode a second agent is also refused with the same conflict, the task and rev stay the same, and the refusal is audited', async () => {
     await setMode('warn');
     const t = await addressed('Warn Guard');
-    const snapshot = () => get<{ status: string; result: string; blocking_reason: string; rev: number; agent_id: string | null }>(env.svc.db, 'SELECT status, result, blocking_reason, rev, agent_id FROM task WHERE id = ?', t.id)!;
+    const snapshot = () => taskRow(t.id);
     const before = snapshot();
     const auditsBefore = get<{ n: number }>(
       env.svc.db,
@@ -261,13 +387,12 @@ describe('save_task respects the addressee and the claimed agent', () => {
 
     const claimedSrc = await call<Task>(grok, 'save_task', { title: 'Warn Claimed', role: 'developer', claimed_role: 'developer', agent: 'ada' });
     const claimed = await call<Task>(grok, 'claim_task', { id: claimedSrc.id, claimed_role: 'developer', agent: 'ada' });
-    const claimedBefore = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', claimed.id)!;
+    const claimedBefore = taskRow(claimed.id);
     await assert.rejects(
       call(home, 'save_task', { id: claimed.id, rev: claimed.rev, status: 'done', claimed_role: 'developer', agent: 'hal' }),
       (e) => err(e).error === 'conflict' && /claimed by agent "ada"/.test(err(e).message),
     );
-    const claimedAfter = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', claimed.id)!;
-    assert.deepEqual(claimedAfter, claimedBefore);
+    assert.deepEqual(taskRow(claimed.id), claimedBefore);
     const claimedAudit = get<{ n: number }>(
       env.svc.db,
       "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%task_claimed%'",
