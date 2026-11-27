@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { assertCanEdit, withOwnerRole } from './access.ts';
+import { agentMayTake, assertCanEdit, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -323,8 +323,7 @@ function requireTaskAgent(db: DB, memberId: string, ref: string): string {
 function assertAgentFitsRole(db: DB, agentId: string, roleId: string | null): void {
   const slug = slugOf(db, 'agent', agentId);
   if (!roleId) throw invalid(`a task addressed to agent "${slug}" needs a role: pass role as well`);
-  const ok = get(db, 'SELECT 1 FROM agent_role WHERE agent_id = ? AND role_id = ?', agentId, roleId);
-  if (!ok) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
+  if (!agentMayTake(db, agentId, roleId)) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
 }
 
 /** Atomic claim: only one caller can move an open, unclaimed task to in_progress. */
@@ -333,8 +332,10 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
     const t = requireTask(db, actor.memberId, input.id);
     assertCanEdit(db, actor, t.role_id, { what: 'task' });
     const addressed = slugOf(db, 'agent', t.agent_id);
-    if (addressed && actor.kind === 'agent' && actor.agent && actor.agent !== addressed) {
-      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent)`, { for_agent: addressed });
+    // A call that names no agent is not the addressee either: a bot that forgot to pass agent must not take another agent's task.
+    if (addressed && actor.kind === 'agent' && actor.agent !== addressed) {
+      const who = actor.agent ? '' : ' This call named no agent: pass agent if the task is yours.';
+      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`, { for_agent: addressed });
     }
     const assign = input.role
       ? requireRole(db, actor.memberId, input.role)

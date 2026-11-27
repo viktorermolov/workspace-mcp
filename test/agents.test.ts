@@ -11,6 +11,10 @@ import { saveAgent } from '../src/domain/agents.ts';
 import { DomainError, type Actor } from '../src/domain/core.ts';
 import { call, connectAgent, registerOwner, startService, type Browser, type TestEnv } from './helpers/harness.ts';
 
+/** The owner confirms the roles a platform may act as; an agent can be given only roles from that list. */
+const confirmRoles = (owner: Browser, clientId: string, roles: string[]) =>
+  owner.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles, confirm: true } });
+
 interface AgentView {
   id: string;
   slug: string;
@@ -37,6 +41,8 @@ describe('agents on a platform', () => {
     const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
     grokId = list.connections.find((c) => c.name === 'Grok')!.client_id;
     otherId = list.connections.find((c) => c.name === 'Home server')!.client_id;
+    await confirmRoles(owner, grokId, ['coordinator', 'developer']);
+    await confirmRoles(owner, otherId, ['developer']);
   });
 
   after(async () => {
@@ -95,11 +101,34 @@ describe('agents on a platform', () => {
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM agent WHERE name LIKE 'X%'")!.n, 0);
   });
 
-  it('makes a free slug from the name, also for names without Latin letters', async () => {
+  it('makes a free slug from the name, and asks for one when the name has no Latin letters', async () => {
+    const noLatin = await owner.fetch('/api/owner/agents', { json: { name: 'Арина', platform: grokId } });
+    assert.equal(noLatin.status, 400);
+    assert.match(((await noLatin.json()) as { message: string }).message, /no Latin letters or digits.*pass slug/);
     const made: AgentView[] = [];
-    for (const name of ['Арина', 'Вера', 'Bob']) made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name, platform: grokId } }));
-    assert.deepEqual(made.map((a) => [a.name, a.slug]), [['Арина', 'agent'], ['Вера', 'agent-2'], ['Bob', 'bob-2']]);
+    made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Арина', slug: 'arina', platform: grokId } }));
+    made.push(await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Bob', platform: grokId } }));
+    assert.deepEqual(made.map((a) => [a.name, a.slug]), [['Арина', 'arina'], ['Bob', 'bob-2']]);
     for (const a of made) await owner.json(`/api/owner/agents/${a.id}`, { method: 'DELETE' });
+  });
+
+  it('a slug stays with its agent: it cannot be changed, and a removed agent with history does not hand it on', async () => {
+    const tmp = await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Temp', platform: grokId, roles: ['developer'] } });
+    const renamed = await owner.fetch('/api/owner/agents', { json: { id: tmp.id, rev: tmp.rev, slug: 'temp-2' } });
+    assert.equal(renamed.status, 400);
+    assert.match(((await renamed.json()) as { message: string }).message, /slug cannot be changed/);
+    // Sending the same slug back is not a change.
+    const same = await owner.json<AgentView & { unchanged?: boolean }>('/api/owner/agents', { json: { id: tmp.id, rev: tmp.rev, slug: 'temp' } });
+    assert.equal(same.unchanged, true);
+    await call(grok, 'save_task', { title: 'By Temp', claimed_role: 'developer', agent: 'temp' });
+    await owner.json(`/api/owner/agents/${tmp.id}`, { method: 'DELETE' });
+    const reuse = await owner.fetch('/api/owner/agents', { json: { name: 'Other', slug: 'temp', platform: grokId } });
+    assert.equal(reuse.status, 409);
+    assert.match(((await reuse.json()) as { message: string }).message, /belonged to a removed agent/);
+    // A slug made from the name steps over it too, so the new agent does not inherit the old one's history.
+    const next = await owner.json<AgentView>('/api/owner/agents', { json: { name: 'Temp', platform: grokId } });
+    assert.equal(next.slug, 'temp-2');
+    await owner.json(`/api/owner/agents/${next.id}`, { method: 'DELETE' });
   });
 
   it('start lists agents with their platform and roles, and MCP has no tool that changes them', async () => {
@@ -145,7 +174,7 @@ describe('agents on a platform', () => {
 });
 
 describe('agents migration', () => {
-  it('turns what is already known about connections into agents, with nothing to re-enter', () => {
+  it('creates agents only from the roles the owner confirmed for a connection', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
     const db = openDatabase(path.join(dir, 'w.sqlite'));
     try {
@@ -162,17 +191,22 @@ describe('agents migration', () => {
       const conn = (id: string, name: string, created: string, revoked: string | null = null) =>
         run(db, 'INSERT INTO connection (client_id, member_id, name, created_at, approved_at, revoked_at) VALUES (?,?,?,?,?,?)', id, 'mem_1', name, created, created, revoked);
       conn('c1', 'First', '2026-01-01T00:00:00.000Z');
+      conn('c4', 'Draft', '2026-01-04T00:00:00.000Z');
       conn('c2', 'Second', '2026-01-02T00:00:00.000Z');
       conn('c3', 'Revoked', '2026-01-03T00:00:00.000Z', t);
-      // c1: on the confirmed list as coordinator, and has written as developer (by slug) and as an archived role.
+      // c1: confirmed by the owner as coordinator and as an archived role; developer is only suggested, and it has written as developer.
       run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_a', 'owner')");
       const wrote = (client: string, claimed: string) =>
         run(db, "INSERT INTO event (member_id, at, actor_kind, connection_id, claimed_role, entity_type, action, summary) VALUES ('mem_1', ?, 'agent', ?, ?, 'task', 'task.created', 's')", t, client, claimed);
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_d', 'owner')");
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_b', 'suggested')");
       wrote('c1', 'developer');
-      wrote('c1', 'old');
-      // c2: has written as developer (by id) and under a name that is not a role.
+      // c2: nothing confirmed; it has written as developer (by id) and under a name that is not a role.
       wrote('c2', 'role_b');
       wrote('c2', 'somebody');
+      // c4: the owner saved a list and did not confirm it, so it is still a draft and creates nothing.
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c4', 'role_a', 'owner')");
+      run(db, "UPDATE connection SET roles_confirmed_at = ? WHERE client_id IN ('c1', 'c3')", t);
       // c3 is revoked: nothing is created for it.
       run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c3', 'role_a', 'owner')");
 
@@ -186,14 +220,13 @@ describe('agents migration', () => {
         agents.map((a) => ({ ...a })),
         [
           { slug: 'coordinator', name: 'Coordinator', client_id: 'c1', role: 'coordinator' },
-          { slug: 'developer', name: 'Developer', client_id: 'c1', role: 'developer' },
-          { slug: 'developer-2', name: 'Developer', client_id: 'c2', role: 'developer' },
         ],
+        'a role a connection only claimed, or that was only suggested, is not granted',
       );
-      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 3);
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 1);
       assert.equal(get(db, "SELECT 1 FROM sqlite_master WHERE name = 'agent_backfill'"), undefined);
       // The role lists that the checks on writes use are untouched.
-      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM connection_role')!.n, 2);
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM connection_role')!.n, 5);
     } finally {
       db.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -221,6 +254,8 @@ describe('agents name themselves', () => {
     const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
     grokId = list.connections.find((c) => c.name === 'Grok')!.client_id;
     otherId = list.connections.find((c) => c.name === 'Home server')!.client_id;
+    await confirmRoles(owner, grokId, ['developer', 'marketer']);
+    await confirmRoles(owner, otherId, ['developer']);
     await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: grokId, roles: ['developer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Bob', platform: grokId, roles: ['developer', 'marketer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: otherId, roles: ['developer'] } });
@@ -274,7 +309,7 @@ describe('agents name themselves', () => {
 
   it('with enforcement on, a named agent answers with its own roles and a wrong name or role is refused', async () => {
     await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce', override: true } });
-    // No connection has a confirmed role list, so only the agents' own role lists can allow a write.
+    // Grok is confirmed for developer and marketer, Home server for developer; each agent holds part of its platform's list.
     const ok = await call<Warned>(grok, 'save_task', { title: 'E1', claimed_role: 'marketer', agent: 'bob' });
     assert.deepEqual(codes(ok), []);
     const okElsewhere = await call<Warned>(other, 'save_task', { title: 'E2', claimed_role: 'developer', agent: 'hal' });
@@ -283,7 +318,7 @@ describe('agents name themselves', () => {
       [grok, { title: 'X', claimed_role: 'marketer', agent: 'ada' }, /may not take the role "marketer"/],
       [grok, { title: 'X', claimed_role: 'developer', agent: 'hal' }, /does not run on this platform/],
       [grok, { title: 'X', claimed_role: 'developer', agent: 'nobody' }, /agent not found/],
-      [grok, { title: 'X', claimed_role: 'developer' }, /confirmed allow-list/],
+      [other, { title: 'X', claimed_role: 'marketer' }, /confirmed allow-list/],
     ] as const) {
       await assert.rejects(call(client, 'save_task', args), (e) => err(e).error === 'forbidden' && reason.test(err(e).message));
     }
@@ -291,6 +326,32 @@ describe('agents name themselves', () => {
     const start = await call<{ instructions: { role: string } }>(grok, 'start', { role: 'marketer', agent: 'bob' });
     assert.equal(start.instructions.role, 'marketer');
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM task WHERE title = 'X'")!.n, 0);
+    // A call that names no agent is checked against the platform's list, as before.
+    const unnamed = await call<Warned>(grok, 'save_task', { title: 'E3', claimed_role: 'developer' });
+    assert.ok(unnamed.id);
+  });
+
+  it('the platform list is the ceiling: an agent gets only roles confirmed for its platform, for start and for writes alike', async () => {
+    // Home server is confirmed for developer only, so Hal cannot be given marketer there.
+    const hal = (await owner.json<{ agents: AgentView[] }>('/api/owner/agents')).agents.find((a) => a.slug === 'hal')!;
+    const res = await owner.fetch('/api/owner/agents', { json: { id: hal.id, rev: hal.rev, roles: ['developer', 'marketer'] } });
+    assert.equal(res.status, 400);
+    assert.match(((await res.json()) as { message: string }).message, /not confirmed for the platform "Home server": marketer/);
+    const fresh = await owner.fetch('/api/owner/agents', { json: { name: 'Eve', platform: otherId, roles: ['marketer'] } });
+    assert.equal(fresh.status, 400);
+    // Taking marketer off Grok takes it off Bob too: start and a write refuse it the same way.
+    await confirmRoles(owner, grokId, ['developer']);
+    const bob = (await owner.json<{ agents: AgentView[] }>('/api/owner/agents')).agents.find((a) => a.slug === 'bob')!;
+    assert.deepEqual(bob.roles.map((r) => r.slug), ['developer']);
+    for (const tool of ['start', 'save_task'] as const) {
+      const args = tool === 'start' ? { role: 'marketer', agent: 'bob' } : { title: 'X', claimed_role: 'marketer', agent: 'bob' };
+      await assert.rejects(call(grok, tool, args), (e) => err(e).error === 'forbidden' && /agent "bob" may not take the role "marketer"/.test(err(e).message), tool);
+    }
+    // An unconfirmed platform list allows nothing, whatever the agent's own list says.
+    await owner.json(`/api/owner/connections/${encodeURIComponent(grokId)}/roles`, { json: { roles: ['developer'], confirm: false } });
+    await assert.rejects(call(grok, 'save_task', { title: 'X', claimed_role: 'developer', agent: 'bob' }), (e) => err(e).error === 'forbidden');
+    const start = await call<{ data: { agents: { slug: string; roles: string[] }[] } }>(other, 'start');
+    assert.deepEqual(start.data.agents.find((a) => a.slug === 'bob')!.roles, []);
   });
 });
 
@@ -311,6 +372,8 @@ describe('tasks addressed to an agent', () => {
     other = (await connectAgent(env, owner, 'Home server')).client;
     const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
     const id = (n: string) => list.connections.find((c) => c.name === n)!.client_id;
+    await confirmRoles(owner, id('Grok'), ['developer', 'marketer']);
+    await confirmRoles(owner, id('Home server'), ['developer']);
     await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: id('Grok'), roles: ['developer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: id('Home server'), roles: ['developer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Mia', platform: id('Grok'), roles: ['marketer'] } });
@@ -337,6 +400,10 @@ describe('tasks addressed to an agent', () => {
     const found = await call<{ results: { id: string; title: string }[] }>(grok, 'search', { types: ['task'] });
     const forHal = found.results.find((t) => t.title === 'For Hal')!;
     await assert.rejects(call(grok, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'ada' }), (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message));
+    // A call without agent is not the addressee, on another platform or on the addressee's own.
+    for (const c of [grok, other]) {
+      await assert.rejects(call(c, 'claim_task', { id: forHal.id, claimed_role: 'developer' }), (e) => err(e).error === 'conflict' && /addressed to agent "hal".*named no agent/.test(err(e).message));
+    }
     const claimed = await call<Task>(other, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'hal' });
     assert.deepEqual(claimed.claimed_by?.agent, 'hal');
   });
@@ -480,6 +547,8 @@ describe('the map shows who runs where', () => {
     await connectAgent(env, owner, 'Gone');
     const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
     const id = (n: string) => list.connections.find((c) => c.name === n)!.client_id;
+    await confirmRoles(owner, id('Grok'), ['coordinator', 'developer']);
+    for (const n of ['Home server', 'Gone']) await confirmRoles(owner, id(n), ['developer']);
     await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: id('Grok'), roles: ['coordinator', 'developer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: id('Home server'), roles: ['developer'] } });
     await owner.json('/api/owner/agents', { json: { name: 'Old', platform: id('Gone'), roles: ['developer'] } });

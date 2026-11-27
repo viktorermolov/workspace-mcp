@@ -177,9 +177,9 @@ export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | un
   }
 
   if (named) {
-    // A named agent answers with its own role list; the connection's flat list is for calls that name no agent.
+    // A named agent answers with its own role list, which is always inside its platform's confirmed list.
     if (!agentMayTake(db, named.id, role.id)) {
-      const message = `agent "${named.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles on the Connections screen`;
+      const message = `agent "${named.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Connections screen`;
       if (mode === 'enforce') {
         auditRoleCheck(db, actor, 'rejected', { reason: 'agent_role_not_allowed', claimed_role: role.slug, agent: named.slug });
         throw new DomainError('forbidden', message);
@@ -206,8 +206,23 @@ export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | un
   return { ...actor, role: role.slug };
 }
 
-function agentMayTake(db: DB, agentId: string, roleId: string): boolean {
-  return !!get(db, 'SELECT 1 FROM agent_role ar JOIN role r ON r.id = ar.role_id WHERE ar.agent_id = ? AND ar.role_id = ? AND r.archived_at IS NULL', agentId, roleId);
+/**
+ * The one rule for what a named agent may act as, used by start, by writes and by task addressing:
+ * the role is on the agent's own list, is not archived, and is on the confirmed list of the agent's
+ * platform. The platform list is the ceiling; an agent's list only narrows it (#140).
+ */
+export function agentMayTake(db: DB, agentId: string, roleId: string): boolean {
+  return !!get(
+    db,
+    `SELECT 1 FROM agent_role ar
+     JOIN agent a ON a.id = ar.agent_id
+     JOIN role r ON r.id = ar.role_id
+     JOIN connection c ON c.client_id = a.client_id
+     JOIN connection_role cr ON cr.client_id = a.client_id AND cr.role_id = ar.role_id
+     WHERE ar.agent_id = ? AND ar.role_id = ? AND r.archived_at IS NULL AND c.roles_confirmed_at IS NOT NULL`,
+    agentId,
+    roleId,
+  );
 }
 
 /**
@@ -249,8 +264,19 @@ export function assertStartRole(db: DB, actor: Actor, roleRef: string): void {
   if (!role) return; // startView already handles unknown roles
   const mode = getEnforcement(db, actor.memberId);
   if (actor.agent) {
-    const a = get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND slug = ? AND client_id = ?', actor.memberId, actor.agent, actor.connectionId);
-    if (a && agentMayTake(db, a.id, role.id)) return;
+    // Same rule as on writes: a named agent is checked against its own list only.
+    const a = get<{ id: string; slug: string }>(db, 'SELECT id, slug FROM agent WHERE member_id = ? AND slug = ? AND client_id = ?', actor.memberId, actor.agent, actor.connectionId);
+    if (a) {
+      if (agentMayTake(db, a.id, role.id)) return;
+      const message = `agent "${a.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Connections screen`;
+      if (mode === 'enforce') {
+        auditRoleCheck(db, actor, 'rejected', { reason: 'start_agent_role_not_allowed', claimed_role: role.slug, agent: a.slug });
+        throw new DomainError('forbidden', message);
+      }
+      addWarning({ code: 'agent_role_not_allowed', message });
+      auditRoleCheck(db, actor, 'warning', { reason: 'start_agent_role_not_allowed', claimed_role: role.slug, agent: a.slug });
+      return;
+    }
   }
   if (isRoleAllowedForConnection(db, actor.connectionId, role.id)) return;
   const confirmed = connectionHasConfirmedList(db, actor.connectionId);
@@ -475,9 +501,19 @@ export function setConnectionRoles(db: DB, actor: Actor, clientId: string, roleR
     for (const id of ids) {
       run(db, `INSERT INTO connection_role (client_id, role_id, source) VALUES (?,?, 'owner')`, clientId, id);
     }
+    // A role taken off the platform is taken off its agents too, so an agent's list never shows more than it can use.
+    const dropped = Number(
+      run(
+        db,
+        `DELETE FROM agent_role WHERE agent_id IN (SELECT id FROM agent WHERE client_id = ?)
+         AND role_id NOT IN (SELECT role_id FROM connection_role WHERE client_id = ?)`,
+        clientId,
+        clientId,
+      ).changes,
+    );
     if (confirm) {
       run(db, 'UPDATE connection SET roles_confirmed_at = ? WHERE client_id = ?', now(), clientId);
-      recordEvent(db, actor, 'connection', clientId, 'connection.roles_confirmed', `Allow-list confirmed for a connection`, { role_ids: ids });
+      recordEvent(db, actor, 'connection', clientId, 'connection.roles_confirmed', `Allow-list confirmed for a connection`, { role_ids: ids, ...(dropped ? { agent_roles_removed: dropped } : {}) });
     } else {
       run(db, 'UPDATE connection SET roles_confirmed_at = NULL WHERE client_id = ?', clientId);
       // Lock the draft so a later prefill cannot add back roles the owner removed.

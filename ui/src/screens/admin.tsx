@@ -197,9 +197,6 @@ export function ConnectionsScreen() {
                 </div>
               </div>
               {diagFor === c.client_id && <Diagnostics clientId={c.client_id} />}
-              {list.data && c.active && (
-                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
-              )}
               {list.data && (
                 <ConnectionRoleList
                   key={`${c.client_id}:${c.roles_confirmed_at ?? ''}`}
@@ -207,8 +204,14 @@ export function ConnectionsScreen() {
                   workspaceRoles={list.data.roles}
                   busy={act.busy}
                   run={act.run}
-                  onSaved={() => list.reload()}
+                  onSaved={() => {
+                    list.reload();
+                    agents.reload();
+                  }}
                 />
+              )}
+              {list.data && c.active && (
+                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
               )}
             </li>
           ))}
@@ -378,7 +381,7 @@ interface Agent {
   name: string;
   rev: number;
   platform: { id: string; name: string; active: boolean };
-  roles: { id: string; slug: string; name: string; archived: boolean }[];
+  roles: { id: string; slug: string; name: string; archived: boolean; usable: boolean }[];
 }
 
 /** The named bots that run on one platform, and the roles each of them may take. */
@@ -394,7 +397,7 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
   };
   return (
     <div class="connection-roles agents">
-      <p class="small muted">Agents on this platform, and the roles each may take.</p>
+      <p class="small muted">Agents on this platform. Each may take some of the roles confirmed for the platform above.</p>
       {act.error && <Alert>{act.error}</Alert>}
       <ul class="plain">
         {agents.map((a) =>
@@ -418,7 +421,17 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
                   <strong>{a.name}</strong>
                 </a>{' '}
                 <span class="muted small">@{a.slug}</span>
-                <div class="row">{a.roles.length ? a.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>) : <span class="muted small">no roles yet</span>}</div>
+                <div class="row">{a.roles.length
+                    ? a.roles.map((r) =>
+                        r.usable ? (
+                          <Badge key={r.id}>{r.name}</Badge>
+                        ) : (
+                          <Badge key={r.id} tone="warn">
+                            {r.name}: not in effect
+                          </Badge>
+                        ),
+                      )
+                    : <span class="muted small">no roles yet</span>}</div>
               </div>
               <div class="row">
                 <Button kind="quiet" onClick={() => setEditing(a.id)}>
@@ -453,8 +466,15 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
 
 function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { connection: Connection; agent?: Agent; workspaceRoles: WorkspaceRole[]; onDone: () => void; onCancel: () => void }) {
   const [name, setName] = useState(agent?.name ?? '');
+  const [slug, setSlug] = useState('');
+  // A name with no Latin letters or digits gives nothing to make a slug from, so the owner types one.
+  const needsSlug = !agent && name.trim() !== '' && !/[a-z0-9]/i.test(name.normalize('NFKD'));
   const [selected, setSelected] = useState<Set<string>>(new Set((agent?.roles ?? []).map((r) => r.id)));
   const act = useAction();
+  // The platform's confirmed list is the ceiling; a role the agent already holds stays visible so it can be removed.
+  const onPlatform = new Set(connection.roles_confirmed ? (connection.roles ?? []).map((r) => r.id) : []);
+  const held = new Set((agent?.roles ?? []).map((r) => r.id));
+  const offered = workspaceRoles.filter((r) => onPlatform.has(r.id) || held.has(r.id));
   const toggle = (id: string) =>
     setSelected((cur) => {
       const next = new Set(cur);
@@ -465,7 +485,7 @@ function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { co
   const save = (e: Event) => {
     e.preventDefault();
     act.run(async () => {
-      await post('/agents', agent ? { id: agent.id, rev: agent.rev, name, roles: [...selected] } : { name, platform: connection.client_id, roles: [...selected] });
+      await post('/agents', agent ? { id: agent.id, rev: agent.rev, name, roles: [...selected] } : { name, platform: connection.client_id, roles: [...selected], ...(slug.trim() ? { slug: slug.trim() } : {}) });
       onDone();
     });
   };
@@ -475,14 +495,37 @@ function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { co
       <Field label="Agent name">
         <input value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} required maxLength={300} />
       </Field>
+      {agent ? (
+        <p class="small muted">
+          Short name <code>{agent.slug}</code>: the agent passes it as <code>agent</code>. It cannot be changed, because the agent’s history is recorded under it.
+        </p>
+      ) : (
+        <Field label={needsSlug ? 'Short name' : 'Short name (optional)'}>
+          <input
+            value={slug}
+            onInput={(e) => setSlug((e.target as HTMLInputElement).value)}
+            required={needsSlug}
+            pattern="[a-z0-9][a-z0-9-]{0,59}"
+            maxLength={60}
+            placeholder="for example arina"
+            autoCapitalize="none"
+            spellcheck={false}
+          />
+          <span class="small muted">
+            Lowercase Latin letters, digits and dashes. The agent passes it as <code>agent</code>, and it cannot be changed later.
+            {needsSlug ? ' Needed here because the name has no Latin letters.' : ' Left empty, it is made from the name.'}
+          </span>
+        </Field>
+      )}
       <fieldset>
         <legend>Roles it may take</legend>
-        {!workspaceRoles.length && <p class="small muted">Create a role first.</p>}
+        {!onPlatform.size && <p class="small muted">Confirm the roles for this platform first (the list above). An agent can take only roles from that list.</p>}
         <ul class="plain">
-          {workspaceRoles.map((r) => (
+          {offered.map((r) => (
             <li key={r.id}>
               <label class="row">
                 <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /> {r.name} <span class="muted small">@{r.slug}</span>
+                {!onPlatform.has(r.id) && <Badge tone="warn">not confirmed for this platform</Badge>}
               </label>
             </li>
           ))}
@@ -531,7 +574,7 @@ function ConnectionRoleList({
   return (
     <div class="connection-roles">
       <p class="small muted">
-        Roles this connection may sign writes as.
+        Roles this platform may act as. Its agents can take only roles from this list.
         {connection.roles_confirmed ? ' List confirmed.' : ' Not confirmed — a suggested list is a draft and has no effect in enforce.'}
       </p>
       {!workspaceRoles.length && <p class="small muted">Create a role first, then add it here.</p>}
