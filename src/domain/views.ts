@@ -20,7 +20,7 @@ import {
 } from './entities.ts';
 import { getReviewComment, listReviewSearch, openReviewComments, searchReviewHits, startReviewComments } from './reviews.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
-import { agentSelf, agentSummaries } from './agents.ts';
+import { agentSelf, agentSummaries, findAgent } from './agents.ts';
 
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
 
@@ -115,6 +115,8 @@ export interface SearchInput {
   status?: string[];
   role?: string;
   project?: string;
+  /** Tasks addressed to this agent or taken by it. Other types have no agent, so they are left out. */
+  for_agent?: string;
   include_archived?: boolean;
   limit?: number;
   cursor?: string;
@@ -128,6 +130,7 @@ interface Hit {
   status?: string;
   role?: string | null;
   project?: string | null;
+  for_agent?: string | null;
   updated_at?: string;
 }
 
@@ -156,6 +159,9 @@ export function search(db: DB, memberId: string, input: SearchInput) {
   const types: string[] = input.types?.length ? input.types : [...SEARCH_TYPES];
   const roleId = input.role ? findRole(db, memberId, input.role)?.id ?? '__none__' : undefined;
   const projectId = input.project ? findProject(db, memberId, input.project)?.id ?? '__none__' : undefined;
+  const agentRow = input.for_agent?.trim() ? findAgent(db, memberId, input.for_agent.trim()) : undefined;
+  if (input.for_agent?.trim() && !agentRow) throw invalid(`agent not found: ${input.for_agent}. Agents are listed in start (data.agents)`);
+  const agent = agentRow ? { id: agentRow.id, slug: agentRow.slug } : undefined;
   const fq = input.query ? ftsQuery(input.query) : null;
   if (input.query && !fq) throw invalid('query must contain letters or digits');
 
@@ -179,7 +185,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
         scanned,
       );
       for (const r of rows) {
-        const h = hydrate(db, r.entity_type, r.entity_id, input, roleId, projectId);
+        const h = hydrate(db, r.entity_type, r.entity_id, input, roleId, projectId, agent);
         if (h) hits.push({ ...h, snippet: markSnippet(r.snip) });
       }
       if (rows.length < batch) break;
@@ -189,7 +195,7 @@ export function search(db: DB, memberId: string, input: SearchInput) {
       }
     }
   } else {
-    for (const t of types) for (const h of listType(db, memberId, t, input, roleId, projectId)) hits.push(h);
+    for (const t of types) for (const h of listType(db, memberId, t, input, roleId, projectId, agent)) hits.push(h);
     hits.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
   }
   const page = hits.slice(offset, offset + limit);
@@ -211,15 +217,20 @@ function statusOk(input: SearchInput, status?: string): boolean {
   return !input.status?.length || (status !== undefined && input.status.includes(status));
 }
 
-function hydrate(db: DB, type: string, id: string, input: SearchInput, roleId?: string, projectId?: string): Hit | null {
+type AgentFilter = { id: string; slug: string } | undefined;
+
+function hydrate(db: DB, type: string, id: string, input: SearchInput, roleId?: string, projectId?: string, agent?: AgentFilter): Hit | null {
+  // Only tasks have an agent, so a search for one agent's work is a search of tasks.
+  if (agent && type !== 'task') return null;
   if (type === 'task') {
     const t = get<TaskRow>(db, 'SELECT * FROM task WHERE id = ?', id);
     if (!t || (!input.include_archived && t.archived_at)) return null;
     if (roleId && t.role_id !== roleId) return null;
     if (projectId && t.project_id !== projectId) return null;
     if (!statusOk(input, t.status)) return null;
+    if (agent && t.agent_id !== agent.id && t.claimed_agent !== agent.slug) return null;
     const s = taskSummary(db, t);
-    return { type, id, title: t.title, status: t.status, role: s.role, project: s.project, updated_at: t.updated_at };
+    return { type, id, title: t.title, status: t.status, role: s.role, project: s.project, ...(s.for_agent ? { for_agent: s.for_agent } : {}), updated_at: t.updated_at };
   }
   if (type === 'document') {
     const d = get<DocumentRow>(db, 'SELECT * FROM document WHERE id = ?', id);
@@ -271,7 +282,8 @@ function hydrate(db: DB, type: string, id: string, input: SearchInput, roleId?: 
   return null;
 }
 
-function listType(db: DB, memberId: string, type: string, input: SearchInput, roleId?: string, projectId?: string): Hit[] {
+function listType(db: DB, memberId: string, type: string, input: SearchInput, roleId?: string, projectId?: string, agent?: AgentFilter): Hit[] {
+  if (agent && type !== 'task') return [];
   const ids: { id: string; type: string }[] = [];
   const arch = input.include_archived ? '' : 'AND archived_at IS NULL';
   if (type === 'task') {
@@ -279,6 +291,7 @@ function listType(db: DB, memberId: string, type: string, input: SearchInput, ro
     const vals: unknown[] = [memberId];
     if (roleId) (conds.push('role_id = ?'), vals.push(roleId));
     if (projectId) (conds.push('project_id = ?'), vals.push(projectId));
+    if (agent) (conds.push('(agent_id = ? OR claimed_agent = ?)'), vals.push(agent.id, agent.slug));
     if (input.status?.length) (conds.push(`status IN (${input.status.map(() => '?').join(',')})`), vals.push(...input.status));
     for (const r of all<{ id: string }>(db, `SELECT id FROM task WHERE ${conds.join(' AND ')} ${arch} ORDER BY updated_at DESC LIMIT 2000`, ...vals)) ids.push({ id: r.id, type });
   } else if (type === 'document') {
@@ -300,7 +313,7 @@ function listType(db: DB, memberId: string, type: string, input: SearchInput, ro
   }
   const out: Hit[] = [];
   for (const i of ids) {
-    const h = hydrate(db, i.type, i.id, input, roleId, projectId);
+    const h = hydrate(db, i.type, i.id, input, roleId, projectId, agent);
     if (h) out.push(h);
   }
   return out;

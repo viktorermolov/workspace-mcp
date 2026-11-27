@@ -250,6 +250,28 @@ describe('start by agent name alone', () => {
     }
   });
 
+  it('search lists the tasks of one agent: addressed to it or taken by it', async () => {
+    type Found = { results: { type: string; title: string; for_agent?: string }[] };
+    const taken = await call<{ id: string }>(grok, 'save_task', { title: 'Taken by Bob', role: 'developer', claimed_role: 'developer', agent: 'bob' });
+    await call(grok, 'claim_task', { id: taken.id, claimed_role: 'developer', agent: 'bob' });
+    const bob = await call<Found>(grok, 'search', { for_agent: 'bob' });
+    assert.deepEqual(bob.results.map((r) => r.title).sort(), ['For Bob', 'Taken by Bob']);
+    assert.ok(bob.results.every((r) => r.type === 'task'));
+    assert.equal(bob.results.find((r) => r.title === 'For Bob')!.for_agent, 'bob');
+    // It combines with the other filters and with a text query.
+    assert.deepEqual((await call<Found>(grok, 'search', { for_agent: 'ada', role: 'developer' })).results.map((r) => r.title), ['For Ada']);
+    assert.deepEqual((await call<Found>(grok, 'search', { for_agent: 'bob', query: 'Taken' })).results.map((r) => r.title), ['Taken by Bob']);
+    assert.deepEqual((await call<Found>(grok, 'search', { for_agent: 'idle' })).results, []);
+    await assert.rejects(call(grok, 'search', { for_agent: 'nobody' }), (e) => /agent not found: nobody/.test((e as Error).message));
+  });
+
+  it('the missing-agent warning says what to do when the client has no agent argument', async () => {
+    const r = await call<{ warnings?: { code: string; message: string }[] }>(grok, 'save_task', { title: 'Unsigned', role: 'marketer', claimed_role: 'marketer' });
+    const w = r.warnings!.find((x) => x.code === 'agent_missing')!;
+    assert.match(w.message, /pass agent/);
+    assert.match(w.message, /disconnect and reconnect this connector/);
+  });
+
   it('each agent has its own marker for changes since its previous start', async () => {
     // Both agents have started as developer before; then something changes once.
     await call(grok, 'start', { agent: 'ada', role: 'developer' });

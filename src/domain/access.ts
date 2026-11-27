@@ -268,7 +268,7 @@ export function resolveNamedAgent(db: DB, actor: Actor, agentRef: string | undef
     const sole = actor.connectionId ? soleAgent(db, actor.connectionId) : undefined;
     if (sole) return sole;
     if (actor.connectionId && get(db, 'SELECT 1 FROM agent WHERE client_id = ? LIMIT 1', actor.connectionId)) {
-      addWarning({ code: 'agent_missing', message: 'This platform has named agents: pass agent (your agent slug from start, data.agents) so the log shows who made the change.' });
+      addWarning({ code: 'agent_missing', message: 'This platform has named agents: pass agent (your agent slug from start, data.agents) so the log shows who made the change. If your tools have no agent argument, your client holds the tool list from before agents existed: ask the owner to disconnect and reconnect this connector so it loads the current tools.' });
     }
     return undefined;
   }

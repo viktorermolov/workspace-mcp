@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- `search` takes `for_agent`: only tasks addressed to that agent or taken by it. Task results show `for_agent` when the task is addressed. The `agent_missing` warning now also says what to do when the client's tools have no `agent` argument: the connector holds the tool list from before agents existed and has to be reconnected. (#165)
 - A platform that runs one agent can say so. On the Platforms screen, under a platform with exactly one agent, the owner ticks "is the only agent on this platform"; a call that names no agent then counts as that agent: `start` returns its work, writes are recorded under it, and its roles apply instead of the platform's whole list. It is off by default and switches itself off when an agent is added to, moved to or from, or removed from the platform, so nothing is recorded under the wrong agent. Migration 13 adds the mark. (#164)
 - `start` by agent name alone: with `agent` and no `role`, an agent gets the instruction, open tasks, waiting owner comments, review comments, routines and last checkpoint of every role it may take, in one call (`instructions.role_instructions`, `data.my_roles`, `data.last_checkpoint`). An agent with one role gets what `start` with that role returns. Passing `role` still narrows to one role. (#162)
 
