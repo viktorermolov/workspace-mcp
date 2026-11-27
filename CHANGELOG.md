@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- A task's creator now hears when the task is closed. The first time a task moves to `done` or `cancelled`, a `task.closed` entry is written to the log for its creator, unless the creator closed it. A later close (done to cancelled, or reopened and closed again) writes no second entry. The creator sees it in `start` under `closed_tasks_you_created` (task, how it was closed, its current status, who closed it, a preview of the result), and the creator's role is woken with the existing `task.updated` webhook event. The creating agent is read from the log, so tasks created before this release are covered too. (#183)
+- Comments on a closed task reach its assignee and its creator: `start` lists them under `comments_on_closed_tasks` (with `you_are`: `creator`, `assignee` or both), and the creator's role is woken with `task.commented`, as the task's role already was. The writer does not see its own comment there. Comments on open tasks are unchanged. (#183)
+- Both lists in `start` are a session inbox: each item is shown once, by the next `start` of that platform, agent and role, even when `changes_since_previous_start` is paged. No new tools, arguments, rights or migrations; older connectors keep working without a reconnect. (#183)
+
 ### Fixed
 
 - A task addressed to an agent, or claimed by a named agent, can no longer have its status, result, blocking reason or role changed, be reopened, archived, or re-addressed (including clearing the addressee or addressing someone else), except by the addressee, the owner, or a coordinator re-addressing it. This holds in both warn and enforce mode. The refusal uses the same wording as claiming the task. Re-addressing a claimed in-progress task clears the claim so the new addressee must claim it before continuing. (#180)
