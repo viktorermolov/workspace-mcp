@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Project and task pages read first, like documents and roles. A project shows its focus, where work stopped, repositories and the description rendered as Markdown; a task shows its status, role, addressee, project, due date, what it waits for, and the description and result rendered as Markdown. The form is behind **Edit**; an item that was just created stays in the form. (#132)
 - A role page reads first. It shows the role's area, the agents that take it and their platforms, the instruction rendered as Markdown, its open tasks, its routines and its last checkpoint; the form is behind **Edit**. Each routine has a **Comment** button, so the owner can now comment on a routine in the interface, see the role's answer and resolve it. A role that was just created stays in the form. (#128)
 - **Projects and documents** starts with a "Rules and instructions" section: the working rules, other rules sets and every role's instruction, each opening on its reading page. They are still under More as well. (#126)
 - The **Map** shows who runs where: at the top, each active platform with its agents and the roles each may take; on every role card, the agents that may take it and their platform. The role cards now follow the order of the tree instead of the alphabet. The tree itself is unchanged. (#122)

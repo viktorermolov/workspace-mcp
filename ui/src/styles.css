@@ -875,6 +875,20 @@ fieldset .row select {
   padding: 12px 14px;
   margin: 10px 0;
 }
+.facts {
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) 1fr;
+  gap: 6px 14px;
+  margin: 8px 0 4px;
+}
+.facts dt {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
 .routine-item {
   background: var(--surface);
   border: 1px solid var(--border);

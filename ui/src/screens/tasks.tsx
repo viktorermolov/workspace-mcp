@@ -279,10 +279,53 @@ export function TaskScreen({ id }: { id: string }) {
   const choices = useChoices();
   const all = useData(() => api<Tree>('/tasks?archived=0'));
   const t = task.data;
+  // A task that was just created stays in the form; otherwise the page reads first.
+  const [editing, setEditing] = useState(isNew || q.has('edit'));
+  const deps = (t?.depends_on ?? []).filter((d): d is { id: string; title: string; status: string } => typeof d !== 'string');
   return (
-    <Page title={isNew ? 'New task' : (t?.title ?? 'Task')} back={lastListUrl}>
+    <Page title={isNew ? 'New task' : (t?.title ?? 'Task')} back={lastListUrl} actions={t && !editing ? <Button onClick={() => setEditing(true)}>Edit</Button> : undefined}>
       <Loading error={task.error} loading={task.loading}>
-        {(isNew || t) && (
+        {t && !editing && (
+          <div class="task-view">
+            <p class="row wrap">
+              <Badge tone={STATUS_TONE[t.status]}>{label(t.status)}</Badge>
+              {t.priority !== 'normal' && <Badge tone={t.priority === 'low' ? 'neutral' : 'warn'}>{t.priority}</Badge>}
+              {t.role && <a href={`/roles/${enc(t.role)}`}>@{t.role}</a>}
+              {t.for_agent && (
+                <span>
+                  for <a href={`/agents/${enc(t.for_agent)}`}>{t.for_agent}</a>
+                </span>
+              )}
+              {t.project && <a href={`/projects/${enc(t.project)}`}>{t.project}</a>}
+              {t.due_date && <span class="muted">due {t.due_date}</span>}
+            </p>
+            {t.status === 'blocked' && t.blocking_reason && <Alert kind="warn">Blocked: {t.blocking_reason}</Alert>}
+            {deps.length > 0 && (
+              <p class="small">
+                Waits for:{' '}
+                {deps.map((d, i) => (
+                  <span key={d.id}>
+                    {i > 0 && ', '}
+                    <a href={`/tasks/${enc(d.id)}`}>{d.title}</a> <span class="muted">({label(d.status)})</span>
+                  </span>
+                ))}
+              </p>
+            )}
+            <div class="section-head">
+              <h2>Description</h2>
+            </div>
+            {t.description ? <Markdown text={t.description} /> : <Empty>No description.</Empty>}
+            {t.result && (
+              <>
+                <div class="section-head">
+                  <h2>Result</h2>
+                </div>
+                <Markdown text={t.result} />
+              </>
+            )}
+          </div>
+        )}
+        {(isNew || (t && editing)) && (
           <TaskForm
             key={t?.rev ?? 'new'}
             task={t ?? undefined}
@@ -291,8 +334,15 @@ export function TaskScreen({ id }: { id: string }) {
             projects={choices.data?.projects ?? []}
             agents={choices.data?.agents ?? []}
             others={(all.data?.tasks ?? []).filter((x) => x.id !== id)}
-            onSaved={(saved) => (isNew ? navigate(`/tasks/${enc(saved.id)}`, true) : task.reload())}
+            onSaved={(saved) => (isNew ? navigate(`/tasks/${enc(saved.id)}?edit=1`, true) : task.reload())}
           />
+        )}
+        {t && editing && (
+          <div class="row">
+            <Button kind="quiet" onClick={() => setEditing(false)}>
+              Done editing
+            </Button>
+          </div>
         )}
         {t && <TaskExtras key={`${t.id}-${t.comments_total}`} task={t} onChange={task.reload} />}
       </Loading>

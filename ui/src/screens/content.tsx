@@ -552,10 +552,54 @@ export function ProjectScreen({ id }: { id: string }) {
   const isNew = id === 'new';
   const project = useData(() => (isNew ? Promise.resolve(null) : api<ProjectFull>(`/entity/project/${enc(id)}`)), [id]);
   const p = project.data;
+  // A project that was just created stays in the form; otherwise the page reads first.
+  const [editing, setEditing] = useState(isNew || new URLSearchParams(location.search).has('edit'));
   return (
-    <Page title={isNew ? 'New project' : (p?.name ?? 'Project')} back="/projects" actions={p ? <><a href={`/read/project/${enc(p.id)}`}>Read</a><a href={histHref('project', p.id)}>History</a></> : undefined}>
+    <Page
+      title={isNew ? 'New project' : (p?.name ?? 'Project')}
+      back="/projects"
+      actions={
+        p ? (
+          <>
+            <a href={`/read/project/${enc(p.id)}`}>Read</a>
+            <a href={histHref('project', p.id)}>History</a>
+            {!editing && <Button onClick={() => setEditing(true)}>Edit</Button>}
+          </>
+        ) : undefined
+      }
+    >
       <Loading error={project.error} loading={project.loading}>
-        {(isNew || p) && <ProjectForm key={p?.rev ?? 'new'} project={p ?? undefined} onSaved={(s) => (isNew ? navigate(`/projects/${enc(s.id)}`, true) : project.reload())} />}
+        {p && !editing && (
+          <div class="project-view">
+            <dl class="facts">
+              <dt>Focus</dt>
+              <dd>{p.focus || <span class="muted">not set</span>}</dd>
+              <dt>Where work stopped</dt>
+              <dd>{p.state ? <Markdown text={p.state} /> : <span class="muted">not set</span>}</dd>
+              {p.repos.length > 0 && (
+                <>
+                  <dt>Repositories</dt>
+                  <dd class="wrap">{p.repos.join(', ')}</dd>
+                </>
+              )}
+            </dl>
+            <div class="section-head">
+              <h2>Description · version {p.description_version}</h2>
+              <a href={`/read/project/${enc(p.id)}`}>Comment on a passage</a>
+            </div>
+            <Markdown text={p.description} />
+          </div>
+        )}
+        {(isNew || (p && editing)) && (
+          <ProjectForm key={p?.rev ?? 'new'} project={p ?? undefined} onSaved={(s) => (isNew ? navigate(`/projects/${enc(s.id)}?edit=1`, true) : project.reload())} />
+        )}
+        {p && editing && (
+          <div class="row">
+            <Button kind="quiet" onClick={() => setEditing(false)}>
+              Done editing
+            </Button>
+          </div>
+        )}
         {p && (
           <>
             <div class="section-head">
