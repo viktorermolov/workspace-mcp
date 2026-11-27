@@ -204,6 +204,8 @@ test('the task list shows what a task waits for under any filter, and Back keeps
 
   await go('Tasks');
   await page.getByRole('link', { name: /Draft the intro/ }).click();
+  // A task opens as a read view; the form is behind Edit.
+  await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Depends on').selectOption({ label: 'Review the intro' });
   const saved = page.waitForResponse((r) => r.url().endsWith('/api/owner/tasks') && r.request().method() === 'POST' && r.ok());
   await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -224,6 +226,30 @@ test('the task list shows what a task waits for under any filter, and Back keeps
   await expect(page).toHaveURL(/\/tasks\?role=writer$/);
   await expect(page.getByLabel('Role')).toHaveValue('writer');
   await expect(page.locator('li.task .task-title', { hasText: 'Review the intro' })).toHaveCount(0);
+});
+
+test('a task and a project read first, with the form behind Edit', async () => {
+  await go('Tasks');
+  await page.getByLabel('Role').selectOption({ label: 'All roles' });
+  await page.locator('li.task').filter({ has: page.locator('.task-title', { hasText: 'Draft the intro' }) }).getByRole('link').click();
+  await expect(page.getByRole('heading', { name: 'Draft the intro' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Description' })).toBeVisible();
+  await expect(page.getByLabel('Title')).toHaveCount(0);
+  await expect(page.locator('.task-view').getByText('Waits for:')).toContainText('Review the intro');
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Title')).toHaveValue('Draft the intro');
+  await page.getByRole('button', { name: 'Done editing' }).click();
+  await expect(page.getByLabel('Title')).toHaveCount(0);
+
+  await page.goto('/projects/website');
+  await expect(page.getByRole('heading', { name: 'Website' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Description/ })).toBeVisible();
+  await expect(page.locator('.project-view').getByText('Focus')).toBeVisible();
+  await expect(page.getByLabel('Name')).toHaveCount(0);
+  const over = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth));
+  expect(over).toBe(0);
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Name')).toHaveValue('Website');
 });
 
 test('documents keep versions; compare and restore', async () => {
