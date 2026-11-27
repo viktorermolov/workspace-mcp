@@ -184,8 +184,11 @@ export class TestOAuthProvider implements OAuthClientProvider {
   }
 }
 
-/** Follows the authorization URL as the signed-in owner, approves on the consent page, returns the callback. */
-export async function approveInBrowser(browser: Browser, authorizationUrl: URL, connectionName: string): Promise<URL> {
+/** Follows the authorization URL as the signed-in owner, approves on the consent page, returns the callback.
+ * When the consent API offers a choice, this creates a new platform unless `continueClientId` is set.
+ * Automatic continuation is decided on the server and ignores this field.
+ */
+export async function approveInBrowser(browser: Browser, authorizationUrl: URL, connectionName: string, continueClientId: string | null = null): Promise<URL> {
   const nav = { headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } };
   const next = async (r: Response) => {
     const l = r.headers.get('location');
@@ -206,7 +209,7 @@ export async function approveInBrowser(browser: Browser, authorizationUrl: URL, 
   const target = new URL(loc, browser.base);
   if (target.pathname.startsWith('/consent')) {
     const oauthQuery = target.search.slice(1);
-    const out = await browser.json<{ url: string }>('/api/owner/consent', { json: { accept: true, name: connectionName, oauth_query: oauthQuery } });
+    const out = await browser.json<{ url: string }>('/api/owner/consent', { json: { accept: true, name: connectionName, oauth_query: oauthQuery, continue_client_id: continueClientId } });
     return new URL(out.url);
   }
   return target;

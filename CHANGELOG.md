@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Approving the same product again no longer creates a second, empty platform. The original platform keeps its agents and confirmed roles, and the new OAuth client is bound to it when it is clearly the same client; otherwise the consent screen asks whether to continue a platform or start a new one. A revoked platform is not offered. The owner can undo the last client transfer from Platforms. Migration 14 repairs an existing one-to-one duplicate (the later empty platform is archived, the live token is kept, `approved_at` is not bumped) after the usual pre-migration backup. (#174)
+
+### Upgrade
+
+- Upgrading from 0.5.0 applies one migration (14) automatically, after a pre-migration backup. Existing data is kept.
+- After the upgrade, a later empty platform that was created by reconnecting the same product is merged into the earlier configured one when the pair is unique and the original was unused after the duplicate was approved. Anything ambiguous is left as it is and recorded in the log.
+- Reconnecting a platform from the product still opens the consent screen. When the client is the same type as exactly one active platform, the screen says it continues that platform. Otherwise you choose to continue a platform or start a new one (the default).
+- Undo a client transfer from Platforms → “Undo last client transfer”. Refresh tokens of the unbound client are not restored. Rolling the migration itself back is possible only by restoring the pre-migration backup.
+
 ## [0.5.0] - 2026-11-27
 
 ### Added
