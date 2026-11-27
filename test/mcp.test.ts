@@ -449,9 +449,9 @@ describe('MCP behaviour', () => {
     await call(a, 'archive', { type: 'role', id: role.id });
     const s = await call(a, 'start');
     assert.ok(!s.data.roles.some((r: { slug: string }) => r.slug === 'librarian'));
-    const archived = s.data.archived_roles.find((r: { slug: string }) => r.slug === 'librarian');
-    assert.equal(archived.id, role.id);
-    assert.equal(archived.archived, true);
+    // start lists archived roles by slug only (the slug stays reserved); the conflict below gives the id.
+    assert.ok(s.data.archived_role_slugs.includes('librarian'));
+    assert.equal(s.data.archived_roles, undefined);
     await assert.rejects(
       call(a, 'save_role', { name: 'Librarian again', slug: 'librarian' }),
       (e) => err(e).error === 'conflict' && /already exists and is archived/.test(err(e).message) && err(e).message.includes(role.id),

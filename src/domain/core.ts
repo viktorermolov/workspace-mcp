@@ -46,7 +46,7 @@ export function slugify(name: string): string {
   return s || 'item';
 }
 
-/** Maximum serialized size of one MCP tool response (JSON with indent 1). */
+/** Maximum serialized size of one MCP tool response (compact JSON). */
 export const MAX_RESPONSE_CHARS = 512 * 1024;
 
 export const LIMITS = {

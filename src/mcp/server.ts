@@ -45,7 +45,8 @@ function shortenStrings(v: unknown, max: number): unknown {
 }
 
 function ok(value: unknown) {
-  let text = JSON.stringify(value, null, 1);
+  // Compact JSON: indentation is whitespace an agent pays for on every call.
+  let text = JSON.stringify(value);
   if (text.length > MAX_RESPONSE_CHARS && value && typeof value === 'object' && !Array.isArray(value)) {
     // Text that escapes badly in JSON can overflow even within the length limits. A write has already
     // happened at this point, so answer with shortened fields rather than an error that invites a retry.
@@ -55,8 +56,6 @@ function ok(value: unknown) {
         response_shortened:
           'Long text fields are shortened because the full response would exceed the size limit. The stored text is complete; for a version comparison, compare smaller versions or read each version with get.',
       },
-      null,
-      1,
     );
     if (short.length <= MAX_RESPONSE_CHARS) return { content: [{ type: 'text' as const, text: short }] };
   }
