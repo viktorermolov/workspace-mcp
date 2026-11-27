@@ -500,4 +500,47 @@ CREATE TABLE github_repo_assigner (
 CREATE INDEX github_repo_assigner_role ON github_repo_assigner (role_id);
 `,
   },
+  // After #99's `github-issue-roles` (id 7). An agent is a named bot on one platform (connection)
+  // with the roles it may take (decision 0006). Existing knowledge is carried over so the owner has
+  // nothing to re-enter: one agent per active connection and active role that the connection is
+  // listed for, or has already written as.
+  {
+    id: 8,
+    name: 'agents',
+    sql: `
+CREATE TABLE agent (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  client_id TEXT NOT NULL REFERENCES connection(client_id) ON DELETE CASCADE,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  rev INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (member_id, slug)
+);
+CREATE INDEX agent_client ON agent (client_id);
+CREATE TABLE agent_role (
+  agent_id TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
+  PRIMARY KEY (agent_id, role_id)
+);
+CREATE INDEX agent_role_role ON agent_role (role_id);
+
+CREATE TABLE agent_backfill AS
+SELECT 'agt_' || lower(hex(randomblob(8))) AS id, c.member_id AS member_id, c.client_id AS client_id, r.id AS role_id, r.name AS name,
+  CASE WHEN row_number() OVER (PARTITION BY c.member_id, r.slug ORDER BY c.created_at, c.client_id) = 1 THEN r.slug
+       ELSE substr(r.slug, 1, 56) || '-' || row_number() OVER (PARTITION BY c.member_id, r.slug ORDER BY c.created_at, c.client_id) END AS slug
+FROM connection c JOIN role r ON r.member_id = c.member_id AND r.archived_at IS NULL
+WHERE c.revoked_at IS NULL AND (
+  EXISTS (SELECT 1 FROM connection_role cr WHERE cr.client_id = c.client_id AND cr.role_id = r.id)
+  OR EXISTS (SELECT 1 FROM event e WHERE e.connection_id = c.client_id AND e.claimed_role IN (r.slug, r.id))
+);
+INSERT OR IGNORE INTO agent (id, member_id, client_id, slug, name, rev, created_at, updated_at)
+SELECT id, member_id, client_id, slug, name, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM agent_backfill;
+INSERT INTO agent_role (agent_id, role_id)
+SELECT b.id, b.role_id FROM agent_backfill b WHERE EXISTS (SELECT 1 FROM agent a WHERE a.id = b.id);
+DROP TABLE agent_backfill;
+`,
+  },
 ];

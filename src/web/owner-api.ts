@@ -10,6 +10,7 @@ import { setConnectionRoles, setEnforcement, setRoleEditAny, workspaceAccessSett
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
+import { deleteAgent, listAgents, saveAgent } from '../domain/agents.ts';
 import { claimTask, commentTask, saveTask } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
 import { createReviewComment, getReviewComment, listReviewComments, listSetupNotesHistory, replyReviewComment, reviewCounts, setReviewCommentStatus, type ReviewStatus } from '../domain/reviews.ts';
@@ -308,6 +309,10 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.post('/documents', async (c) => c.json(saveDocument(db, actor(c), await body(c))));
   api.post('/tasks', async (c) => c.json(saveTask(db, actor(c), await body(c))));
   api.post('/routines', async (c) => c.json(saveRoutine(db, actor(c), await body(c))));
+  // Agents: named bots on a platform with the roles they may take (owner only; MCP can only read them).
+  api.get('/agents', (c) => c.json({ agents: listAgents(db, actor(c).memberId) }));
+  api.post('/agents', async (c) => c.json(saveAgent(db, actor(c), await body(c))));
+  api.delete('/agents/:id', (c) => c.json(deleteAgent(db, actor(c), c.req.param('id'))));
   api.post('/tasks/:id/claim', async (c) => c.json(claimTask(db, actor(c), { id: c.req.param('id'), role: (await body<{ role?: string }>(c).catch(() => ({}) as { role?: string })).role })));
   api.post('/tasks/:id/comment', async (c) => c.json(commentTask(db, actor(c), { id: c.req.param('id'), body: String((await body<{ body?: string }>(c)).body ?? '') })));
   api.get('/reviews/counts', (c) => c.json(reviewCounts(db, actor(c).memberId)));

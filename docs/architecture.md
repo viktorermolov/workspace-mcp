@@ -47,7 +47,7 @@ Workspace MCP is a modular monolith: one Node.js process, one SQLite file, one c
 | `src/config.ts` | Environment variables, validation, keys derived from `SECRET_KEY` with HKDF. |
 | `src/cli.ts`, `bin/` | Offline administration: version, backups, restore, verify, export, import, recovery code. |
 | `src/db/` | Opening the database (WAL, foreign keys, exclusive lock) and the numbered migrations. |
-| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `reviews.ts` (owner review comments, replies, re-anchoring, setup-notes history), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
+| `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `reviews.ts` (owner review comments, replies, re-anchoring, setup-notes history), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `agents.ts` (agents on a platform and their roles), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
 | `src/mcp/` | The MCP server and its 16 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
 | `src/auth/` | better-auth setup (`auth.ts`), connections and revocation (`connections.ts`), OAuth diagnostics (`diagnostics.ts`), setup and recovery codes (`setup.ts`). |
 | `src/web/` | The HTTP app with security headers and rate limits (`app.ts`), the owner API (`owner-api.ts`) and its read models (`owner-views.ts`). |
@@ -81,6 +81,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `idempotency` | Keys that make creates safe to retry. |
 | `start_cursor` | Per connection and role, the event id of the previous `start`, for "changes since your last call". |
 | `connection`, `connection_role` | OAuth clients the owner approved and named, with last activity and revocation, and the confirmed or suggested list of roles each connection may sign writes as. |
+| `agent`, `agent_role` | Named bots on a platform (a connection), each with the roles it may take (decision 0006). Kept by the owner; MCP can read them in `start` and cannot change them. Like connections, they are not part of a zip export (a SQLite backup keeps them); checks on writes still use `connection_role`. |
 | `oauth_diag` | Steps of authorization attempts, without secrets. |
 | `setup_code` | Hashes of setup and recovery codes. |
 | `search_fts` | FTS5 index of titles and bodies. |

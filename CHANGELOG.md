@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Agents: a named bot on a platform (a connection) with the roles it may take. One platform can host several agents, and one role can be taken by agents on different platforms. The owner adds, edits and removes agents under each platform on the Connections screen; `start` lists them (`data.agents`), and MCP cannot change them. On upgrade, migration 8 creates one agent for each active connection and active role that the connection is listed for or has already written as, so nothing has to be re-entered; rename them afterwards if you like. Checks on writes are unchanged. Agents are not part of a zip export, like connections. (#107)
+
 ### Changed
 
 - The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)

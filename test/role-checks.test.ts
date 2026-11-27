@@ -54,6 +54,7 @@ describe('role checks on writes', () => {
         [5, 'role_parent'],
         [6, 'review-comments'],
         [7, 'github-issue-roles'],
+        [8, 'agents'],
       ],
     );
   });

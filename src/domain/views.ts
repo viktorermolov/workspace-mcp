@@ -19,6 +19,7 @@ import {
 } from './entities.ts';
 import { getReviewComment, listReviewSearch, openReviewComments, searchReviewHits, startReviewComments } from './reviews.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
+import { agentSummaries } from './agents.ts';
 
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
 
@@ -429,6 +430,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   );
 
   const allRoutines = listRoutines(db, memberId);
+  const agentList = agentSummaries(db, memberId, START_LIST_MAX);
   const roleRoutines = role ? listRoutines(db, memberId, { roleId: role.id }) : [];
   const roleInstruction = role ? (role as { instruction?: string }).instruction || '(this role has no instruction yet)' : undefined;
   const cpPart = (v: unknown, n: number) => preview(v as string | null, n);
@@ -477,6 +479,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
         : {}),
       projects: projects.slice(0, START_LIST_MAX).map((p) => ({ id: p.id, slug: p.slug, name: p.name, focus: preview(p.focus, pv), state: preview(p.state, pv) })),
       ...(projects.length > START_LIST_MAX ? { more_projects: projects.length - START_LIST_MAX } : {}),
+      ...(agentList.agents.length ? { agents: agentList.agents, ...(agentList.more ? { more_agents: agentList.more } : {}) } : {}),
       routines: allRoutines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, pv)),
       ...(allRoutines.length > START_LIST_MAX ? { more_routines: allRoutines.length - START_LIST_MAX } : {}),
       ...(role
