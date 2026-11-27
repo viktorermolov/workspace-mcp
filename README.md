@@ -10,7 +10,7 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 - Open source under the [GNU Affero General Public License v3.0](LICENSE). No paid features, no telemetry, no external services or accounts.
 - One Docker container with SQLite. Runs on a Raspberry Pi 4.
 
-> **Status:** 0.5.0. While the version is 0.x, a minor version may change things without keeping compatibility; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
+> **Status:** 0.6.0. While the version is 0.x, a minor version may change things without keeping compatibility; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Platforms, agents and roles
 
