@@ -1,3 +1,4 @@
+import { groupChanges } from '../changes.ts';
 import { useEffect, useState } from 'preact/hooks';
 import { api, enc, post, searchAll } from '../api.ts';
 import { navigate } from '../router.ts';
@@ -818,9 +819,50 @@ export function ChangesScreen({ onReviewed }: { onReviewed?: () => void }) {
           <>
             <h2>Everything else</h2>
             <ul class="changes">
-              {other.map((c) => (
-                <Item key={c.id} c={c} />
-              ))}
+              {groupChanges(other).map((g) =>
+                g.length === 1 ? (
+                  <Item key={g[0]!.id} c={g[0]!} />
+                ) : (
+                  <li key={g[0]!.id} class="change">
+                    <div class="change-head">
+                      <span class="small muted">{g.length} changes to one item</span>
+                    </div>
+                    <ul class="change-events">
+                      {g.map((c) => {
+                        const href = entityHref(c.entity_type, c.entity_id);
+                        return (
+                          <li key={c.id}>
+                            <div class="change-head">
+                              <span>{href ? <a href={href}>{c.summary}</a> : c.summary}</span>
+                              <span class="small muted">
+                                {c.by}
+                                {c.whose ? ` · ${c.whose}` : ''} · <Time at={c.at} />
+                              </span>
+                            </div>
+                            {c.diff && (
+                              <>
+                                <Diff lines={c.diff.lines} truncated={c.diff.truncated} />
+                                <div class="row">
+                                  {c.diff.from > 0 && (
+                                    <Button kind="default" onClick={() => undo(c)} busy={act.busy}>
+                                      Roll back to v{c.diff.from}
+                                    </Button>
+                                  )}
+                                  {c.versioned && (
+                                    <a class="btn btn-quiet" href={histHref(c.versioned.type, c.versioned.id ?? undefined)}>
+                                      History
+                                    </a>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </li>
+                ),
+              )}
             </ul>
           </>
         )}
