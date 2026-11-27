@@ -685,6 +685,7 @@ interface LogRow {
   actor_kind?: string;
   connection_name?: string | null;
   claimed_role?: string | null;
+  agent?: string | null;
   owner_role?: string | null;
   whose?: string | null;
   entity_type: string;
@@ -708,7 +709,7 @@ export function LogScreen() {
     }
     const r = await api<{ events: LogRow[] }>(`/log/latest?limit=50${after ? `&before=${after}` : ''}`);
     const last = r.events[r.events.length - 1];
-    const rows = r.events.map((e) => ({ ...e, by: e.actor_kind === 'owner' ? 'you' : (e.connection_name ?? e.actor_kind ?? 'system') }));
+    const rows = r.events.map((e) => ({ ...e, by: e.actor_kind === 'owner' ? 'you' : `${e.connection_name ?? e.actor_kind ?? 'system'}${e.agent ? `: ${e.agent}` : ''}` }));
     return { rows, next: last ? last.id : null, more: r.events.length === 50 };
   };
   const first = useData(async () => {

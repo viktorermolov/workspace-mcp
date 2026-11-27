@@ -272,7 +272,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.get('/log/latest', (c) => {
     const limit = Math.min(Number(c.req.query('limit') ?? 100) || 100, 200);
     const before = Number(c.req.query('before') ?? 0) || Number.MAX_SAFE_INTEGER;
-    return c.json({ events: all(db, "SELECT id, at, actor_kind, connection_name, claimed_role, json_extract(data, '$.owner_role') AS owner_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND id < ? ORDER BY id DESC LIMIT ?", actor(c).memberId, before, limit) });
+    return c.json({ events: all(db, "SELECT id, at, actor_kind, connection_name, claimed_role, agent, json_extract(data, '$.owner_role') AS owner_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND id < ? ORDER BY id DESC LIMIT ?", actor(c).memberId, before, limit) });
   });
   api.get('/changes', (c) => c.json(changeFeed(db, actor(c).memberId)));
   api.post('/changes/reviewed', async (c) => {

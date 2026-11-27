@@ -198,3 +198,96 @@ describe('agents migration', () => {
     }
   });
 });
+
+describe('agents name themselves', () => {
+  let env: TestEnv;
+  let owner: Browser;
+  let grok: Awaited<ReturnType<typeof connectAgent>>['client'];
+  let other: Awaited<ReturnType<typeof connectAgent>>['client'];
+  let grokId: string;
+  let otherId: string;
+  const err = (e: unknown) => JSON.parse((e as Error).message) as { error: string; message: string };
+  type Warned = { id: string; rev: number; warnings?: { code: string }[] };
+  const codes = (r: Warned) => (r.warnings ?? []).map((w) => w.code);
+
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    for (const [name, slug] of [['Developer', 'developer'], ['Marketer', 'marketer']]) await owner.json('/api/owner/roles', { json: { name, slug } });
+    grok = (await connectAgent(env, owner, 'Grok')).client;
+    other = (await connectAgent(env, owner, 'Home server')).client;
+    const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
+    grokId = list.connections.find((c) => c.name === 'Grok')!.client_id;
+    otherId = list.connections.find((c) => c.name === 'Home server')!.client_id;
+    await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: grokId, roles: ['developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Bob', platform: grokId, roles: ['developer', 'marketer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: otherId, roles: ['developer'] } });
+  });
+
+  after(async () => {
+    await env.close();
+  });
+
+  it('two agents with the same role on one platform are told apart in the log, comments, versions and checkpoints', async () => {
+    const t1 = await call<Warned>(grok, 'save_task', { title: 'By Ada', claimed_role: 'developer', agent: 'ada' });
+    const t2 = await call<Warned>(grok, 'save_task', { title: 'By Bob', claimed_role: 'developer', agent: 'bob' });
+    assert.deepEqual([codes(t1), codes(t2)], [[], []]);
+    const log = await call<{ events: { by: string; agent?: string; summary: string }[] }>(grok, 'changes', { entity_type: 'task' });
+    assert.deepEqual(
+      log.events.map((e) => [e.summary, e.by, e.agent]),
+      [
+        ['Task "By Ada" created', 'Grok: ada as developer', 'ada'],
+        ['Task "By Bob" created', 'Grok: bob as developer', 'bob'],
+      ],
+    );
+    await call(grok, 'comment_task', { id: t1.id, body: 'On it.', claimed_role: 'developer', agent: 'bob' });
+    const task = await call<{ comments: { agent: string | null; claimed_role: string }[] }>(grok, 'get', { type: 'task', id: t1.id });
+    assert.deepEqual(task.comments.map((c) => [c.agent, c.claimed_role]), [['bob', 'developer']]);
+    const doc = await call<{ id: string }>(grok, 'save_document', { title: 'Notes', body: 'v1', claimed_role: 'developer', agent: 'ada' });
+    const history = await call<{ versions: { author: { connection: string; role: string; agent?: string } }[] }>(grok, 'versions', { type: 'document', id: doc.id });
+    assert.deepEqual(history.versions[0]!.author, { connection: 'Grok', role: 'developer', agent: 'ada' });
+    await call(grok, 'checkpoint', { role: 'developer', claimed_role: 'developer', agent: 'bob', done: 'd', stopped_at: 's', next: 'n' });
+    const start = await call<{ instructions: { agent?: { slug: string; platform: string; roles: string[] } }; data: { last_checkpoint: { agent: string | null } }; warnings?: unknown }>(grok, 'start', { role: 'developer', agent: 'bob' });
+    assert.deepEqual(start.instructions.agent, { slug: 'bob', name: 'Bob', platform: 'Grok', roles: ['developer', 'marketer'] });
+    assert.equal(start.data.last_checkpoint.agent, 'bob');
+  });
+
+  it('a call that names no agent still works; on a platform with agents the response asks for the name', async () => {
+    const t = await call<Warned>(grok, 'save_task', { title: 'Anonymous', claimed_role: 'developer' });
+    assert.ok(t.id);
+    assert.ok(codes(t).includes('agent_missing'));
+    assert.equal(get<{ agent: string | null }>(env.svc.db, "SELECT agent FROM event WHERE entity_id = ? AND action = 'task.created'", t.id)!.agent, null);
+  });
+
+  it('in warning mode a wrong agent or role is reported and the wrong name is not recorded', async () => {
+    const unknown = await call<Warned>(grok, 'save_task', { title: 'W1', claimed_role: 'developer', agent: 'nobody' });
+    const elsewhere = await call<Warned>(grok, 'save_task', { title: 'W2', claimed_role: 'developer', agent: 'hal' });
+    const wrongRole = await call<Warned>(grok, 'save_task', { title: 'W3', claimed_role: 'marketer', agent: 'ada' });
+    assert.ok(codes(unknown).includes('agent_not_found'));
+    assert.ok(codes(elsewhere).includes('agent_wrong_platform'));
+    assert.ok(codes(wrongRole).includes('agent_role_not_allowed'));
+    const recorded = (id: string) => get<{ agent: string | null }>(env.svc.db, "SELECT agent FROM event WHERE entity_id = ? AND action = 'task.created'", id)!.agent;
+    assert.deepEqual([recorded(unknown.id), recorded(elsewhere.id), recorded(wrongRole.id)], [null, null, 'ada']);
+  });
+
+  it('with enforcement on, a named agent answers with its own roles and a wrong name or role is refused', async () => {
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce', override: true } });
+    // No connection has a confirmed role list, so only the agents' own role lists can allow a write.
+    const ok = await call<Warned>(grok, 'save_task', { title: 'E1', claimed_role: 'marketer', agent: 'bob' });
+    assert.deepEqual(codes(ok), []);
+    const okElsewhere = await call<Warned>(other, 'save_task', { title: 'E2', claimed_role: 'developer', agent: 'hal' });
+    assert.ok(okElsewhere.id);
+    for (const [client, args, reason] of [
+      [grok, { title: 'X', claimed_role: 'marketer', agent: 'ada' }, /may not take the role "marketer"/],
+      [grok, { title: 'X', claimed_role: 'developer', agent: 'hal' }, /does not run on this platform/],
+      [grok, { title: 'X', claimed_role: 'developer', agent: 'nobody' }, /agent not found/],
+      [grok, { title: 'X', claimed_role: 'developer' }, /confirmed allow-list/],
+    ] as const) {
+      await assert.rejects(call(client, 'save_task', args), (e) => err(e).error === 'forbidden' && reason.test(err(e).message));
+    }
+    await assert.rejects(call(grok, 'start', { role: 'marketer', agent: 'ada' }), (e) => err(e).error === 'forbidden');
+    const start = await call<{ instructions: { role: string } }>(grok, 'start', { role: 'marketer', agent: 'bob' });
+    assert.equal(start.instructions.role, 'marketer');
+    assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM task WHERE title = 'X'")!.n, 0);
+  });
+});
