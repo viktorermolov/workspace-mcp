@@ -10,6 +10,12 @@ The owner periodically changes their main AI platform (Claude, ChatGPT, Grok) an
 
 Boundary of responsibility: the service stores, shows and notifies. It does not run agents, assign executors, set priorities or call an LLM. Agents and the owner decide, the platform executes.
 
+The owner also uses the service as the one place to see and steer the agents on every platform: each agent's instruction, tasks and routines, who works with whom, and the owner's comments on any of them. Three things are distinct (decision record [0006](docs/decisions/0006-platforms-agents-roles.md)):
+
+- A **platform** is a connection the owner approved (for example Grok, or an agent on a home server).
+- An **agent** is a named bot on one platform. One platform can host many agents.
+- A **role** is a function with an instruction (for example coordinator or developer). Several agents on different platforms can take the same role, and one agent can take different roles for different tasks.
+
 ## 2. Product format
 
 - Open source under AGPL-3.0-only (the owner's choice, replacing Apache-2.0 before the first release), no paid features, no telemetry, no required external services or accounts.
@@ -27,6 +33,7 @@ Boundary of responsibility: the service stores, shows and notifies. It does not 
 - **Checkpoints.** An agent's record per role and project: what was done, where it stopped, what is next.
 - **Log.** Who (connection and claimed role, or the owner) changed what and when. Read by cursor.
 - **Connections.** Platforms the owner has granted access to.
+- **Agents.** Named bots on a platform, each with the roles it may take.
 
 Storage decisions:
 
@@ -43,7 +50,7 @@ Storage decisions:
 - An agent cannot change or delete version history or the log.
 - Changes the owner has not reviewed yet are marked in the web interface. Edits to working rules and role instructions are highlighted separately, because they change the behaviour of every later session.
 - MCP responses clearly separate instructions from other content. Text in tasks, documents, comments and issues is data and cannot change rules or access.
-- A role is a label the agent claims itself, not a security boundary: executors under one connection are indistinguishable. Every connection sees the whole workspace.
+- An agent's name and its role are what the caller says they are: the server can verify only the platform (the connection). It checks the name and role against the lists the owner keeps, which protects against mistakes and mix-ups, not against a hostile agent. Every connection sees the whole workspace.
 - Not available through MCP: managing connections, webhooks and secrets, the owner account, permanent deletion (an agent can only archive).
 - MCP gives no access to the host file system, a shell or code execution.
 - The workspace is not a secrets store. The working rules returned by the entry point tell agents not to write passwords, keys or tokens into it.
