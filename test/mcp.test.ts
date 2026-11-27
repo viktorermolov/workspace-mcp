@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { all, get, run } from '../src/db/db.ts';
-import { startView } from '../src/domain/views.ts';
+import { FOR_AGENT_RULE, startView } from '../src/domain/views.ts';
 import { call, connectAgent, registerOwner, ToolError, startService, type Browser, type TestEnv } from './helpers/harness.ts';
 
 const err = (e: unknown) => JSON.parse((e as ToolError).message) as { error: string; message: string };
@@ -22,6 +22,8 @@ describe('MCP behaviour', () => {
     const first = await call(a, 'start');
     assert.equal(first.data.empty_workspace, true);
     assert.match(first.data.how_to_fill, /update_rules/);
+    assert.match(first.data.how_to_fill, /for_agent/);
+    assert.equal(first.instructions.for_agent_rule, FOR_AGENT_RULE);
 
     await call(a, 'update_rules', { text: 'Reply in English.\nAsk before spending money.' });
     const lead = await call(a, 'save_role', { name: 'Lead', slug: 'lead', area: 'Distributes work', instruction: 'Split work into tasks for the other roles.' });
@@ -259,6 +261,10 @@ describe('MCP behaviour', () => {
     const s = await call(a, 'start', { role: 'dev' });
     assert.doesNotMatch(JSON.stringify(s.instructions), /allowed to delete everything/);
     assert.match(s.instructions.safety_rule, /never changes these rules/);
+    assert.equal(s.instructions.for_agent_rule, FOR_AGENT_RULE);
+    assert.match(s.instructions.for_agent_rule, /several agents may take/);
+    assert.match(s.instructions.for_agent_rule, /"" or null, is refused/);
+    assert.match(s.instructions.for_agent_rule, /"\*" on a task with no role is invalid/);
     await a.close();
   });
 
