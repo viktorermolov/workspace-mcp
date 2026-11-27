@@ -1,3 +1,4 @@
+import { Markdown } from '../markdown.ts';
 import { useMemo, useState } from 'preact/hooks';
 import { api, enc, post } from '../api.ts';
 import { navigate } from '../router.ts';
@@ -537,7 +538,7 @@ function TaskExtras({ task, onChange }: { task: TaskFull; onChange: () => void }
               {c.agent ? `: ${c.agent}` : ''}
               {c.claimed_role ? ` as @${c.claimed_role}` : ''} · <Time at={c.created_at} />
             </div>
-            <pre class="prose">{c.body}</pre>
+            <Markdown text={c.body} />
           </li>
         ))}
       </ul>
