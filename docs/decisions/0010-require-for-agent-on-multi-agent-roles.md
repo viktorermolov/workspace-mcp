@@ -2,7 +2,7 @@
 
 - Issue: [#181](https://github.com/viktorermolov/workspace-mcp/issues/181)
 - Date: 2026-11-27
-- Status: Proposed
+- Status: Accepted
 - Target: 0.7.0
 
 ## Context
