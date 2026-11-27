@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A coordinating role can hand tasks to agents. On the Connections screen the owner marks roles that may address tasks to agents; such a role may set or change `for_agent` on a task of any role, in a call that changes nothing else, and the agent must be able to take the task's role. It is narrower than "may edit any item" and, like it, cannot be granted through MCP. Migration 11 adds the mark. (#148)
 - An agent has a page of its own (`/agents/<slug>`): the platform it runs on, the roles it may take, the open tasks addressed to it, other tasks it has taken, its own last checkpoint and its 20 most recent changes. The agent's name links to it from the Map, a role page and the Connections screen. Owner only (`GET /api/owner/agents/:id`). (#130)
 - Agents: a named bot on a platform (a connection) with the roles it may take. One platform can host several agents, and one role can be taken by agents on different platforms. The owner adds, edits and removes agents under each platform on the Connections screen; `start` lists them (`data.agents`), and MCP cannot change them. On upgrade, migration 8 creates one agent for each active connection and each active role the owner has confirmed for it; a role a connection only claimed in a call, or that is only suggested, is not granted, and a connection with no confirmed roles gets no agent until the owner adds one (#138). Checks on writes are unchanged. Agents are not part of a zip export, like connections. (#107)
 

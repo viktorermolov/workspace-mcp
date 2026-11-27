@@ -6,7 +6,7 @@ import { listDiag, recordDiag } from '../auth/diagnostics.ts';
 import { issueCode } from '../auth/setup.ts';
 import type { Config } from '../config.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
-import { setConnectionRoles, setEnforcement, setRoleEditAny, workspaceAccessSettings } from '../domain/access.ts';
+import { setConnectionRoles, setEnforcement, setRoleEditAny, setRoleRoutesTasks, workspaceAccessSettings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
@@ -142,6 +142,12 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     const b = await body<{ edit_any?: boolean }>(c);
     if (typeof b.edit_any !== 'boolean') throw new DomainError('invalid', 'edit_any must be a boolean');
     setRoleEditAny(db, actor(c), c.req.param('id'), b.edit_any);
+    return c.json({ ok: true, ...workspaceAccessSettings(db, actor(c).memberId) });
+  });
+  api.post('/roles/:id/routes-tasks', async (c) => {
+    const b = await body<{ routes_tasks?: boolean }>(c);
+    if (typeof b.routes_tasks !== 'boolean') throw new DomainError('invalid', 'routes_tasks must be a boolean');
+    setRoleRoutesTasks(db, actor(c), c.req.param('id'), b.routes_tasks);
     return c.json({ ok: true, ...workspaceAccessSettings(db, actor(c).memberId) });
   });
   api.post('/connections/:id/revoke', (c) => c.json({ revoked: revokeConnection(db, actor(c), c.req.param('id')) }));

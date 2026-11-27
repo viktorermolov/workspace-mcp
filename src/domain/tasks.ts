@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { agentMayTake, assertCanEdit, withOwnerRole } from './access.ts';
+import { actorRoutesTasks, agentMayTake, assertCanEdit, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -244,7 +244,10 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     }
 
     const t = requireTask(db, actor.memberId, input.id);
-    assertCanEdit(db, actor, t.role_id, { what: 'task' });
+    // A coordinator role may change who a task is addressed to on any task, and only that (#148).
+    const others = [input.title, input.description, input.status, input.role, input.project, input.parent_id, input.depends_on, input.priority, input.due_date, input.result, input.blocking_reason];
+    const routingOnly = input.for_agent !== undefined && others.every((v) => v === undefined);
+    if (!(routingOnly && actorRoutesTasks(db, actor))) assertCanEdit(db, actor, t.role_id, { what: 'task' });
     checkRev('task', t.id, t.rev, input.rev);
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const sets: string[] = [];

@@ -408,6 +408,34 @@ describe('tasks addressed to an agent', () => {
     assert.deepEqual(claimed.claimed_by?.agent, 'hal');
   });
 
+  it('a role the owner marked may re-address a task of another role, and change nothing else on it', async () => {
+    await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce', override: true } });
+    try {
+      const t = await call<Task>(grok, 'save_task', { title: 'Routed', role: 'developer', claimed_role: 'developer', agent: 'ada' });
+      // Marketer does not own the task, so it cannot address it.
+      await assert.rejects(call(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
+      // MCP cannot grant the mark; the owner sets it.
+      const tools = (await grok.listTools()).tools;
+      assert.ok(!JSON.stringify(tools).includes('routes_tasks'));
+      const set = await owner.json<{ roles: { slug: string; routes_tasks: boolean }[] }>('/api/owner/roles/marketer/routes-tasks', { json: { routes_tasks: true } });
+      assert.equal(set.roles.find((r) => r.slug === 'marketer')!.routes_tasks, true);
+      const routed = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' });
+      assert.equal(routed.for_agent, 'ada');
+      // The agent must still be able to take the task's role, and nothing else may change in the same call.
+      await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: 'mia', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'invalid' && /may not take the role "developer"/.test(err(e).message));
+      await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: null, title: 'Renamed', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
+      await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, status: 'done', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
+      const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: null, claimed_role: 'marketer', agent: 'mia' });
+      assert.equal(cleared.for_agent, null);
+      const ev = get<{ summary: string }>(env.svc.db, "SELECT summary FROM event WHERE action = 'role.privilege_updated' ORDER BY id DESC LIMIT 1");
+      assert.equal(ev!.summary, 'Role "Marketer" may address any task to an agent');
+      await owner.json('/api/owner/roles/marketer/routes-tasks', { json: { routes_tasks: false } });
+      await assert.rejects(call(grok, 'save_task', { id: t.id, rev: cleared.rev, for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
+    } finally {
+      await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'warn' } });
+    }
+  });
+
   it('refuses an unknown agent, an agent that cannot take the role, and an address without a role; null clears it', async () => {
     for (const [args, reason] of [
       [{ title: 'X', role: 'developer', for_agent: 'nobody' }, /agent not found/],

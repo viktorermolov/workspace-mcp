@@ -58,6 +58,7 @@ interface WorkspaceRole {
   slug: string;
   name: string;
   edit_any: boolean;
+  routes_tasks: boolean;
 }
 interface Connection {
   client_id: string;
@@ -305,6 +306,11 @@ function RoleAccessSettings({
       await post(`/roles/${enc(r.id)}/edit-any`, { edit_any });
       onChange();
     });
+  const toggleRoutes = (r: WorkspaceRole, routes_tasks: boolean) =>
+    run(async () => {
+      await post(`/roles/${enc(r.id)}/routes-tasks`, { routes_tasks });
+      onChange();
+    });
   return (
     <>
       {data.role_enforcement === 'warn' && (
@@ -364,6 +370,25 @@ function RoleAccessSettings({
             <li key={r.id}>
               <label class="row">
                 <input type="checkbox" checked={r.edit_any} disabled={busy} onChange={(e) => toggleEditAny(r, (e.target as HTMLInputElement).checked)} />{' '}
+                <strong>{r.name}</strong>
+                <span class="muted small">@{r.slug}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </Card>
+      <Card>
+        <h2>Roles that may address tasks to agents</h2>
+        <p class="muted small">
+          A coordinator hands work out. Tick a role here if it may choose which agent any task is for, also on tasks of other roles. It
+          cannot change anything else on those tasks, and the agent must be able to take the task’s role. Only you can change this.
+        </p>
+        {!data.roles.length && <p class="muted small">No roles yet.</p>}
+        <ul class="list">
+          {data.roles.map((r) => (
+            <li key={r.id}>
+              <label class="row">
+                <input type="checkbox" checked={r.routes_tasks} disabled={busy} onChange={(e) => toggleRoutes(r, (e.target as HTMLInputElement).checked)} />{' '}
                 <strong>{r.name}</strong>
                 <span class="muted small">@{r.slug}</span>
               </label>
