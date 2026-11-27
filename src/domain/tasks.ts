@@ -2,6 +2,7 @@ import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
 import { actorRoutesTasks, agentMayTake, assertCanEdit, assertTaskHandler, taskHandlerConflict, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
+import { closedCommentData, noticeTaskClosed } from './task-notices.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -335,7 +336,10 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
         for_agent: slugOf(db, 'agent', u.agent_id),
       }));
     }
-    if (changes.status && FINISHED.includes(u.status) && !FINISHED.includes(t.status)) emitDependentsUnblocked(db, actor, u.id);
+    if (changes.status && FINISHED.includes(u.status) && !FINISHED.includes(t.status)) {
+      emitDependentsUnblocked(db, actor, u.id);
+      noticeTaskClosed(db, actor, u);
+    }
     return taskView(db, u);
   });
 }
@@ -412,7 +416,7 @@ export function commentTask(db: DB, actor: Actor, input: { id: string; body: str
         actor.agent ?? null,
         now(),
       );
-      recordEvent(db, actor, 'task', t.id, 'task.commented', `Comment on task "${t.title}"`, withOwnerRole(db, t.role_id, { role_id: t.role_id, comment_id: id, from_role: actor.role ?? null }));
+      recordEvent(db, actor, 'task', t.id, 'task.commented', `Comment on task "${t.title}"`, withOwnerRole(db, t.role_id, { role_id: t.role_id, comment_id: id, from_role: actor.role ?? null, ...closedCommentData(db, actor, t) }));
       return { comment_id: id, task_id: t.id };
     }),
   );
