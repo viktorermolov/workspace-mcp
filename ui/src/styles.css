@@ -858,19 +858,34 @@ table.diag tr.bad td {
 }
 
 /* ---------- map ---------- */
+/* A vertical tree of role cards. Cards are placed by top/left/right offsets and stretch to the width,
+   so neither the page nor the graph ever scrolls sideways. */
 .graph-wrap {
-  overflow: auto;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  margin: 4px 0 12px;
 }
 .graph {
-  display: block;
-  margin: 0 auto;
+  position: relative;
+  width: 100%;
+  max-width: 720px;
 }
-.graph-hit {
-  fill: transparent;
+.graph-lines,
+.graph-arcs {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.graph-lines {
+  left: 0;
+}
+.graph-arcs {
+  right: 0;
 }
 .graph-link {
+  fill: none;
   stroke: var(--accent);
   stroke-width: 1.6;
 }
@@ -881,29 +896,61 @@ table.diag tr.bad td {
 .graph-arrow {
   fill: var(--muted);
 }
-.graph-node {
-  fill: var(--surface);
-  stroke: var(--border);
-  stroke-width: 2;
+.graph-card {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
 }
-.graph-node.busy {
-  stroke: var(--accent);
-  fill: var(--accent-soft);
+.graph-card:hover,
+.graph-card:focus-visible {
+  border-color: var(--accent);
 }
-.graph-node.archived {
-  stroke-dasharray: 3 3;
+.graph-card.busy {
+  border-color: var(--accent);
+  border-left-width: 4px;
+  padding-left: 9px;
+}
+.graph-card.archived,
+.graph-card.test {
+  border-style: dashed;
   opacity: 0.7;
 }
+.graph-name {
+  flex: 1;
+  min-width: 0;
+  font: 600 14px/18px var(--font);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.graph-archived {
+  font-weight: 400;
+  color: var(--muted);
+}
 .graph-count {
-  fill: var(--text);
-  font: 600 14px var(--font);
+  flex: none;
+  font: 600 12px/1 var(--font);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  white-space: nowrap;
 }
-.graph-label {
-  fill: var(--muted);
-  font: 11px var(--font);
-}
-.graph-label.archived-label {
-  font-size: 9px;
+.graph-card.busy .graph-count {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .legend {
   text-align: center;
