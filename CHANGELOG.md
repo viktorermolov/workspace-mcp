@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-27
+
 ### Fixed
 
 - Re-authorizing a product while the original platform is still in use no longer treats an empty same-type duplicate as a matching candidate, so the consent screen does not push the owner toward a third platform. Only platforms with agents or owner-confirmed roles count as matches. When exactly one such platform matches, it is continued automatically, and any empty same-type duplicate (no agents, no roles, no journal besides its own approval) is archived in the same step. The consent screen says that empty platform will be archived. A duplicate that is configured in any way is never touched automatically. The owner can undo the transfer, including the archive, from Platforms. (#178)
@@ -17,7 +19,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Upgrade
 
 - Upgrading from 0.6.0 applies one migration (15, `repair-empty-active-duplicates`) automatically, after a pre-migration backup. Existing data is kept.
-- Make a local backup of the database before upgrading.
+- Make a consistent local backup of the database before upgrading, for example with `cli backup` or with the container stopped.
 - After the upgrade, an empty same-type duplicate that was left in place because the original was still in use is archived when the pair is unique and the duplicate has no agents, no roles, and no journal besides its own approval. The original platform and its tokens are not changed. The owner can undo the archive from Platforms → “Undo last client transfer” without dropping the original platform's tokens or changing its approval time. Anything that is not a unique empty duplicate is left as it is and recorded in the log.
 - Upgrading from 0.5.0 applies migrations 14 and 15. Migration 14 still binds a unique later empty duplicate when the original was unused after that duplicate was approved; migration 15 then archives a leftover empty duplicate of a still-used original, as above.
 - Rollback to 0.6.0 or 0.5.0 is possible only by restoring the pre-migration backup.
