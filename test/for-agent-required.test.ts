@@ -130,6 +130,8 @@ describe('for_agent is required for a role with several agents (#181)', () => {
   it('5. a role with no agents, or no role at all, stays unaddressed as before', async () => {
     assert.equal((await asCora({ title: 'Write 5', role: 'writer' })).for_agent, null);
     assert.equal((await asCora({ title: 'Loose 5' })).for_agent, null);
+    assert.equal((await asCora({ title: 'Loose 5 empty', for_agent: '' })).for_agent, null);
+    assert.equal((await asCora({ title: 'Write 5 empty', role: 'writer', for_agent: '' })).for_agent, null);
   });
 
   it('6. for_agent "*" is the explicit "any agent of the role"; without a role it is refused', async () => {
