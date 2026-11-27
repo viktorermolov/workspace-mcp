@@ -118,7 +118,13 @@ Omit `id` and `slug` to update the default working rules, same as before: this r
 
 ### `save_task`
 
-Input: `id`, `rev`, `title`, `description`, `status`, `role` (or `null` to clear), `project` (or `null`), `for_agent` (the slug of the one agent the task is addressed to, which must be able to take the task's role; `null` for any agent with the role; a role the owner marked as allowed to address tasks to agents may change it on a task of any role, in a call that changes nothing else), `parent_id` (or `null`), `depends_on` (replaces the list), `priority`, `due_date` (`YYYY-MM-DD` or `null`), `result`, `blocking_reason`, `claimed_role`, `idempotency_key`.
+Input: `id`, `rev`, `title`, `description`, `status`, `role` (or `null` to clear), `project` (or `null`), `for_agent` (the slug of the one agent the task is addressed to, which must be able to take the task's role, or `"*"` for any agent with the role; a role the owner marked as allowed to address tasks to agents may change it on a task of any role, in a call that changes nothing else), `parent_id` (or `null`), `depends_on` (replaces the list), `priority`, `due_date` (`YYYY-MM-DD` or `null`), `result`, `blocking_reason`, `claimed_role`, `idempotency_key`.
+
+When a task is created, or its role or `for_agent` changes, the address follows the agents of its role (#181). The agents counted are those that may take the role on a platform that is not revoked.
+
+- With `for_agent` left out, empty or `null`: a role with one agent addresses the task to that agent; a role with no agents, or a task with no role, leaves it unaddressed; a role with several agents is refused with `invalid`, nothing is created or changed, and the error names the role and its agents (also in `role` and `candidates`), for example: `role "developer" has more than one agent (ada, hal); pass for_agent with one of these slugs, or for_agent "*" for any of them. Nothing was created.`
+- `"*"` is the only way to leave a task of such a role to any of its agents. It needs a role: on a task with no role it is `invalid`.
+- Other edits of an existing task (status, result, title and so on) do not re-check its address, so tasks saved before 0.7.0 without an agent stay as they are.
 
 Cycles in the parent hierarchy or in dependencies are rejected with `invalid`. A task whose dependencies are not done can still be saved; when its last open dependency is finished, an `task.unblocked` event is recorded.
 
