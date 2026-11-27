@@ -7,11 +7,19 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - Re-authorizing a product while the original platform is still in use no longer treats an empty same-type duplicate as a matching candidate, so the consent screen does not push the owner toward a third platform. Only platforms with agents or owner-confirmed roles count as matches. When exactly one such platform matches, it is continued automatically, and any empty same-type duplicate (no agents, no roles, no journal besides its own approval) is archived in the same step. The consent screen says that empty platform will be archived. A duplicate that is configured in any way is never touched automatically. The owner can undo the transfer, including the archive, from Platforms. (#178)
+- An empty same-type duplicate that was already created while the original was still in use is archived by migration 15 when the pair is unique and the duplicate has no agents, no roles, and no journal besides its own approval. The original platform and its tokens are not changed. The duplicate's unused consent and grants are revoked so that client cannot obtain a token. An empty consent row is not treated as configuration. A lone platform, with or without an agent, is left as it is. The owner can undo the archive from Platforms. (#178)
+
+### Changed
+
+- Before 1.0, a breaking change is a minor version, a fix without new functionality is a patch, and 1.0.0 is released only on the owner's explicit decision. The README and [0008](docs/decisions/0008-semver.md) follow this rule. (#181)
 
 ### Upgrade
 
-- No database migration in this change. Make a local backup of the database before upgrading. Existing data is kept.
-- A later change may add a migration for an empty duplicate that was already created while the original was still in use.
+- Upgrading from 0.6.0 applies one migration (15, `repair-empty-active-duplicates`) automatically, after a pre-migration backup. Existing data is kept.
+- Make a local backup of the database before upgrading.
+- After the upgrade, an empty same-type duplicate that was left in place because the original was still in use is archived when the pair is unique and the duplicate has no agents, no roles, and no journal besides its own approval. The original platform and its tokens are not changed. The owner can undo the archive from Platforms → “Undo last client transfer”. Anything that is not a unique empty duplicate is left as it is and recorded in the log.
+- Upgrading from 0.5.0 applies migrations 14 and 15. Migration 14 still binds a unique later empty duplicate when the original was unused after that duplicate was approved; migration 15 then archives a leftover empty duplicate of a still-used original, as above.
+- Rollback to 0.6.0 or 0.5.0 is possible only by restoring the pre-migration backup.
 
 ## [0.6.0] - 2026-11-27
 

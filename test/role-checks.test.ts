@@ -61,6 +61,7 @@ describe('role checks on writes', () => {
         [12, 'agents-skipped-by-slug'],
         [13, 'connection-sole-agent'],
         [14, 'repair-reauth-duplicate-connections'],
+        [15, 'repair-empty-active-duplicates'],
       ],
     );
   });
