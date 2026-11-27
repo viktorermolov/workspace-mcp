@@ -414,7 +414,10 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
           ) : (
             <li key={a.id} class="version-row">
               <div>
-                <strong>{a.name}</strong> <span class="muted small">@{a.slug}</span>
+                <a href={`/agents/${enc(a.slug)}`}>
+                  <strong>{a.name}</strong>
+                </a>{' '}
+                <span class="muted small">@{a.slug}</span>
                 <div class="row">{a.roles.length ? a.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>) : <span class="muted small">no roles yet</span>}</div>
               </div>
               <div class="row">

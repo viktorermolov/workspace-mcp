@@ -380,6 +380,27 @@ describe('tasks addressed to an agent', () => {
     assert.equal(data.tables.agent, undefined);
   });
 
+  it('the owner page of an agent shows its tasks, its own checkpoint and what it changed', async () => {
+    const hal = await owner.json<{
+      slug: string;
+      platform: { name: string };
+      roles: { slug: string }[];
+      tasks_for_agent: { title: string; status: string; role: string }[];
+      tasks_claimed: unknown[];
+      last_checkpoint: { done: string; role: string } | null;
+      recent: { action: string }[];
+    }>('/api/owner/agents/hal');
+    assert.deepEqual([hal.slug, hal.platform.name, hal.roles.map((r) => r.slug)], ['hal', 'Home server', ['developer']]);
+    assert.deepEqual(hal.tasks_for_agent.map((t) => [t.title, t.status, t.role]), [['For Hal', 'in_progress', 'developer']]);
+    assert.deepEqual(hal.tasks_claimed, []);
+    assert.deepEqual([hal.last_checkpoint?.done, hal.last_checkpoint?.role], ['Hal did this', 'developer']);
+    assert.deepEqual(hal.recent.map((e) => e.action), ['checkpoint.created', 'task.claimed']);
+    const mia = await owner.json<{ tasks_for_agent: unknown[]; last_checkpoint: unknown; recent: { action: string }[] }>('/api/owner/agents/mia');
+    assert.deepEqual([mia.tasks_for_agent, mia.last_checkpoint], [[], null]);
+    assert.ok(mia.recent.length > 0 && mia.recent.every((e) => e.action.startsWith('task.')));
+    assert.equal((await owner.fetch('/api/owner/agents/nobody')).status, 404);
+  });
+
   it('removing an agent leaves its tasks with the role, addressed to nobody', async () => {
     const ada = (await owner.json<{ agents: AgentView[] }>('/api/owner/agents')).agents.find((a) => a.slug === 'ada')!;
     await owner.json(`/api/owner/agents/${ada.id}`, { method: 'DELETE' });

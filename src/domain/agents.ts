@@ -208,3 +208,40 @@ export function agentSelf(db: DB, memberId: string, ref: string) {
   const v = agentView(db, a);
   return { slug: v.slug, name: v.name, platform: v.platform.name, roles: v.roles.filter((r) => !r.archived).map((r) => r.slug) };
 }
+
+/**
+ * Everything the owner wants to see about one agent on its page: the record, the open tasks addressed
+ * to it or claimed by it, its last checkpoint and what it changed most recently. Read-only.
+ */
+export function agentOverview(db: DB, memberId: string, ref: string) {
+  const a = requireAgent(db, memberId, ref);
+  const task = (t: { id: string; title: string; status: string; role: string | null; project: string | null }) => t;
+  const cols = `t.id, t.title, t.status, r.slug AS role, p.slug AS project FROM task t LEFT JOIN role r ON r.id = t.role_id LEFT JOIN project p ON p.id = t.project_id`;
+  const open = "t.archived_at IS NULL AND t.status NOT IN ('done','cancelled')";
+  const addressed = all<Parameters<typeof task>[0]>(db, `SELECT ${cols} WHERE t.member_id = ? AND t.agent_id = ? AND ${open} ORDER BY t.updated_at DESC LIMIT 50`, memberId, a.id).map(task);
+  const claimed = all<Parameters<typeof task>[0]>(
+    db,
+    `SELECT ${cols} WHERE t.member_id = ? AND t.claimed_agent = ? AND t.claimed_by = ? AND (t.agent_id IS NULL OR t.agent_id <> ?) AND ${open} ORDER BY t.updated_at DESC LIMIT 50`,
+    memberId,
+    a.slug,
+    a.client_id,
+    a.id,
+  ).map(task);
+  const checkpoint = get<{ id: string; done: string; stopped_at: string; next: string; created_at: string; role: string; project: string | null }>(
+    db,
+    `SELECT c.id, c.done, c.stopped_at, c.next, c.created_at, r.slug AS role, p.slug AS project FROM checkpoint c
+     JOIN role r ON r.id = c.role_id LEFT JOIN project p ON p.id = c.project_id
+     WHERE c.member_id = ? AND c.agent = ? AND c.connection_id = ? ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
+    memberId,
+    a.slug,
+    a.client_id,
+  );
+  const recent = all<{ id: number; at: string; claimed_role: string | null; entity_type: string; entity_id: string | null; action: string; summary: string }>(
+    db,
+    'SELECT id, at, claimed_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND agent = ? AND connection_id = ? ORDER BY id DESC LIMIT 20',
+    memberId,
+    a.slug,
+    a.client_id,
+  );
+  return { ...agentView(db, a), tasks_for_agent: addressed, tasks_claimed: claimed, last_checkpoint: checkpoint ?? null, recent };
+}
