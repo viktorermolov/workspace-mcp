@@ -1,8 +1,21 @@
+import type { DatabaseSync } from 'node:sqlite';
+import { repairReauthDuplicateConnections } from './repair-reauth-duplicates.ts';
+
 /**
  * Application schema migrations. Each entry runs once, in order, inside a transaction.
  * Never edit a released migration; add a new one.
+ * `run`, if present, is a frozen function called after `sql` in the same transaction.
+ * It may return log lines; the runner writes them only after the transaction commits.
  */
-export const migrations: { id: number; name: string; sql: string }[] = [
+export type MigrationLog = { msg: string; fields: Record<string, unknown> };
+export type Migration = {
+  id: number;
+  name: string;
+  sql?: string;
+  run?: (db: DatabaseSync) => MigrationLog[];
+};
+
+export const migrations: Migration[] = [
   {
     id: 1,
     name: 'initial',
@@ -602,5 +615,37 @@ DROP TABLE agent_backfill;
     sql: `
 ALTER TABLE connection ADD COLUMN sole_agent INTEGER NOT NULL DEFAULT 0;
 `,
+  },
+  // After 0.5.0's `connection-sole-agent` (id 13). Repairs a re-auth duplicate: the later empty
+  // platform's OAuth client is bound onto the earlier configured platform, and the empty row is
+  // archived. See docs/decisions/0007-reauth-same-client.md. Never bump approved_at.
+  {
+    id: 14,
+    name: 'repair-reauth-duplicate-connections',
+    sql: `
+ALTER TABLE connection ADD COLUMN current_client_id TEXT;
+ALTER TABLE connection ADD COLUMN merged_into_client_id TEXT REFERENCES connection(client_id);
+UPDATE connection SET current_client_id = client_id WHERE current_client_id IS NULL;
+CREATE UNIQUE INDEX connection_current_client_id ON connection(current_client_id) WHERE current_client_id IS NOT NULL;
+CREATE TRIGGER connection_current_client_default AFTER INSERT ON connection
+WHEN NEW.current_client_id IS NULL
+BEGIN
+  UPDATE connection SET current_client_id = NEW.client_id WHERE rowid = NEW.rowid;
+END;
+CREATE TABLE connection_transfer (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  platform_client_id TEXT NOT NULL,
+  from_client_id TEXT NOT NULL,
+  to_client_id TEXT NOT NULL,
+  previous_approved_at TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('reauth','migration')),
+  archived_client_id TEXT,
+  rolled_back_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX connection_transfer_platform ON connection_transfer (platform_client_id, id);
+`,
+    run: (db) => repairReauthDuplicateConnections(db),
   },
 ];
