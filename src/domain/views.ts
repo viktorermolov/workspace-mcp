@@ -16,6 +16,7 @@ import {
   roleView,
   rulesView,
   type DocumentRow,
+  type RoleRow,
 } from './entities.ts';
 import { getReviewComment, listReviewSearch, openReviewComments, searchReviewHits, startReviewComments } from './reviews.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
@@ -382,11 +383,36 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     ].join('\n');
   }
 
-  let role: ReturnType<typeof roleView> | undefined;
-  let roleTasks: unknown[] | undefined;
-  let checkpoint: unknown;
-  let newerCheckpoint: unknown;
-  let ownerTaskComments: unknown[] = [];
+  const me = self ? (get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND slug = ?', memberId, self.slug)?.id ?? null) : null;
+  /** What start says about one role: the role, its open tasks, owner comments waiting on them, and the last checkpoint. */
+  const roleBlock = (r: RoleRow) => {
+    const view = roleView(db, r);
+    // A caller that named its agent sees the role's tasks addressed to it (first) and those addressed to nobody.
+    const tasks = all<TaskRow>(
+      db,
+      `SELECT * FROM task WHERE role_id = ? AND archived_at IS NULL AND status NOT IN ('done','cancelled') ${me ? 'AND (agent_id IS NULL OR agent_id = ?)' : ''}
+       ORDER BY ${me ? 'agent_id IS NULL,' : ''} CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC LIMIT 30`,
+      ...(me ? [r.id, me] : [r.id]),
+    ).map((t) => taskSummary(db, t));
+    // Tasks of the role where the last word is the owner's: a comment nobody has answered yet.
+    const ownerComments = all<{ task_id: string; title: string; body: string; created_at: string }>(
+      db,
+      `SELECT t.id AS task_id, t.title, c.body, c.created_at FROM task t JOIN task_comment c ON c.task_id = t.id
+       WHERE t.role_id = ? AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled') AND c.actor_kind = 'owner'
+         AND c.rowid = (SELECT max(x.rowid) FROM task_comment x WHERE x.task_id = t.id)
+       ORDER BY c.rowid LIMIT 10`,
+      r.id,
+    ).map((c) => ({ task_id: c.task_id, title: c.title, comment: preview(c.body, LIMITS.preview), at: c.created_at }));
+    // The agent's own last checkpoint comes first; if another agent of the role wrote a newer one, it is pointed to.
+    const latestCp = lastCheckpoint(db, memberId, r.id);
+    const own = self ? lastCheckpoint(db, memberId, r.id, undefined, self.slug) : undefined;
+    const checkpoint = own ?? latestCp;
+    const newer = own && latestCp && latestCp.id !== own.id ? { id: latestCp.id, agent: latestCp.agent ?? null, platform: latestCp.connection_name ?? null, created_at: latestCp.created_at } : undefined;
+    return { view, tasks, ownerComments, checkpoint, newer, routines: listRoutines(db, memberId, { roleId: r.id }), instruction: (view as { instruction?: string }).instruction || '(this role has no instruction yet)' };
+  };
+  type RoleBlock = ReturnType<typeof roleBlock>;
+
+  let blocks: RoleBlock[] = [];
   if (roleRef) {
     const r = findRole(db, memberId, roleRef, false);
     if (!r) {
@@ -400,36 +426,27 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       }
       throw new DomainError('not_found', `role not found: ${roleRef}. Available roles: ${roles.map((x) => x.slug).join(', ') || '(none yet)'}`);
     }
-    role = roleView(db, r);
-    // A caller that named its agent sees the role's tasks addressed to it (first) and those addressed to nobody.
-    const me = self ? (get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND slug = ?', memberId, self.slug)?.id ?? null) : null;
-    roleTasks = all<TaskRow>(
-      db,
-      `SELECT * FROM task WHERE role_id = ? AND archived_at IS NULL AND status NOT IN ('done','cancelled') ${me ? 'AND (agent_id IS NULL OR agent_id = ?)' : ''}
-       ORDER BY ${me ? 'agent_id IS NULL,' : ''} CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC LIMIT 30`,
-      ...(me ? [r.id, me] : [r.id]),
-    ).map((t) => taskSummary(db, t));
-    // Tasks of the role where the last word is the owner's: a comment nobody has answered yet.
-    ownerTaskComments = all<{ task_id: string; title: string; body: string; created_at: string }>(
-      db,
-      `SELECT t.id AS task_id, t.title, c.body, c.created_at FROM task t JOIN task_comment c ON c.task_id = t.id
-       WHERE t.role_id = ? AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled') AND c.actor_kind = 'owner'
-         AND c.rowid = (SELECT max(x.rowid) FROM task_comment x WHERE x.task_id = t.id)
-       ORDER BY c.rowid LIMIT 10`,
-      r.id,
-    ).map((c) => ({ task_id: c.task_id, title: c.title, comment: preview(c.body, LIMITS.preview), at: c.created_at }));
-    // The agent's own last checkpoint comes first; if another agent of the role wrote a newer one, it is pointed to.
-    const latest = lastCheckpoint(db, memberId, r.id);
-    const own = self ? lastCheckpoint(db, memberId, r.id, undefined, self.slug) : undefined;
-    // Long checkpoint parts are shortened; get(type: checkpoint, id) returns them in full.
-    checkpoint = own ?? latest;
-    if (own && latest && latest.id !== own.id) newerCheckpoint = { id: latest.id, agent: latest.agent ?? null, platform: latest.connection_name ?? null, created_at: latest.created_at };
+    blocks = [roleBlock(r)];
+  } else if (self) {
+    // An agent that names itself and no role gets every role it may take in one call (#162).
+    blocks = self.roles.flatMap((slug) => {
+      const r = findRole(db, memberId, slug, false);
+      return r ? [roleBlock(r)] : [];
+    });
   }
+  // One role keeps the shape start has always had; several roles are listed under my_roles.
+  const one = blocks.length === 1 ? blocks[0]! : undefined;
+  const many = blocks.length > 1 ? blocks : undefined;
+  const role = one?.view;
 
   // Changes since this connection's previous start call for the same role.
-  const key = roleRef ? (findRole(db, memberId, roleRef)?.id ?? roleRef) : '*';
+  // A named agent has its own marker, so two agents of one role on one platform do not use up each other's changes.
+  const roleKey = roleRef ? (findRole(db, memberId, roleRef)?.id ?? roleRef) : '*';
+  const key = self ? `${roleKey}@${self.slug}` : roleKey;
   const connKey = actor.connectionId ?? 'owner';
-  const prev = get<{ last_event_id: number }>(db, 'SELECT last_event_id FROM start_cursor WHERE connection_id = ? AND role_key = ?', connKey, key);
+  const cursorOf = (k: string) => get<{ last_event_id: number }>(db, 'SELECT last_event_id FROM start_cursor WHERE connection_id = ? AND role_key = ?', connKey, k);
+  // The first start by name continues from the marker the platform had for the role before agents had their own.
+  const prev = cursorOf(key) ?? (self ? cursorOf(roleKey) : undefined);
   const latest = latestEventId(db, memberId);
   let since: unknown = null;
   // The cursor moves only past the events shown: when more than fit, the next start continues
@@ -454,14 +471,35 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
 
   const allRoutines = listRoutines(db, memberId);
   const agentList = agentSummaries(db, memberId, START_LIST_MAX);
-  const roleRoutines = role ? listRoutines(db, memberId, { roleId: role.id }) : [];
-  const roleInstruction = role ? (role as { instruction?: string }).instruction || '(this role has no instruction yet)' : undefined;
+  const roleRoutines = one?.routines ?? [];
+  const roleInstruction = one?.instruction;
+  const roleTasks = one?.tasks;
+  const ownerTaskComments = one?.ownerComments ?? [];
+  const checkpoint = one?.checkpoint;
+  const newerCheckpoint = one?.newer;
   const cpPart = (v: unknown, n: number) => preview(v as string | null, n);
   // An overview with a fixed size: long fields are previews and long lists are cut, so start fits in
   // one response. Everything is one get or search away. Text that escapes badly in JSON (many quotes,
   // newlines or control characters) can still overflow; then the overview shrinks, and as a last
   // resort the instructions are shortened with an explicit note to read them in full.
   const commentsFor = (pv: number, mode: 'full' | 'ids') => (role ? startReviewComments(db, memberId, role.id, pv, mode) : {});
+  const cpView = (c: unknown, long: number) =>
+    c ? { ...(c as Record<string, unknown>), done: cpPart((c as Record<string, unknown>).done, long), stopped_at: cpPart((c as Record<string, unknown>).stopped_at, long), next: cpPart((c as Record<string, unknown>).next, long) } : null;
+  const roleData = (b: RoleBlock, pv: number, long: number, comments: 'full' | 'ids') => ({
+    role: { id: b.view.id, slug: b.view.slug, name: b.view.name, area: b.view.area, parent: b.view.parent, links: b.view.links.slice(0, 100), ...(b.view.links.length > 100 ? { more_links: b.view.links.length - 100 } : {}), setup_notes: preview(b.view.setup_notes, long), rev: b.view.rev },
+    open_tasks: b.tasks,
+    ...(b.ownerComments.length ? { owner_comments_waiting_on_tasks: b.ownerComments } : {}),
+    last_checkpoint: cpView(b.checkpoint, long),
+    ...(b.newer ? { newer_checkpoint_by_another_agent: b.newer } : {}),
+    role_routines: b.routines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, long)),
+    ...(b.routines.length > START_LIST_MAX ? { more_role_routines: b.routines.length - START_LIST_MAX } : {}),
+    ...startReviewComments(db, memberId, b.view.id, pv, comments),
+  });
+  // The agent's own most recent checkpoint across its roles: where it stopped last, whatever the role.
+  const lastOwn = many
+    ?.map((b) => b.checkpoint)
+    .filter((c): c is Record<string, unknown> => !!c && c.agent === self?.slug)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
   const build = (pv: number, long: number, instr: number | null, comments: 'full' | 'ids' = 'full') => ({
     instructions: {
       working_rules: instr === null ? rules.text || '(no working rules yet)' : preview(rules.text || '(no working rules yet)', instr),
@@ -482,6 +520,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       save_state_rule: SAVE_STATE_RULE,
       safety_rule: SAFETY_RULE,
       ...(role ? { role_instruction: instr === null ? roleInstruction : preview(roleInstruction!, instr), role: role.slug } : {}),
+      ...(many ? { role_instructions: many.map((b) => ({ role: b.view.slug, instruction: instr === null ? b.instruction : preview(b.instruction, instr) })) } : {}),
       ...(self ? { agent: self } : {}),
       ...(instr === null
         ? {}
@@ -518,6 +557,12 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
             ...(newerCheckpoint ? { newer_checkpoint_by_another_agent: newerCheckpoint } : {}),
             role_routines: roleRoutines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, long)),
             ...(roleRoutines.length > START_LIST_MAX ? { more_role_routines: roleRoutines.length - START_LIST_MAX } : {}),
+          }
+        : {}),
+      ...(many
+        ? {
+            my_roles: many.map((b) => roleData(b, pv, long, comments)),
+            last_checkpoint: lastOwn ? { ...cpView(lastOwn, long), role: many.find((b) => b.checkpoint === lastOwn)!.view.slug } : null,
           }
         : {}),
       changes_since_previous_start: since,

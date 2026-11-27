@@ -173,6 +173,107 @@ describe('agents on a platform', () => {
   });
 });
 
+describe('start by agent name alone', () => {
+  let env: TestEnv;
+  let owner: Browser;
+  let grok: Awaited<ReturnType<typeof connectAgent>>['client'];
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    grok = (await connectAgent(env, owner, 'Grok')).client;
+    await call(grok, 'save_role', { name: 'Coordinator', slug: 'coordinator', instruction: 'Hand work out.' });
+    await call(grok, 'save_role', { name: 'Developer', slug: 'developer', instruction: 'Write code.' });
+    await call(grok, 'save_role', { name: 'Marketer', slug: 'marketer', instruction: 'Write posts.' });
+    const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
+    const grokId = list.connections[0]!.client_id;
+    await confirmRoles(owner, grokId, ['coordinator', 'developer', 'marketer']);
+    await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: grokId, roles: ['coordinator', 'developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Bob', platform: grokId, roles: ['developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Idle', platform: grokId } });
+  });
+  after(async () => {
+    await grok.close();
+    await env.close();
+  });
+
+  type RoleData = { role: { slug: string }; open_tasks: { title: string; for_agent?: string | null }[]; last_checkpoint: { done: string } | null; role_routines: unknown[]; review_comments_open_total: number };
+  type Start = {
+    instructions: { role?: string; role_instruction?: string; role_instructions?: { role: string; instruction: string }[]; agent?: { slug: string; roles: string[] } };
+    data: Partial<RoleData> & { my_roles?: RoleData[]; changes_since_previous_start: null | { events: { summary: string }[] }; last_checkpoint?: ({ done: string; role?: string }) | null };
+  };
+
+  it('an agent with several roles gets tasks, checkpoint and instruction of every role in one call', async () => {
+    await call(grok, 'save_task', { title: 'Plan the week', role: 'coordinator', claimed_role: 'coordinator', agent: 'ada' });
+    await call(grok, 'save_task', { title: 'For Ada', role: 'developer', for_agent: 'ada', claimed_role: 'developer', agent: 'ada' });
+    await call(grok, 'save_task', { title: 'For Bob', role: 'developer', for_agent: 'bob', claimed_role: 'developer', agent: 'bob' });
+    await call(grok, 'save_task', { title: 'Marketing only', role: 'marketer', claimed_role: 'marketer' });
+    await call(grok, 'checkpoint', { role: 'coordinator', done: 'Planned', stopped_at: 'x', next: 'y', claimed_role: 'coordinator', agent: 'ada' });
+    await call(grok, 'checkpoint', { role: 'developer', done: 'Coded', stopped_at: 'x', next: 'y', claimed_role: 'developer', agent: 'ada' });
+
+    const s = await call<Start>(grok, 'start', { agent: 'ada' });
+    assert.deepEqual(s.instructions.agent!.roles, ['coordinator', 'developer']);
+    assert.deepEqual(s.instructions.role_instructions, [
+      { role: 'coordinator', instruction: 'Hand work out.' },
+      { role: 'developer', instruction: 'Write code.' },
+    ]);
+    assert.equal(s.instructions.role_instruction, undefined);
+    const mine = s.data.my_roles!;
+    assert.deepEqual(mine.map((r) => r.role.slug), ['coordinator', 'developer']);
+    assert.deepEqual(mine[0]!.open_tasks.map((t) => t.title), ['Plan the week']);
+    // Tasks addressed to it come first; another agent's task and another role's task are not listed.
+    assert.deepEqual(mine[1]!.open_tasks.map((t) => t.title), ['For Ada']);
+    assert.equal(mine[0]!.last_checkpoint!.done, 'Planned');
+    assert.equal(mine[1]!.last_checkpoint!.done, 'Coded');
+    assert.equal(mine[1]!.review_comments_open_total, 0);
+    // Where the agent itself stopped last, whatever the role.
+    assert.equal(s.data.last_checkpoint!.done, 'Coded');
+    assert.equal(s.data.last_checkpoint!.role, 'developer');
+    assert.equal(s.data.open_tasks, undefined);
+  });
+
+  it('an agent with one role gets that role without naming it; naming a role still narrows to it', async () => {
+    const bob = await call<Start>(grok, 'start', { agent: 'bob' });
+    assert.equal(bob.instructions.role, 'developer');
+    assert.equal(bob.instructions.role_instruction, 'Write code.');
+    assert.deepEqual(bob.data.open_tasks!.map((t) => t.title), ['For Bob']);
+    assert.equal(bob.data.my_roles, undefined);
+    const ada = await call<Start>(grok, 'start', { agent: 'ada', role: 'coordinator' });
+    assert.equal(ada.instructions.role_instruction, 'Hand work out.');
+    assert.deepEqual(ada.data.open_tasks!.map((t) => t.title), ['Plan the week']);
+    assert.equal(ada.data.my_roles, undefined);
+    // An agent with no roles, and a call that names no agent, get the overview only, as before.
+    for (const args of [{ agent: 'idle' }, {}]) {
+      const none = await call<Start>(grok, 'start', args);
+      assert.equal(none.instructions.role, undefined);
+      assert.equal(none.data.my_roles, undefined);
+      assert.equal(none.data.open_tasks, undefined);
+    }
+  });
+
+  it('each agent has its own marker for changes since its previous start', async () => {
+    // Both agents have started as developer before; then something changes once.
+    await call(grok, 'start', { agent: 'ada', role: 'developer' });
+    await call(grok, 'start', { agent: 'bob', role: 'developer' });
+    await call(grok, 'save_task', { title: 'News for both', role: 'developer', claimed_role: 'developer' });
+    const sees = (s: Start) => (s.data.changes_since_previous_start?.events ?? []).some((e) => e.summary.includes('News for both'));
+    const ada = await call<Start>(grok, 'start', { agent: 'ada', role: 'developer' });
+    assert.equal(sees(ada), true);
+    // Ada reading the change does not use it up for Bob.
+    const bob = await call<Start>(grok, 'start', { agent: 'bob', role: 'developer' });
+    assert.equal(sees(bob), true);
+    assert.equal(sees(await call<Start>(grok, 'start', { agent: 'bob', role: 'developer' })), false);
+  });
+
+  it('the first start by name continues from the marker the platform had for the role', async () => {
+    await owner.json('/api/owner/agents', { json: { name: 'Late', platform: (await owner.json<{ connections: { client_id: string }[] }>('/api/owner/connections')).connections[0]!.client_id, roles: ['marketer'] } });
+    await call(grok, 'start', { role: 'marketer' });
+    await call(grok, 'save_task', { title: 'Before Late named itself', role: 'marketer', claimed_role: 'marketer' });
+    const late = await call<Start>(grok, 'start', { agent: 'late', role: 'marketer' });
+    assert.ok(late.data.changes_since_previous_start, 'not a first start: the platform had a marker for the role');
+    assert.ok(late.data.changes_since_previous_start!.events.some((e) => e.summary.includes('Before Late named itself')));
+  });
+});
+
 describe('agents migration', () => {
   it('migration 12 adds an agent migration 8 skipped over a slug collision, and only that', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));

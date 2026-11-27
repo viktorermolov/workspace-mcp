@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `start` by agent name alone: with `agent` and no `role`, an agent gets the instruction, open tasks, waiting owner comments, review comments, routines and last checkpoint of every role it may take, in one call (`instructions.role_instructions`, `data.my_roles`, `data.last_checkpoint`). An agent with one role gets what `start` with that role returns. Passing `role` still narrows to one role. (#162)
+
+### Fixed
+
+- Two agents of one role on one platform shared the marker for "changes since your previous start", so the first to call `start` used up the changes for the other. A named agent now has its own marker; its first `start` by name continues from the platform's marker for the role. (#162)
+
 ## [0.4.1] - 2026-11-27
 
 ### Fixed

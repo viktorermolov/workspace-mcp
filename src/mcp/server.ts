@@ -171,9 +171,9 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Start here',
       description:
-        'Call this first in every session. Returns the working rules, the save-state rule, the roles, projects with their focus and, for the given role, its instruction, open review comments it is responsible for, open tasks, last checkpoint and changes since your previous start. Pass an optional project to also receive that project\'s rules, which supplement the global working rules. On an empty workspace it explains how to fill it.',
+        'Call this first in every session, with your agent slug if you have one. Returns the working rules, the save-state rule, the roles, projects with their focus and, for your role, its instruction, open review comments it is responsible for, open tasks, last checkpoint and changes since your previous start. With agent and no role you get this for every role you may take, in one call. Pass an optional project to also receive that project\'s rules, which supplement the global working rules. On an empty workspace it explains how to fill it.',
       inputSchema: z.object({
-        role: z.string().max(200).optional().describe('Your role slug or id, if you have one.'),
+        role: z.string().max(200).optional().describe('Your role slug or id, if you have one. Leave it out when you pass agent, unless you want one of your roles only.'),
         project: z.string().max(200).optional().describe('Optional project slug or id. When given, instructions also include that project\'s rules, which supplement the global working rules.'),
         agent: agentArg,
       }),
