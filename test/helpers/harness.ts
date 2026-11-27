@@ -210,10 +210,11 @@ export async function approveInBrowser(browser: Browser, authorizationUrl: URL, 
   if (target.pathname.startsWith('/consent')) {
     const oauthQuery = target.search.slice(1);
     const clientId = new URLSearchParams(oauthQuery).get('client_id') ?? '';
-    const info = await browser.json<{ continue_with: { mode: string; target?: { client_id: string } } }>(
+    const info = await browser.json<{ continue_with?: { mode: string; target?: { client_id: string } } }>(
       `/api/owner/consent/client?client_id=${encodeURIComponent(clientId)}`,
     );
-    const chosen = info.continue_with.mode === 'auto' ? (info.continue_with.target?.client_id ?? continueClientId) : continueClientId;
+    // 0.5.0 and earlier have no continue_with; the upgrade smoke talks to the previous release first.
+    const chosen = info.continue_with?.mode === 'auto' ? (info.continue_with.target?.client_id ?? continueClientId) : continueClientId;
     const out = await browser.json<{ url: string }>('/api/owner/consent', { json: { accept: true, name: connectionName, oauth_query: oauthQuery, continue_client_id: chosen } });
     return new URL(out.url);
   }
