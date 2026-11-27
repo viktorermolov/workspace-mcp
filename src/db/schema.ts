@@ -532,10 +532,8 @@ SELECT 'agt_' || lower(hex(randomblob(8))) AS id, c.member_id AS member_id, c.cl
   CASE WHEN row_number() OVER (PARTITION BY c.member_id, r.slug ORDER BY c.created_at, c.client_id) = 1 THEN r.slug
        ELSE substr(r.slug, 1, 56) || '-' || row_number() OVER (PARTITION BY c.member_id, r.slug ORDER BY c.created_at, c.client_id) END AS slug
 FROM connection c JOIN role r ON r.member_id = c.member_id AND r.archived_at IS NULL
-WHERE c.revoked_at IS NULL AND (
-  EXISTS (SELECT 1 FROM connection_role cr WHERE cr.client_id = c.client_id AND cr.role_id = r.id)
-  OR EXISTS (SELECT 1 FROM event e WHERE e.connection_id = c.client_id AND e.claimed_role IN (r.slug, r.id))
-);
+WHERE c.revoked_at IS NULL
+  AND EXISTS (SELECT 1 FROM connection_role cr WHERE cr.client_id = c.client_id AND cr.role_id = r.id AND cr.source = 'owner');
 INSERT OR IGNORE INTO agent (id, member_id, client_id, slug, name, rev, created_at, updated_at)
 SELECT id, member_id, client_id, slug, name, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM agent_backfill;
 INSERT INTO agent_role (agent_id, role_id)

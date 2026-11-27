@@ -64,8 +64,8 @@ Then two models of the role were tried and rejected before the final one:
 
 - **No per-agent keys.** Already considered and dropped in [0002](0002-role-checks-on-writes.md). The server can verify only the platform; the agent's name and role are checked against the owner's lists. This protects against mix-ups, which is the actual problem, and stays simple.
 - **Agents are kept by the owner only.** They say who may act as what, so they sit with connections and enforcement, outside MCP.
-- **Step 1 changes no check.** The data moves first (migration 8 creates agents from what each connection is listed for or has already written as), so an upgrade cannot lock out a working bot. The checks follow in step 2, and calls that do not name an agent keep working with a warning.
-- **Nothing to re-enter.** Viktor asked for the change to be carried out without manual work, so the migration fills agents in, named after their role; renaming them is optional.
+- **Step 1 changes no check.** The data moves first (migration 8 creates agents from the roles the owner confirmed for each connection), so an upgrade cannot lock out a working bot. The checks follow in step 2, and calls that do not name an agent keep working with a warning.
+- **Nothing to re-enter.** Viktor asked for the change to be carried out without manual work, so the migration fills agents in, named after their role; renaming them is optional. After review (#138) it uses only owner-confirmed roles: a role a connection merely claimed in a call must not become a grant, so a connection with no confirmed list gets no agent and the owner adds it by hand.
 - **Agents are not in a zip export.** They point at a connection, and connections are never exported.
 - **The interface work comes last** (step 4), because what the map and the pages show depends on agents existing.
 
