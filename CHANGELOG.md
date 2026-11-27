@@ -4,10 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-27
+
 ### Fixed
 
 - Upgrading from 0.3.1 or earlier could skip an agent without a message: migration 8 gives a second connection with the role `builder` the agent slug `builder-2`, and when that was also the slug of another role's agent, one of the two was dropped. Migration 12 adds the skipped agents under a free slug (`builder-2-1a2b3c`). It leaves a workspace alone once the owner has added, changed or removed any agent, and a connection whose role list was confirmed after the upgrade, because a missing agent there may be intended. Role checks were never affected. (#154)
 - A misspelled tool argument is no longer dropped in silence. Every tool used to accept arguments it does not have and answer as if they were not there, so `search` with `statuses` instead of `status` returned tasks in every status. A write with an unknown argument is now refused before anything changes (`invalid`, with the argument, the likely intended name and the tool's arguments). A read is answered without it and carries an `unknown_arguments` warning. **A bot that passes a stray argument on a write will now get an error** instead of a quiet success. (#157)
+
+### Upgrade
+
+- Upgrading from 0.4.0 applies one additive migration (12) automatically, after a pre-migration backup. It adds agents only where migration 8 skipped one; on a workspace where the owner has already changed agents it does nothing.
+- **Check your bots before upgrading:** a write that passes an argument the tool does not have is now refused. A bot that sends a stray or misspelled argument (for example `role` instead of `claimed_role` on `reply_review_comment`) got a quiet success in 0.4.0 and gets an `invalid` error in 0.4.1; the error names the right argument.
+- Rollback to 0.4.0 is possible only by restoring the pre-migration backup.
 
 ## [0.4.0] - 2026-11-26
 
