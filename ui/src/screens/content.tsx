@@ -101,21 +101,229 @@ export function RolesScreen() {
   );
 }
 
+interface RoleOverview {
+  slug: string;
+  open_total: number;
+  open_task_list?: { id: string; title: string; status: string }[];
+  open_more?: number;
+  routines?: { id: string; name: string; schedule: string; status: string; last_run: string | null }[];
+  agents?: { slug: string; name: string; platform: string }[];
+  last_checkpoint: { at: string; stopped_at: string; next: string; project: string | null } | null;
+}
+interface RoutineComment {
+  id: string;
+  body: string;
+  status: string;
+  created_at: string;
+  replies?: { id: string; body: string; author: { owner: boolean; connection: string | null; role: string | null }; created_at: string }[];
+}
+
+/** One routine with the owner's comments on it and a box to add one. */
+function RoutineItem({ routine }: { routine: NonNullable<RoleOverview['routines']>[number] }) {
+  const comments = useData(() => api<{ comments: RoutineComment[] }>(`/reviews?target_type=routine&target_id=${enc(routine.id)}&status=all`), [routine.id]);
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState('');
+  const act = useAction();
+  const send = (e: Event) => {
+    e.preventDefault();
+    if (!body.trim()) return;
+    void act.run(async () => {
+      await post('/reviews', { target_type: 'routine', target_id: routine.id, field: 'item', body });
+      setBody('');
+      setOpen(false);
+      comments.reload();
+    });
+  };
+  const resolve = (c: RoutineComment) =>
+    act.run(async () => {
+      await post(`/reviews/${enc(c.id)}/status`, { status: 'resolved' });
+      comments.reload();
+    });
+  const shown = (comments.data?.comments ?? []).filter((c) => c.status !== 'resolved');
+  return (
+    <li class="routine-item">
+      <div class="version-row">
+        <div>
+          <strong>{routine.name}</strong>
+          {routine.status === 'paused' && <Badge tone="warn">paused</Badge>}
+          <div class="small muted">{routine.schedule}</div>
+        </div>
+        {!open && (
+          <Button kind="quiet" onClick={() => setOpen(true)}>
+            Comment
+          </Button>
+        )}
+      </div>
+      {act.error && <Alert>{act.error}</Alert>}
+      {shown.map((c) => (
+        <div key={c.id} class="routine-comment">
+          <div class="small muted">
+            You · <Time at={c.created_at} /> · {c.status}
+          </div>
+          <Markdown text={c.body} />
+          {(c.replies ?? []).map((r) => (
+            <div key={r.id} class="routine-reply">
+              <div class="small muted">
+                {r.author.owner ? 'You' : `${r.author.connection ?? 'agent'}${r.author.role ? ` as @${r.author.role}` : ''}`} · <Time at={r.created_at} />
+              </div>
+              <Markdown text={r.body} />
+            </div>
+          ))}
+          <Button kind="quiet" onClick={() => resolve(c)} busy={act.busy}>
+            Resolve
+          </Button>
+        </div>
+      ))}
+      {open && (
+        <form onSubmit={send}>
+          <Field label={`Comment on "${routine.name}"`} hint="The role sees it the next time it starts, and can answer.">
+            <textarea value={body} onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)} rows={3} required />
+          </Field>
+          <div class="row">
+            <Button kind="primary" type="submit" busy={act.busy}>
+              Send comment
+            </Button>
+            <Button kind="quiet" type="button" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+    </li>
+  );
+}
+
 export function RoleScreen({ id }: { id: string }) {
   const isNew = id === 'new';
   const role = useData(() => (isNew ? Promise.resolve(null) : api<RoleFull>(`/entity/role/${enc(id)}`)), [id]);
   const choices = useData(() => api<{ roles: { slug: string; name: string }[] }>('/choices'));
+  // Tasks, routines, agents and the last checkpoint of the role come from the same view the Map uses.
+  const map = useData(() => (isNew ? Promise.resolve(null) : api<{ roles: RoleOverview[] }>('/map')), [id]);
+  // A role that was just created stays in the form, so its links and reporting line can be set at once.
+  const [editing, setEditing] = useState(isNew || new URLSearchParams(location.search).has('edit'));
   const r = role.data;
+  const o = r ? map.data?.roles.find((x) => x.slug === r.slug) : undefined;
   return (
-    <Page title={isNew ? 'New role' : (r?.name ?? 'Role')} back="/roles" actions={r ? <><a href={`/read/role/${enc(r.id)}`}>Read</a><a href={histHref('role', r.id)}>History</a></> : undefined}>
+    <Page
+      title={isNew ? 'New role' : (r?.name ?? 'Role')}
+      back="/roles"
+      actions={
+        r ? (
+          <>
+            <a href={`/read/role/${enc(r.id)}`}>Read</a>
+            <a href={histHref('role', r.id)}>History</a>
+            {!editing && <Button onClick={() => setEditing(true)}>Edit</Button>}
+          </>
+        ) : undefined
+      }
+    >
       <Loading error={role.error} loading={role.loading}>
-        {(isNew || r) && (
+        {r && !editing && (
+          <div class="role-view">
+            {r.area && <p class="muted">{r.area}</p>}
+            <p class="small">
+              {(o?.agents ?? []).length > 0 ? (
+                <>
+                  Taken by{' '}
+                  {o!.agents!.map((a, i) => (
+                    <span key={a.slug}>
+                      {i > 0 && ', '}
+                      <strong>{a.name}</strong> <span class="muted">on {a.platform}</span>
+                    </span>
+                  ))}
+                </>
+              ) : (
+                <span class="muted">
+                  No agent takes this role yet. <a href="/connections">Add one under its platform</a>
+                </span>
+              )}
+              {r.parent && (
+                <>
+                  {' · reports to '}
+                  <a href={`/roles/${enc(r.parent.slug)}`}>{r.parent.name}</a>
+                </>
+              )}
+            </p>
+
+            <div class="section-head">
+              <h2>Instruction · version {r.instruction_version}</h2>
+              <a href={`/read/role/${enc(r.id)}`}>Comment on a passage</a>
+            </div>
+            <Markdown text={r.instruction} />
+
+            <div class="section-head">
+              <h2>Open tasks{o ? ` · ${o.open_total}` : ''}</h2>
+              <a href={`/tasks?role=${enc(r.slug)}`}>All tasks of this role</a>
+            </div>
+            {(o?.open_task_list ?? []).length === 0 ? (
+              <Empty>No open tasks.</Empty>
+            ) : (
+              <ul class="list">
+                {o!.open_task_list!.map((t) => (
+                  <li key={t.id}>
+                    <a href={`/tasks/${enc(t.id)}`}>
+                      <strong>{t.title}</strong>
+                      <span class="muted small">{label(t.status)}</span>
+                    </a>
+                  </li>
+                ))}
+                {(o!.open_more ?? 0) > 0 && <li class="muted small">{o!.open_more} more open</li>}
+              </ul>
+            )}
+
+            <div class="section-head">
+              <h2>Routines</h2>
+            </div>
+            {(o?.routines ?? []).length === 0 ? (
+              <Empty>No routines.</Empty>
+            ) : (
+              <ul class="plain">
+                {o!.routines!.map((rt) => (
+                  <RoutineItem key={rt.id} routine={rt} />
+                ))}
+              </ul>
+            )}
+
+            {o?.last_checkpoint && (
+              <>
+                <div class="section-head">
+                  <h2>Last checkpoint</h2>
+                </div>
+                <div class="checkpoint">
+                  <span class="small muted">
+                    <Time at={o.last_checkpoint.at} />
+                    {o.last_checkpoint.project ? ` · ${o.last_checkpoint.project}` : ''}
+                  </span>
+                  {o.last_checkpoint.stopped_at && <p class="small">Stopped at: {o.last_checkpoint.stopped_at}</p>}
+                  {o.last_checkpoint.next && <p class="small">Next: {o.last_checkpoint.next}</p>}
+                </div>
+              </>
+            )}
+
+            {r.setup_notes && (
+              <>
+                <div class="section-head">
+                  <h2>Setup notes</h2>
+                </div>
+                <Markdown text={r.setup_notes} />
+              </>
+            )}
+          </div>
+        )}
+        {(isNew || (r && editing)) && (
           <RoleForm
             key={r?.rev ?? 'new'}
             role={r ?? undefined}
             others={(choices.data?.roles ?? []).filter((x) => x.slug !== r?.slug)}
-            onSaved={(saved) => (isNew ? navigate(`/roles/${enc(saved.id)}`, true) : role.reload())}
+            onSaved={(saved) => (isNew ? navigate(`/roles/${enc(saved.id)}?edit=1`, true) : role.reload())}
           />
+        )}
+        {r && editing && (
+          <div class="row">
+            <Button kind="quiet" onClick={() => setEditing(false)}>
+              Done editing
+            </Button>
+          </div>
         )}
         {r && (
           <div class="row">

@@ -875,6 +875,23 @@ fieldset .row select {
   padding: 12px 14px;
   margin: 10px 0;
 }
+.routine-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 8px 0;
+}
+.routine-comment {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.routine-reply {
+  border-left: 3px solid var(--border);
+  margin: 6px 0;
+  padding-left: 10px;
+}
 .change-events {
   list-style: none;
   padding: 0;
