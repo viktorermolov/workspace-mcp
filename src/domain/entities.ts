@@ -915,6 +915,7 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM task_comment WHERE task_id = ?', id);
         run(db, 'DELETE FROM task WHERE id = ?', id);
       } else if (type === 'routine') {
+        purgeReviewData(db, 'routine', id);
         run(db, 'DELETE FROM routine WHERE id = ?', id);
       } else if (type === 'document') {
         purgeReviewData(db, 'document', id);
@@ -950,7 +951,10 @@ export function purge(db: DB, actor: Actor, type: ArchivableType, ref: string) {
         run(db, 'DELETE FROM role_link WHERE from_role_id = ? OR to_role_id = ?', id, id);
         run(db, 'DELETE FROM checkpoint WHERE role_id = ?', id);
         run(db, 'DELETE FROM webhook WHERE role_id = ?', id);
-        for (const rtn of all<{ id: string }>(db, 'SELECT id FROM routine WHERE role_id = ?', id)) unindexEntity(db, 'routine', rtn.id);
+        for (const rtn of all<{ id: string }>(db, 'SELECT id FROM routine WHERE role_id = ?', id)) {
+          purgeReviewData(db, 'routine', rtn.id);
+          unindexEntity(db, 'routine', rtn.id);
+        }
         run(db, 'DELETE FROM routine WHERE role_id = ?', id);
         run(db, 'UPDATE github_issue SET role_id = NULL WHERE role_id = ?', id);
         run(db, 'UPDATE github_repo SET default_role_id = NULL WHERE default_role_id = ?', id);

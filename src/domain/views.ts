@@ -94,8 +94,10 @@ export function getEntity(db: DB, memberId: string, type: EntityType, id?: strin
     }
     case 'issue':
       return issueView(db, memberId, need(id));
-    case 'routine':
-      return routineView(db, requireRoutine(db, memberId, need(id)));
+    case 'routine': {
+      const routine = routineView(db, requireRoutine(db, memberId, need(id)));
+      return { ...routine, ...openReviewComments(db, memberId, 'routine', routine.id) };
+    }
     default:
       throw invalid(`unknown type ${type as string}`);
   }
@@ -384,6 +386,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   let roleTasks: unknown[] | undefined;
   let checkpoint: unknown;
   let newerCheckpoint: unknown;
+  let ownerTaskComments: unknown[] = [];
   if (roleRef) {
     const r = findRole(db, memberId, roleRef, false);
     if (!r) {
@@ -406,6 +409,15 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
        ORDER BY ${me ? 'agent_id IS NULL,' : ''} CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC LIMIT 30`,
       ...(me ? [r.id, me] : [r.id]),
     ).map((t) => taskSummary(db, t));
+    // Tasks of the role where the last word is the owner's: a comment nobody has answered yet.
+    ownerTaskComments = all<{ task_id: string; title: string; body: string; created_at: string }>(
+      db,
+      `SELECT t.id AS task_id, t.title, c.body, c.created_at FROM task t JOIN task_comment c ON c.task_id = t.id
+       WHERE t.role_id = ? AND t.archived_at IS NULL AND t.status NOT IN ('done','cancelled') AND c.actor_kind = 'owner'
+         AND c.rowid = (SELECT max(x.rowid) FROM task_comment x WHERE x.task_id = t.id)
+       ORDER BY c.rowid LIMIT 10`,
+      r.id,
+    ).map((c) => ({ task_id: c.task_id, title: c.title, comment: preview(c.body, LIMITS.preview), at: c.created_at }));
     // The agent's own last checkpoint comes first; if another agent of the role wrote a newer one, it is pointed to.
     const latest = lastCheckpoint(db, memberId, r.id);
     const own = self ? lastCheckpoint(db, memberId, r.id, undefined, self.slug) : undefined;
@@ -499,6 +511,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
         ? {
             role: { id: role.id, slug: role.slug, name: role.name, area: role.area, parent: role.parent, links: role.links.slice(0, 100), ...(role.links.length > 100 ? { more_links: role.links.length - 100 } : {}), setup_notes: preview(role.setup_notes, long), rev: role.rev },
             open_tasks: roleTasks,
+            ...(ownerTaskComments.length ? { owner_comments_waiting_on_tasks: ownerTaskComments } : {}),
             last_checkpoint: checkpoint
               ? { ...(checkpoint as Record<string, unknown>), done: cpPart((checkpoint as Record<string, unknown>).done, long), stopped_at: cpPart((checkpoint as Record<string, unknown>).stopped_at, long), next: cpPart((checkpoint as Record<string, unknown>).next, long) }
               : null,

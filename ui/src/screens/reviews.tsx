@@ -36,7 +36,7 @@ export interface ReviewReply {
 
 export interface ReviewComment {
   id: string;
-  target_type: 'rules' | 'role' | 'project' | 'document';
+  target_type: 'rules' | 'role' | 'project' | 'document' | 'routine';
   target_id: string;
   field: string;
   body: string;
@@ -65,6 +65,8 @@ function who(a: ReviewAuthor) {
 }
 
 export function readHref(type: ReviewComment['target_type'], id: string, version?: number | null): string {
+  // A routine has no page of its own yet; it is shown on its role's card on the map.
+  if (type === 'routine') return '/';
   const base = type === 'rules' ? (id ? `/read/rules/${enc(id)}` : '/read/rules') : `/read/${type}/${enc(id)}`;
   return version ? `${base}?v=${version}` : base;
 }
