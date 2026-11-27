@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)
+- Decision record 0006 also records how the decision was reached: what the review found, which proposals were withdrawn and why, and what a reviewer should check. (#111)
 
 ## [0.3.1] - 2026-11-26
 
