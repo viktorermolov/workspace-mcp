@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { actorRoutesTasks, agentMayTake, assertCanEdit, assertTaskHandler, taskHandlerConflict, withOwnerRole } from './access.ts';
+import { actorRoutesTasks, agentMayTake, assertCanEdit, assertTaskHandler, roleCandidateAgents, taskHandlerConflict, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -150,7 +150,11 @@ export interface SaveTaskInput {
   status?: TaskStatus;
   role?: string | null;
   project?: string | null;
-  /** Agent slug or id the task is addressed to, or null for any agent with the role. */
+  /**
+   * Agent slug or id the task is addressed to, or "*" for any agent with the role. Omitted, empty or
+   * null: the server picks the role's only agent, refuses a role with several, and leaves a role with
+   * none unaddressed (#181).
+   */
   for_agent?: string | null;
   parent_id?: string | null;
   depends_on?: string[];
@@ -192,12 +196,16 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     const projectId = input.project === undefined ? undefined : input.project === null ? null : requireProject(db, actor.memberId, input.project).id;
     if (input.parent_id) requireTask(db, actor.memberId, input.parent_id);
     for (const dep of input.depends_on ?? []) requireTask(db, actor.memberId, dep);
-    const agentId = input.for_agent === undefined ? undefined : input.for_agent === null || input.for_agent === '' ? null : requireTaskAgent(db, actor.memberId, input.for_agent);
+    const anyAgent = input.for_agent?.trim() === ANY_AGENT;
+    const noAgentNamed = input.for_agent === null || input.for_agent?.trim() === '';
+    let agentId = input.for_agent === undefined ? undefined : noAgentNamed || anyAgent ? null : requireTaskAgent(db, actor.memberId, input.for_agent!.trim());
 
     if (!input.id) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_task', () => {
         if (!input.title?.trim()) throw invalid('title is required to create a task');
+        if (anyAgent) assertAnyAgentHasRole(roleId ?? null);
         if (agentId) assertAgentFitsRole(db, agentId, roleId ?? null);
+        else if (!anyAgent) agentId = soleCandidate(db, roleId ?? null, 'created');
         const status = input.status ?? 'open';
         if (status === 'blocked' && !input.blocking_reason) throw invalid('blocking_reason is required when status is blocked');
         const id = newId('task');
@@ -259,6 +267,14 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
       !(routingOnly && actorRoutesTasks(db, actor))
     ) {
       assertTaskHandler(db, actor, t);
+    }
+    // After the permission checks (#180): a change of role or address must leave the task addressed
+    // when its role has several agents (#181). Other edits of an existing unaddressed task are not re-checked.
+    {
+      const nextRole = roleId === undefined ? t.role_id : roleId;
+      if (anyAgent) assertAnyAgentHasRole(nextRole);
+      else if (agentId === null && (roleChanging || t.agent_id !== null)) agentId = soleCandidate(db, nextRole, 'changed');
+      else if (agentId === undefined && roleChanging && t.agent_id === null) agentId = soleCandidate(db, nextRole, 'changed');
     }
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const sets: string[] = [];
@@ -338,6 +354,31 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     if (changes.status && FINISHED.includes(u.status) && !FINISHED.includes(t.status)) emitDependentsUnblocked(db, actor, u.id);
     return taskView(db, u);
   });
+}
+
+/** The one explicit value for "any agent with the task's role" (#181). */
+export const ANY_AGENT = '*';
+
+function assertAnyAgentHasRole(roleId: string | null): void {
+  if (!roleId) throw invalid('for_agent "*" means any agent with the task\'s role, and this task has no role: pass role as well, or name an agent');
+}
+
+/**
+ * The address for a task whose caller named no agent: the role's only agent, or none when the role
+ * has no agents. A role with several agents is refused, so such a task is never left unaddressed in silence.
+ */
+function soleCandidate(db: DB, roleId: string | null, verb: 'created' | 'changed'): string | null {
+  if (!roleId) return null;
+  const candidates = roleCandidateAgents(db, roleId);
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0]!.id;
+  const role = slugOf(db, 'role', roleId);
+  const slugs = candidates.map((c) => c.slug);
+  throw new DomainError(
+    'invalid',
+    `role "${role}" has more than one agent (${slugs.join(', ')}); pass for_agent with one of these slugs, or for_agent "*" for any of them. Nothing was ${verb}.`,
+    { role, candidates: slugs },
+  );
 }
 
 function requireTaskAgent(db: DB, memberId: string, ref: string): string {
