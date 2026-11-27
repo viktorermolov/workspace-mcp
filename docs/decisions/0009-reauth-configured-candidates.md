@@ -32,7 +32,21 @@ A duplicate that is configured in any way (agents, roles, or any journal entry b
 
 The consent screen's banner, shown before Approve, says that the empty duplicate will be archived.
 
-This decision does not itself merge an empty duplicate that already exists while the original is still in use. That repair, if it is done, is a later migration and may wait on whether both of that workspace's clients are in use.
+This decision does not itself merge an empty duplicate that already exists while the original is still in use. That repair is migration 15 (`repair-empty-active-duplicates`).
+
+### Migration 15
+
+Migration 14 leaves an empty same-type duplicate in place when the original was used after that duplicate was approved (`original_still_active`). Migration 15 archives that leftover when every condition holds:
+
+- the same owner
+- the client matches by `sameClientType`
+- exactly one pair (one configured original and one empty duplicate)
+- the duplicate has 0 agents, 0 roles, and no journal besides its own `connection.approved`
+- the duplicate was created later than the original, and the original was used after the duplicate was approved
+
+The original platform and its tokens are not changed: `current_client_id` and `approved_at` stay as they are. The duplicate's unused consent and grants are revoked so the archived client cannot obtain a token. An empty consent row is not configuration and does not block the archive. The archive is journaled on a `connection_transfer` row (`archived_client_id`, kind `migration`). The owner can roll it back from Platforms («Undo last client transfer»). A second run repairs nothing more.
+
+A lone platform — including one that has an agent, and one that is empty — is not a duplicate and is left as it is. A platform that is configured in any way, or whose journal has anything besides approve, is never archived automatically. No `connection_client` binding table is added: only the original's accepted client stays in use.
 
 ## Why
 
