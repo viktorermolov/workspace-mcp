@@ -6,7 +6,7 @@ import { listDiag, recordDiag } from '../auth/diagnostics.ts';
 import { issueCode } from '../auth/setup.ts';
 import type { Config } from '../config.ts';
 import { all, get, now, run, type DB } from '../db/db.ts';
-import { setConnectionRoles, setEnforcement, setRoleEditAny, setRoleRoutesTasks, workspaceAccessSettings } from '../domain/access.ts';
+import { setConnectionRoles, setEnforcement, setRoleEditAny, setRoleRoutesTasks, setSoleAgent, workspaceAccessSettings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
@@ -149,6 +149,12 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     if (typeof b.routes_tasks !== 'boolean') throw new DomainError('invalid', 'routes_tasks must be a boolean');
     setRoleRoutesTasks(db, actor(c), c.req.param('id'), b.routes_tasks);
     return c.json({ ok: true, ...workspaceAccessSettings(db, actor(c).memberId) });
+  });
+  api.post('/connections/:id/sole-agent', async (c) => {
+    const b = await body<{ sole_agent?: boolean }>(c);
+    if (typeof b.sole_agent !== 'boolean') throw new DomainError('invalid', 'sole_agent must be a boolean');
+    setSoleAgent(db, actor(c), c.req.param('id'), b.sole_agent);
+    return c.json({ ok: true });
   });
   api.post('/connections/:id/revoke', (c) => c.json({ revoked: revokeConnection(db, actor(c), c.req.param('id')) }));
   api.post('/connections/:id/rename', async (c) => {

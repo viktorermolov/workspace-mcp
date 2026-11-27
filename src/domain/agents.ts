@@ -121,6 +121,19 @@ function assertOnPlatform(db: DB, platform: { client_id: string; name: string },
   }
 }
 
+/**
+ * A platform marked as running one agent stops being one whenever its set of agents changes: an agent
+ * joins, leaves or is removed. From then on a call that names nobody is nobody's again, so nothing is
+ * written under the wrong agent, and the owner marks the platform again if it is still true.
+ */
+function endSoleAgent(db: DB, actor: Actor, clientId: string | null): void {
+  if (!clientId) return;
+  const c = get<{ name: string; sole_agent: number }>(db, 'SELECT name, sole_agent FROM connection WHERE client_id = ?', clientId);
+  if (c?.sole_agent !== 1) return;
+  run(db, 'UPDATE connection SET sole_agent = 0 WHERE client_id = ?', clientId);
+  recordEvent(db, actor, 'connection', clientId, 'connection.sole_agent_updated', `The agents of "${c.name}" changed: calls that name no agent no longer count as its one agent`, { sole_agent: false });
+}
+
 function setRoles(db: DB, agentId: string, roles: { id: string }[]): void {
   run(db, 'DELETE FROM agent_role WHERE agent_id = ?', agentId);
   for (const r of roles) run(db, 'INSERT INTO agent_role (agent_id, role_id) VALUES (?,?)', agentId, r.id);
@@ -168,6 +181,7 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       if (slugHasHistory(db, actor.memberId, slug)) throw new DomainError('conflict', `the slug "${slug}" belonged to a removed agent and its history is recorded under it; choose another slug`);
       const roles = resolveRoles(db, actor.memberId, input.roles ?? []);
       assertOnPlatform(db, platform, roles);
+      endSoleAgent(db, actor, platform.client_id);
       const id = newId('agt');
       const at = now();
       run(db, 'INSERT INTO agent (id, member_id, client_id, slug, name, rev, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?)', id, actor.memberId, platform.client_id, slug, input.name.trim(), at, at);
@@ -196,6 +210,8 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       sets.push('client_id = ?');
       vals.push(platform!.client_id);
       changed.push('platform');
+      endSoleAgent(db, actor, platform!.client_id);
+      endSoleAgent(db, actor, a.client_id);
       // On a new platform every role must be confirmed there, also the ones the agent keeps.
       if (input.roles === undefined) assertOnPlatform(db, platform!, held.filter((r) => !r.archived_at));
     }
@@ -229,6 +245,7 @@ export function deleteAgent(db: DB, actor: Actor, ref: string) {
   ownerOnly(actor);
   return tx(db, () => {
     const a = requireAgent(db, actor.memberId, ref);
+    endSoleAgent(db, actor, a.client_id);
     run(db, 'DELETE FROM agent WHERE id = ?', a.id);
     recordEvent(db, actor, 'agent', a.id, 'agent.deleted', `Agent "${a.name}" removed`, { slug: a.slug });
     return { id: a.id, deleted: true };

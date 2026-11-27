@@ -274,6 +274,74 @@ describe('start by agent name alone', () => {
   });
 });
 
+describe('a platform with one agent', () => {
+  let env: TestEnv;
+  let owner: Browser;
+  let pi: Awaited<ReturnType<typeof connectAgent>>['client'];
+  let piId: string;
+  const mark = (on: boolean) => owner.fetch(`/api/owner/connections/${encodeURIComponent(piId)}/sole-agent`, { json: { sole_agent: on } });
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    pi = (await connectAgent(env, owner, 'Home server')).client;
+    await call(pi, 'save_role', { name: 'Admin', slug: 'admin', instruction: 'Keep the server running.' });
+    await call(pi, 'save_role', { name: 'Developer', slug: 'developer', instruction: 'Write code.' });
+    piId = (await owner.json<{ connections: { client_id: string }[] }>('/api/owner/connections')).connections[0]!.client_id;
+    await confirmRoles(owner, piId, ['admin', 'developer']);
+  });
+  after(async () => {
+    await pi.close();
+    await env.close();
+  });
+
+  type Start = { instructions: { role?: string; agent?: { slug: string } }; data: { open_tasks?: { title: string }[] }; warnings?: { code: string }[] };
+  const lastAgent = () => get<{ agent: string | null }>(env.svc.db, "SELECT agent FROM event WHERE action = 'task.created' ORDER BY id DESC LIMIT 1")!.agent;
+
+  it('can be marked only when the platform has exactly one agent', async () => {
+    const none = await mark(true);
+    assert.equal(none.status, 400);
+    assert.match(((await none.json()) as { message: string }).message, /has no agents/);
+    await owner.json('/api/owner/agents', { json: { name: 'Hermes', platform: piId, roles: ['admin'] } });
+    assert.equal((await mark(true)).status, 200);
+    const c = (await owner.json<{ connections: { sole_agent: number }[] }>('/api/owner/connections')).connections[0]!;
+    assert.equal(c.sole_agent, 1);
+  });
+
+  it('a call that names no agent counts as that agent: start returns its work, writes are recorded under it and use its roles', async () => {
+    await call(pi, 'save_task', { title: 'Rotate logs', role: 'admin', claimed_role: 'admin' });
+    assert.equal(lastAgent(), 'hermes');
+    const s = await call<Start>(pi, 'start');
+    assert.equal(s.instructions.agent!.slug, 'hermes');
+    assert.equal(s.instructions.role, 'admin');
+    assert.deepEqual(s.data.open_tasks!.map((t) => t.title), ['Rotate logs']);
+    assert.ok(!(s.warnings ?? []).some((w) => w.code === 'agent_missing'));
+    // The agent's roles apply, not the platform's whole list: developer is confirmed for the platform and not given to Hermes.
+    const other = await call<{ warnings?: { code: string }[] }>(pi, 'save_task', { title: 'Not mine', role: 'developer', claimed_role: 'developer' });
+    assert.ok((other.warnings ?? []).some((w) => w.code === 'agent_role_not_allowed'));
+  });
+
+  it('a second agent on the platform switches it off, so nothing is written under the wrong agent', async () => {
+    await owner.json('/api/owner/agents', { json: { name: 'Second', platform: piId, roles: ['developer'] } });
+    const c = (await owner.json<{ connections: { sole_agent: number }[] }>('/api/owner/connections')).connections[0]!;
+    assert.equal(c.sole_agent, 0);
+    const t = await call<{ warnings?: { code: string }[] }>(pi, 'save_task', { title: 'Whose?', role: 'admin', claimed_role: 'admin' });
+    assert.equal(lastAgent(), null);
+    assert.ok((t.warnings ?? []).some((w) => w.code === 'agent_missing'));
+    const two = await mark(true);
+    assert.equal(two.status, 400);
+    assert.match(((await two.json()) as { message: string }).message, /more than one agent/);
+    // Removing the second agent does not bring the mark back: the owner sets it again.
+    const second = (await owner.json<{ agents: AgentView[] }>('/api/owner/agents')).agents.find((a) => a.slug === 'second')!;
+    await owner.json(`/api/owner/agents/${second.id}`, { method: 'DELETE' });
+    await call(pi, 'save_task', { title: 'Still nobody', role: 'admin', claimed_role: 'admin' });
+    assert.equal(lastAgent(), null);
+  });
+
+  it('only the owner can set it', async () => {
+    assert.ok(!JSON.stringify((await pi.listTools()).tools).includes('sole_agent'));
+  });
+});
+
 describe('agents migration', () => {
   it('migration 12 adds an agent migration 8 skipped over a slug collision, and only that', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
