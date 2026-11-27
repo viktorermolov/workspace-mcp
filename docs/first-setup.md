@@ -32,7 +32,7 @@ Add it as a custom connector in the platform, then follow the platform's sign-in
 - [Claude](platforms/claude.md)
 - [ChatGPT](platforms/chatgpt.md)
 - [Grok](platforms/grok.md)
-- Any other MCP client with OAuth: give it the address above; it discovers everything else.
+- [Any other MCP client with OAuth](platforms/other.md): give it the address above; it discovers everything else.
 
 When the platform opens the consent screen of your workspace:
 
@@ -40,7 +40,7 @@ When the platform opens the consent screen of your workspace:
 2. Check the platform name and the address it will return to.
 3. Give the connection a name you will recognise (for example "Claude on my phone") and choose **Approve**.
 
-The connection then appears on **Connections** with its last activity. **Revoke** cuts it off at once. If a connection fails, open **Diagnostics** on the same screen: every step of each attempt is recorded there without secrets.
+The connection then appears on **Connections** with its last activity. There you confirm the roles the platform may act as and, when several named bots share one platform, add each of them as an agent with its own roles. **Revoke** cuts it off at once. If a connection fails, open **Diagnostics** on the same screen: every step of each attempt is recorded there without secrets.
 
 ## 3. Fill the workspace
 

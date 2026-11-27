@@ -84,7 +84,7 @@ Each release is a GitHub Release with notes and a signed multi-arch image at `gh
 | Deploying, publishing over https, updating and rolling back | [docs/deployment.md](docs/deployment.md) |
 | Step-by-step deployment on a Raspberry Pi with Cloudflare Tunnel (for an agent) | [docs/runbook-raspberry-pi.md](docs/runbook-raspberry-pi.md) |
 | First-time setup for the owner | [docs/first-setup.md](docs/first-setup.md) |
-| Connecting Claude, ChatGPT and Grok | [Claude](docs/platforms/claude.md), [ChatGPT](docs/platforms/chatgpt.md), [Grok](docs/platforms/grok.md) |
+| Connecting Claude, ChatGPT, Grok and others | [Claude](docs/platforms/claude.md), [ChatGPT](docs/platforms/chatgpt.md), [Grok](docs/platforms/grok.md), [any other platform](docs/platforms/other.md) |
 | An instruction to paste into any platform | [docs/agent-instruction.md](docs/agent-instruction.md) |
 | MCP tools | [docs/tools.md](docs/tools.md) |
 | Configuration and limits | [docs/configuration.md](docs/configuration.md) |

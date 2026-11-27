@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- The instruction to paste into a platform and the Grok page tell a bot to pass `agent`, and say how to add agents under a platform. A new page covers connecting any other MCP client. (#145)
 - The **Map** lists each role once. The grid of role cards under the tree is gone; a tap on a role in the tree opens its page, which now also has a **Works with** section (declared links and recorded hand-offs in both directions, and who reports to the role). With seven roles the Map on a phone is under three screens instead of seven. "1 open task has no role" is now grammatical. (#134)
 - Project and task pages read first, like documents and roles. A project shows its focus, where work stopped, repositories and the description rendered as Markdown; a task shows its status, role, addressee, project, due date, what it waits for, and the description and result rendered as Markdown. The form is behind **Edit**; an item that was just created stays in the form. (#132)
 - A role page reads first. It shows the role's area, the agents that take it and their platforms, the instruction rendered as Markdown, its open tasks, its routines and its last checkpoint; the form is behind **Edit**. Each routine has a **Comment** button, so the owner can now comment on a routine in the interface, see the role's answer and resolve it. A role that was just created stays in the form. (#128)
