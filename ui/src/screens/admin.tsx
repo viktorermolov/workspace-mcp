@@ -60,6 +60,13 @@ interface WorkspaceRole {
   edit_any: boolean;
   routes_tasks: boolean;
 }
+interface PendingTransfer {
+  id: number;
+  from_client_id: string;
+  to_client_id: string;
+  kind: 'reauth' | 'migration';
+  created_at: string;
+}
 interface Connection {
   client_id: string;
   name: string;
@@ -68,8 +75,10 @@ interface Connection {
   approved_at: string | null;
   last_activity_at: string | null;
   revoked_at: string | null;
+  merged_into_client_id?: string | null;
   client: Client | null;
   active: boolean;
+  pending_transfer?: PendingTransfer | null;
   roles?: AllowedRole[];
   roles_confirmed_at?: string | null;
   roles_suggested_at?: string | null;
@@ -116,6 +125,13 @@ export function ConnectionsScreen() {
     if (!confirm(`Revoke "${c.name}"? Its tokens stop working at once. The platform has to connect again to get access back.`)) return;
     void act.run(async () => {
       await post(`/connections/${enc(c.client_id)}/revoke`);
+      await list.reload();
+    });
+  };
+  const rollbackTransfer = (c: Connection) => {
+    if (!confirm(`Undo the last client transfer on "${c.name}"? Access and refresh tokens issued before the undo stop working for both clients. They have to connect again.`)) return;
+    void act.run(async () => {
+      await post(`/connections/${enc(c.client_id)}/rollback-transfer`);
       await list.reload();
     });
   };
@@ -194,6 +210,11 @@ export function ConnectionsScreen() {
                   <Button kind="quiet" onClick={() => setDiagFor(diagFor === c.client_id ? null : c.client_id)}>
                     Diagnostics
                   </Button>
+                  {c.pending_transfer && (
+                    <Button kind="quiet" onClick={() => rollbackTransfer(c)} busy={act.busy}>
+                      Undo last client transfer
+                    </Button>
+                  )}
                   <Button kind="danger" onClick={() => revoke(c)} busy={act.busy}>
                     Revoke
                   </Button>
@@ -267,12 +288,18 @@ export function ConnectionsScreen() {
                     <div>
                       <strong>{c.name}</strong>
                       <div class="small muted">
-                        revoked <Time at={c.revoked_at} />
+                        {c.merged_into_client_id ? (
+                          <>merged into another platform{c.revoked_at ? <> · <Time at={c.revoked_at} /></> : null}</>
+                        ) : (
+                          <>revoked <Time at={c.revoked_at} /></>
+                        )}
                       </div>
                     </div>
-                    <Button kind="quiet" onClick={() => removeClient(c.client_id)}>
-                      Delete
-                    </Button>
+                    {!c.merged_into_client_id && (
+                      <Button kind="quiet" onClick={() => removeClient(c.client_id)}>
+                        Delete
+                      </Button>
+                    )}
                   </div>
                 </li>
               ))}

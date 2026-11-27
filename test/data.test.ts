@@ -450,7 +450,7 @@ describe('data safety', () => {
     const db = openDatabase(path.join(dir, 'workspace.sqlite'));
     db.exec('CREATE TABLE IF NOT EXISTS app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
     for (const m of migrations.filter((mig) => mig.id <= 2)) {
-      db.exec(m.sql);
+      db.exec(m.sql!);
       run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, new Date().toISOString());
     }
     const at = '2026-01-01T00:00:00.000Z';
@@ -470,8 +470,8 @@ describe('data safety', () => {
     );
 
     const applied = runAppMigrations(db);
-    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4, role_parent is 5, review-comments is 6, github-issue-roles is 7).
-    assert.equal(applied, 11);
+    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4 … repair-reauth-duplicate-connections is 14).
+    assert.equal(applied, 12);
     const row = get<{ id: string; slug: string; title: string; is_default: number; project_id: string | null; member_id: string }>(
       db,
       'SELECT id, slug, title, is_default, project_id, member_id FROM rules WHERE member_id = ?',

@@ -114,10 +114,14 @@ export function pendingAppMigrations(db: DB): typeof migrations {
 export function runAppMigrations(db: DB): number {
   const pending = pendingAppMigrations(db);
   for (const m of pending) {
+    let notes: { msg: string; fields: Record<string, unknown> }[] = [];
     tx(db, () => {
-      db.exec(m.sql);
+      if (m.sql) db.exec(m.sql);
+      if (m.run) notes = m.run(db) ?? [];
       run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, new Date().toISOString());
     });
+    // Log only after the transaction commits. Never include tokens or secrets.
+    for (const n of notes) log.info(n.msg, n.fields);
     log.info('migration applied', { id: m.id, name: m.name });
   }
   return pending.length;
