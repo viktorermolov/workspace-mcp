@@ -10,7 +10,7 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 - Open source under the [GNU Affero General Public License v3.0](LICENSE). No paid features, no telemetry, no external services or accounts.
 - One Docker container with SQLite. Runs on a Raspberry Pi 4.
 
-> **Status:** 0.6.0. While the version is 0.x, a minor version may change things without keeping compatibility; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
+> **Status:** 0.6.0. Versions follow Semantic Versioning: a patch is a fix, a minor adds functionality, a major is a breaking change; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Platforms, agents and roles
 
@@ -80,10 +80,11 @@ To have an agent deploy it on a Raspberry Pi for you, give it the [Raspberry Pi 
 
 ## Versions and compatibility
 
-Versions follow [Semantic Versioning](https://semver.org/). Until 1.0:
+Versions follow [Semantic Versioning](https://semver.org/) and [0008](docs/decisions/0008-semver.md):
 
-- **A minor version (0.1 → 0.2) may break compatibility**: configuration, MCP tools and their results, the owner API, the export format or the database can change in ways that need you to do something. The [changelog](CHANGELOG.md) says what and how; read it before such an update.
-- **A patch version (0.1.0 → 0.1.1) stays compatible** with the rest of its minor version: fixes only, no changes you need to act on.
+- **A patch version (0.6.0 → 0.6.1)** is a fix without new functionality, and stays compatible with the rest of its minor version.
+- **A minor version (0.6 → 0.7)** adds functionality only, and stays compatible.
+- **A major version (0.x → 1.0)** is a breaking change: configuration, MCP tools and their results, the owner API, the export format or the database can change in ways that need you to do something. The [changelog](CHANGELOG.md) says what and how; read it before such an update.
 - **Upgrades go forward only.** Migrations run automatically at start, after a `pre-migration` backup. An older version refuses to open a database a newer one has migrated; going back means restoring that backup ([Undoing an upgrade](docs/backups.md#undoing-an-upgrade)).
 
 Each release is a GitHub Release with notes and a signed multi-arch image at `ghcr.io/viktorermolov/workspace-mcp` ([Published images](docs/deployment.md#published-images)).
