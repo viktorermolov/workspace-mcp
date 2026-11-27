@@ -397,6 +397,10 @@ export function assertCanEditEntity(db: DB, actor: Actor, type: string, id: stri
     return;
   }
   assertCanEdit(db, actor, owner, { what: type });
+  if (type === 'task') {
+    const t = get<{ id: string; agent_id: string | null; claimed_agent: string | null }>(db, 'SELECT id, agent_id, claimed_agent FROM task WHERE id = ?', id);
+    if (t) assertTaskHandler(db, actor, t);
+  }
 }
 
 /**
@@ -658,4 +662,46 @@ export function editedWhoseLabel(ownerRole: string | null | undefined, claimedRo
   if (!ownerRole) return null;
   if (claimedRole && ownerRole === claimedRole) return null;
   return `item of @${ownerRole}`;
+}
+
+/** Same wording claim_task uses when the caller is not the addressee or the claimed agent. */
+export function taskHandlerConflict(taskId: string, kind: 'addressed' | 'claimed', slug: string, actor: Actor): DomainError {
+  const who = actor.agent ? '' : ' This call named no agent: pass agent if the task is yours.';
+  if (kind === 'addressed') {
+    return new DomainError(
+      'conflict',
+      `task ${taskId} is addressed to agent "${slug}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`,
+      { for_agent: slug },
+    );
+  }
+  return new DomainError(
+    'conflict',
+    `task ${taskId} is claimed by agent "${slug}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`,
+    { claimed_agent: slug },
+  );
+}
+
+/**
+ * On a task addressed to an agent (`for_agent`) or claimed by a named agent, only that
+ * agent (or the owner) may change status, result, blocking_reason or role, reopen it,
+ * archive it, or change who it is addressed to. A coordinator may still re-address it
+ * (routing only). In both warn and enforce mode this is the same `conflict` as
+ * claim_task; the write does not proceed, and the refusal is audited.
+ */
+export function assertTaskHandler(db: DB, actor: Actor, t: { id: string; agent_id: string | null; claimed_agent: string | null }): void {
+  if (actor.kind !== 'agent') return;
+  const addressed = t.agent_id
+    ? (get<{ slug: string }>(db, 'SELECT slug FROM agent WHERE id = ?', t.agent_id)?.slug ?? null)
+    : null;
+  const claimed = t.claimed_agent ?? null;
+  const handler = addressed || claimed;
+  if (!handler) return;
+  if (actor.agent === handler) return;
+  const kind: 'addressed' | 'claimed' = addressed ? 'addressed' : 'claimed';
+  const slug = addressed || claimed!;
+  const err = taskHandlerConflict(t.id, kind, slug, actor);
+  const reason = kind === 'addressed' ? 'task_addressed' : 'task_claimed';
+  const detail = { reason, agent: actor.agent ?? null, ...(kind === 'addressed' ? { for_agent: slug } : { claimed_agent: slug }) };
+  auditRoleCheck(db, actor, 'rejected', detail, 409);
+  throw err;
 }
