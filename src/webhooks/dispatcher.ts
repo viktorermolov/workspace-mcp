@@ -36,8 +36,8 @@ export interface WebhookRow {
 type Sender = (url: string, headers: Record<string, string>, body: string) => Promise<PostResult>;
 
 /** Maps a log event to the roles it should wake, or an empty list. */
-function classify(db: DB, e: EventRecord): { roleId: string; type: WebhookEvent }[] {
-  const d = e.data as { role_id?: string | null; target_type?: string; responsible_role_id?: string | null };
+function classify(db: DB, e: EventRecord): { roleId: string; type: WebhookEvent; notice?: boolean }[] {
+  const d = e.data as { role_id?: string | null; target_type?: string; responsible_role_id?: string | null; creator?: { role_id?: string | null } };
   switch (e.action) {
     case 'review.commented': {
       if (d.target_type === 'rules') {
@@ -47,9 +47,24 @@ function classify(db: DB, e: EventRecord): { roleId: string; type: WebhookEvent 
       return d.responsible_role_id ? [{ roleId: d.responsible_role_id, type: 'review.commented' }] : [];
     }
     case 'task.assigned':
-    case 'task.commented':
     case 'task.unblocked':
       return d.role_id ? [{ roleId: d.role_id, type: e.action }] : [];
+    case 'task.commented': {
+      const out: { roleId: string; type: WebhookEvent; notice?: boolean }[] = d.role_id ? [{ roleId: d.role_id, type: 'task.commented' }] : [];
+      // A comment on a closed task also wakes the creator's role (#183). The creator is recorded only when
+      // someone else wrote the comment, so it is woken even when the writer has the same role.
+      const creatorRole = d.creator?.role_id;
+      if (creatorRole) {
+        const same = out.find((o) => o.roleId === creatorRole);
+        if (same) same.notice = true;
+        else out.push({ roleId: creatorRole, type: 'task.commented', notice: true });
+      }
+      return out;
+    }
+    case 'task.closed':
+      // The creator's notice that its task was closed (#183), sent with the existing task.updated type so
+      // subscriptions made before it keep working. It is written only when someone else closed the task.
+      return d.creator?.role_id ? [{ roleId: d.creator.role_id, type: 'task.updated', notice: true }] : [];
     case 'task.updated':
     case 'task.claimed': {
       const t = get<{ role_id: string | null }>(db, 'SELECT role_id FROM task WHERE id = ?', e.entity_id);
@@ -88,8 +103,8 @@ export class WebhookDispatcher {
     const classified = classify(db, e);
     for (const c of classified) {
     const role = get<{ slug: string }>(db, 'SELECT slug FROM role WHERE id = ?', c.roleId);
-    // Changes made by the same role do not wake it.
-    if (role && e.claimed_role && (e.claimed_role === role.slug || e.claimed_role === c.roleId)) continue;
+    // Changes made by the same role do not wake it. A notice to a task's creator already leaves out the creator's own changes.
+    if (!c.notice && role && e.claimed_role && (e.claimed_role === role.slug || e.claimed_role === c.roleId)) continue;
     const hooks = all<WebhookRow>(db, 'SELECT * FROM webhook WHERE role_id = ? AND enabled = 1', c.roleId);
     for (const h of hooks) {
       if (!(JSON.parse(h.events) as string[]).includes(c.type)) continue;
