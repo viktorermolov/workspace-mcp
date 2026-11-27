@@ -1,8 +1,9 @@
+import { Markdown } from '../markdown.ts';
 import { groupChanges } from '../changes.ts';
 import { useEffect, useState } from 'preact/hooks';
 import { api, enc, post, searchAll } from '../api.ts';
 import { navigate } from '../router.ts';
-import { Alert, ArchiveControls, Badge, Button, Card, Diff, Empty, Field, label, Loading, Page, Prose, STATUS_TONE, Time, useAction, useData, type DiffLine } from '../ui.tsx';
+import { Alert, ArchiveControls, Badge, Button, Card, Diff, Empty, Field, label, Loading, Page, STATUS_TONE, Time, useAction, useData, type DiffLine } from '../ui.tsx';
 
 type VType = 'rules' | 'role' | 'project' | 'document';
 const histHref = (type: VType, id?: string) => `/history/${type}${id ? `/${enc(id)}` : ''}`;
@@ -469,7 +470,7 @@ export function DocumentScreen({ id }: { id: string }) {
               {d.attached_to.type !== 'workspace' ? ` · ${d.attached_to.type} ${d.attached_to.slug ?? ''}` : ' · workspace'}
               {d.archived ? ' · archived' : ''}
             </p>
-            <Prose text={d.body} />
+            <Markdown text={d.body} />
             <div class="row">
               <ArchiveControls type="document" id={d.id} archived={d.archived} onDone={doc.reload} onDeleted={() => navigate('/projects')} />
             </div>
@@ -676,7 +677,7 @@ export function HistoryScreen({ type, id }: { type: VType; id?: string }) {
                       )}
                     </div>
                   </div>
-                  {view === v.number && body.data && <Prose text={body.data.body} />}
+                  {view === v.number && body.data && <Markdown text={body.data.body} />}
                 </li>
               ))}
             </ul>

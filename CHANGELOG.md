@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - A task can be addressed to one agent besides its role: `save_task` takes `for_agent` (an agent that may take the task's role, or `null` for any agent with the role), and the task form in the web interface has a "For agent" field. An agent that names itself in `start` sees the role's tasks addressed to it first, then those addressed to nobody, and not those addressed to another agent; `claim_task` by a different named agent is a `conflict`, and a claim records the agent. `start` also returns the agent's own last checkpoint, with `newer_checkpoint_by_another_agent` when another agent of the role wrote a later one. Callers that name no agent see everything, as before. Removing an agent leaves its tasks with the role. A zip export carries tasks without their addressee, because agents are not exported. Migration 10. (#116)
 - Owner comments reach the responsible agent in two more places. `start` with a role lists `owner_comments_waiting_on_tasks`: open tasks of the role where the last comment is the owner's (up to 10; an agent's `comment_task` clears it). And the owner can comment on a routine (`target_type: "routine"`, field `item`, no line range): the routine's role sees it in `start` and in `get`, answers with `reply_review_comment`, and the owner resolves it, as with comments on an instruction. The web interface has no form for routine comments yet. (#118)
 
+### Fixed
+
+- A document opened from Projects, an older version on the History screen and comments on a task page are rendered as Markdown instead of showing the Markdown source. They use the same built-in renderer as the reading pages. (#124)
+
 ### Changed
 
 - The **Changes** screen groups what happened to one item into one card (a task that was created, assigned and claimed is one card with three lines, oldest first), so the feed is about half as long. Edits to working rules and role instructions still come first, each on its own. On desktop the sidebar is split into the main screens, **Content** and **Settings**. (#120)
