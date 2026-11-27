@@ -1,6 +1,6 @@
 import { api, enc } from '../api.ts';
 import { type ArcInput, arcsFor, indentFor, isTestRole, layoutTree } from '../map-layout.ts';
-import { Badge, Card, Empty, Loading, Page, Time, useData } from '../ui.tsx';
+import { Empty, Loading, Page, Time, useData } from '../ui.tsx';
 
 interface MapRole {
   id: string;
@@ -33,15 +33,6 @@ interface MapData {
   interactions_truncated?: boolean;
   unassigned_open_tasks: number;
 }
-
-const KIND: Record<string, string> = {
-  assigned: 'gave tasks to',
-  commented: 'commented on tasks of',
-  claimed: 'claimed a task of',
-  delegates_to: 'delegates to',
-  reports_to: 'reports to',
-  parent: 'reports to',
-};
 
 // Card tree geometry, in CSS pixels. Cards stretch to the available width, so the tree never needs sideways scrolling.
 const PITCH = 64;
@@ -173,98 +164,15 @@ export function MapScreen() {
             )}
             <Graph data={data} />
             <p class="muted small legend">
-              At the top: each platform, its agents and the roles they may take. Below, each card shows a role and its open tasks, in the order of the tree. Lines on the left are the reporting line, top to bottom. Arrows on the right: solid are declared links, dashed are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
+              At the top: each platform, its agents and the roles they may take. Each card in the tree is a role with its open tasks; tap it to open the role's page with its instruction, tasks, routines and last checkpoint. Lines on the left are the reporting line, top to bottom. Arrows on the right: solid are declared links, dashed are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
               {data.roles.some((r) => isTestRole(r.name)) && ' Test roles (named [TEST] …) are dashed and listed after the team.'}
             </p>
             {data.interactions_truncated && <p class="muted small">The dashed lines only cover the most recent 2,000 recorded interactions in the last 30 days.</p>}
             {data.unassigned_open_tasks > 0 && (
               <p>
-                <a href="/tasks?role=-">{data.unassigned_open_tasks} open tasks</a> have no role.
+                <a href="/tasks?role=-">{data.unassigned_open_tasks === 1 ? '1 open task' : `${data.unassigned_open_tasks} open tasks`}</a> {data.unassigned_open_tasks === 1 ? 'has' : 'have'} no role.
               </p>
             )}
-            <div class="cards">
-              {layoutTree(data.roles).rows.map(({ role: r }) => {
-                const out = [...data.links.filter((l) => l.from === r.slug).map((l) => ({ to: l.to, kind: l.type, count: 0 })), ...data.interactions.filter((i) => i.from === r.slug).map((i) => ({ to: i.to, kind: i.kind, count: i.count }))];
-                return (
-                  <Card key={r.slug}>
-                    <div class="card-head">
-                      <a class="card-title" href={`/roles/${enc(r.slug)}`}>
-                        {r.name}
-                        {r.archived ? ' (archived)' : ''}
-                      </a>
-                      <a href={`/tasks?role=${enc(r.slug)}`}>
-                        <Badge tone={r.open_total ? 'accent' : 'neutral'}>{r.open_total} open</Badge>
-                      </a>
-                    </div>
-                    {r.area && <p class="muted">{r.area}</p>}
-                    {(r.agents ?? []).length > 0 && (
-                      <p class="small">
-                        Taken by{' '}
-                        {r.agents!.map((a, i) => (
-                          <span key={a.slug}>
-                            {i > 0 && ', '}
-                            <a href={`/agents/${enc(a.slug)}`}>
-                              <strong>{a.name}</strong>
-                            </a>{' '}
-                            <span class="muted">on {a.platform}</span>
-                          </span>
-                        ))}
-                      </p>
-                    )}
-                    {Object.keys(r.open_tasks).some((s) => s !== 'open') && (
-                      <p class="small">
-                        {Object.entries(r.open_tasks)
-                          .map(([s, n]) => `${n} ${s.replace('_', ' ')}`)
-                          .join(' · ')}
-                      </p>
-                    )}
-                    {(r.open_task_list ?? []).length > 0 && (
-                      <ul class="plain small">
-                        {r.open_task_list!.map((t) => (
-                          <li key={t.id}>
-                            <a href={`/tasks/${enc(t.id)}`}>{t.title}</a>
-                          </li>
-                        ))}
-                        {(r.open_more ?? 0) > 0 && <li class="muted">{r.open_more} more open</li>}
-                      </ul>
-                    )}
-                    {(r.routines ?? []).length > 0 && (
-                      <ul class="plain small">
-                        {r.routines!.map((rt) => (
-                          <li key={rt.id}>
-                            {rt.name} · {rt.schedule}
-                            {rt.status === 'paused' ? ' (paused)' : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {r.last_checkpoint && (
-                      <div class="checkpoint">
-                        <span class="small muted">
-                          Last checkpoint <Time at={r.last_checkpoint.at} />
-                          {r.last_checkpoint.project ? ` · ${r.last_checkpoint.project}` : ''}
-                        </span>
-                        {r.last_checkpoint.stopped_at && <p class="small">Stopped at: {r.last_checkpoint.stopped_at}</p>}
-                        {r.last_checkpoint.next && <p class="small">Next: {r.last_checkpoint.next}</p>}
-                      </div>
-                    )}
-                    {out.length > 0 && (
-                      <ul class="plain small">
-                        {out.map((o, i) => (
-                          <li key={i}>
-                            {KIND[o.kind] ?? o.kind.replace(/_/g, ' ')} <a href={`/roles/${enc(o.to)}`}>{o.to}</a>
-                            {o.count ? ` (${o.count})` : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <p class="small muted">
-                      Last recorded activity <Time at={r.last_activity_at} />
-                    </p>
-                  </Card>
-                );
-              })}
-            </div>
           </>
         )}
       </Loading>
