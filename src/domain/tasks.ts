@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { actorRoutesTasks, agentMayTake, assertCanEdit, withOwnerRole } from './access.ts';
+import { actorRoutesTasks, addWarning, agentMayTake, assertCanEdit, auditRoleCheck, getEnforcement, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -249,6 +249,23 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     const routingOnly = input.for_agent !== undefined && others.every((v) => v === undefined);
     if (!(routingOnly && actorRoutesTasks(db, actor))) assertCanEdit(db, actor, t.role_id, { what: 'task' });
     checkRev('task', t.id, t.rev, input.rev);
+    const statusChanging = input.status !== undefined && input.status !== t.status;
+    const resultChanging = input.result !== undefined && input.result !== t.result;
+    const blockingChanging = input.blocking_reason !== undefined && input.blocking_reason !== t.blocking_reason;
+    const reassignToSelf =
+      actor.kind === 'agent' &&
+      !!actor.agent &&
+      agentId !== undefined &&
+      agentId !== null &&
+      slugOf(db, 'agent', agentId) === actor.agent &&
+      actor.agent !== slugOf(db, 'agent', t.agent_id) &&
+      actor.agent !== (t.claimed_agent ?? null);
+    if (
+      (statusChanging || resultChanging || blockingChanging || reassignToSelf) &&
+      !(routingOnly && actorRoutesTasks(db, actor))
+    ) {
+      assertTaskHandler(db, actor, t);
+    }
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const sets: string[] = [];
     const vals: unknown[] = [];
@@ -329,6 +346,49 @@ function assertAgentFitsRole(db: DB, agentId: string, roleId: string | null): vo
   if (!agentMayTake(db, agentId, roleId)) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
 }
 
+function taskHandlerConflict(taskId: string, kind: 'addressed' | 'claimed', slug: string, actor: Actor): DomainError {
+  const who = actor.agent ? '' : ' This call named no agent: pass agent if the task is yours.';
+  if (kind === 'addressed') {
+    return new DomainError(
+      'conflict',
+      `task ${taskId} is addressed to agent "${slug}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`,
+      { for_agent: slug },
+    );
+  }
+  return new DomainError(
+    'conflict',
+    `task ${taskId} is claimed by agent "${slug}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`,
+    { claimed_agent: slug },
+  );
+}
+
+/**
+ * On a task addressed to an agent (`for_agent`) or claimed by a named agent, only that
+ * agent (or the owner) may change status, result or blocking_reason, reopen it, or
+ * address it to themselves. A coordinator may still re-address it (routing only).
+ * In enforce mode this is the same `conflict` as claim_task; in warn mode the write
+ * may proceed with a warning and an audit entry.
+ */
+function assertTaskHandler(db: DB, actor: Actor, t: TaskRow): void {
+  if (actor.kind !== 'agent') return;
+  const addressed = slugOf(db, 'agent', t.agent_id);
+  const claimed = t.claimed_agent ?? null;
+  const handler = addressed || claimed;
+  if (!handler) return;
+  if (actor.agent === handler) return;
+  const kind: 'addressed' | 'claimed' = addressed ? 'addressed' : 'claimed';
+  const slug = addressed || claimed!;
+  const err = taskHandlerConflict(t.id, kind, slug, actor);
+  const reason = kind === 'addressed' ? 'task_addressed' : 'task_claimed';
+  const detail = { reason, agent: actor.agent ?? null, ...(kind === 'addressed' ? { for_agent: slug } : { claimed_agent: slug }) };
+  if (getEnforcement(db, actor.memberId) === 'enforce') {
+    auditRoleCheck(db, actor, 'rejected', detail, 409);
+    throw err;
+  }
+  addWarning({ code: reason, message: err.message });
+  auditRoleCheck(db, actor, 'warning', detail);
+}
+
 /** Atomic claim: only one caller can move an open, unclaimed task to in_progress. */
 export function claimTask(db: DB, actor: Actor, input: { id: string; role?: string }) {
   return tx(db, () => {
@@ -337,8 +397,7 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
     const addressed = slugOf(db, 'agent', t.agent_id);
     // A call that names no agent is not the addressee either: a bot that forgot to pass agent must not take another agent's task.
     if (addressed && actor.kind === 'agent' && actor.agent !== addressed) {
-      const who = actor.agent ? '' : ' This call named no agent: pass agent if the task is yours.';
-      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`, { for_agent: addressed });
+      throw taskHandlerConflict(t.id, 'addressed', addressed, actor);
     }
     const assign = input.role
       ? requireRole(db, actor.memberId, input.role)
