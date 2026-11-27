@@ -466,6 +466,9 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
 
 function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { connection: Connection; agent?: Agent; workspaceRoles: WorkspaceRole[]; onDone: () => void; onCancel: () => void }) {
   const [name, setName] = useState(agent?.name ?? '');
+  const [slug, setSlug] = useState('');
+  // A name with no Latin letters or digits gives nothing to make a slug from, so the owner types one.
+  const needsSlug = !agent && name.trim() !== '' && !/[a-z0-9]/i.test(name.normalize('NFKD'));
   const [selected, setSelected] = useState<Set<string>>(new Set((agent?.roles ?? []).map((r) => r.id)));
   const act = useAction();
   // The platform's confirmed list is the ceiling; a role the agent already holds stays visible so it can be removed.
@@ -482,7 +485,7 @@ function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { co
   const save = (e: Event) => {
     e.preventDefault();
     act.run(async () => {
-      await post('/agents', agent ? { id: agent.id, rev: agent.rev, name, roles: [...selected] } : { name, platform: connection.client_id, roles: [...selected] });
+      await post('/agents', agent ? { id: agent.id, rev: agent.rev, name, roles: [...selected] } : { name, platform: connection.client_id, roles: [...selected], ...(slug.trim() ? { slug: slug.trim() } : {}) });
       onDone();
     });
   };
@@ -492,6 +495,28 @@ function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { co
       <Field label="Agent name">
         <input value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} required maxLength={300} />
       </Field>
+      {agent ? (
+        <p class="small muted">
+          Short name <code>{agent.slug}</code>: the agent passes it as <code>agent</code>. It cannot be changed, because the agent’s history is recorded under it.
+        </p>
+      ) : (
+        <Field label={needsSlug ? 'Short name' : 'Short name (optional)'}>
+          <input
+            value={slug}
+            onInput={(e) => setSlug((e.target as HTMLInputElement).value)}
+            required={needsSlug}
+            pattern="[a-z0-9][a-z0-9-]{0,59}"
+            maxLength={60}
+            placeholder="for example arina"
+            autoCapitalize="none"
+            spellcheck={false}
+          />
+          <span class="small muted">
+            Lowercase Latin letters, digits and dashes. The agent passes it as <code>agent</code>, and it cannot be changed later.
+            {needsSlug ? ' Needed here because the name has no Latin letters.' : ' Left empty, it is made from the name.'}
+          </span>
+        </Field>
+      )}
       <fieldset>
         <legend>Roles it may take</legend>
         {!onPlatform.size && <p class="small muted">Confirm the roles for this platform first (the list above). An agent can take only roles from that list.</p>}
