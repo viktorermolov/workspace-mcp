@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)
+
 ## [0.3.1] - 2026-11-26
 
 ### Fixed
