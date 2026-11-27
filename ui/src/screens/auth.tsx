@@ -203,6 +203,7 @@ export function ConsentScreen() {
         name: name.trim() || autoName,
         oauth_query: oauthQuery,
       };
+      if (accept && cont?.mode === 'auto') body.continue_client_id = cont.target.client_id;
       if (accept && cont?.mode === 'choice') body.continue_client_id = choice || null;
       const r = await post<{ url: string }>('/consent', body);
       location.assign(r.url);

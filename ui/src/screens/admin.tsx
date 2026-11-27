@@ -129,7 +129,7 @@ export function ConnectionsScreen() {
     });
   };
   const rollbackTransfer = (c: Connection) => {
-    if (!confirm(`Undo the last client transfer on "${c.name}"? The current tokens stop working. This cannot restore earlier refresh tokens.`)) return;
+    if (!confirm(`Undo the last client transfer on "${c.name}"? Access and refresh tokens issued before the undo stop working for both clients. They have to connect again.`)) return;
     void act.run(async () => {
       await post(`/connections/${enc(c.client_id)}/rollback-transfer`);
       await list.reload();

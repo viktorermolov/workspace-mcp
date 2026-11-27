@@ -67,9 +67,9 @@ CIMD clients that reconnect with the same URL already hit the existing row; the 
 
 ### Owner rollback
 
-A `connection_transfer` row records `from_client_id`, `to_client_id`, `previous_approved_at`, kind (`reauth` or `migration`), and an optional archived client. Rolling it back restores `current_client_id` and `approved_at`, drops grants of the unbound client, and, for a migration, un-archives the duplicate. Deleted refresh tokens cannot be recreated; a restored `approved_at` may let leftover access tokens of the previous client work again until they expire.
+A `connection_transfer` row records `from_client_id`, `to_client_id`, `previous_approved_at`, kind (`reauth` or `migration`), and an optional archived client. The same owner action undoes a re-auth bind or a merge performed by migration 14: it restores `current_client_id`, sets `approved_at` to now on the restored platform and on an un-archived duplicate so tokens issued before the undo are refused, and drops access and refresh tokens of both clients. For a `migration` transfer it also un-archives the duplicate. Deleted refresh tokens cannot be recreated; each client gets new tokens only through a fresh consent.
 
-The owner rolls back from the Platforms screen («Undo last client transfer»), which calls `POST /api/owner/connections/:id/rollback-transfer`. That is the existing owner-only web surface (passkey session, CSRF). A CLI command was not added: `cli` is an offline tool and requires the service to be stopped, which is the wrong place to undo a live connector's client binding. Official rollback of migration 14 itself remains a restore of the pre-migration backup.
+The owner rolls back from the Platforms screen («Undo last client transfer»), which calls `POST /api/owner/connections/:id/rollback-transfer`. That is the existing owner-only web surface (passkey session, CSRF). A CLI command was not added: `cli` is an offline tool and requires the service to be stopped, which is the wrong place to undo a live connector's client binding. Rolling the migration 14 schema itself back (the new columns) remains a restore of the pre-migration backup.
 
 ## Why
 
