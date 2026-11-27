@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { strFromU8, unzipSync } from 'fflate';
+import { buildExport } from '../src/backup/export.ts';
 import { all, get, openDatabase, run, tx } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
 import { saveAgent } from '../src/domain/agents.ts';
@@ -289,5 +291,99 @@ describe('agents name themselves', () => {
     const start = await call<{ instructions: { role: string } }>(grok, 'start', { role: 'marketer', agent: 'bob' });
     assert.equal(start.instructions.role, 'marketer');
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM task WHERE title = 'X'")!.n, 0);
+  });
+});
+
+describe('tasks addressed to an agent', () => {
+  let env: TestEnv;
+  let owner: Browser;
+  let grok: Awaited<ReturnType<typeof connectAgent>>['client'];
+  let other: Awaited<ReturnType<typeof connectAgent>>['client'];
+  const err = (e: unknown) => JSON.parse((e as Error).message) as { error: string; message: string };
+  type Task = { id: string; rev: number; for_agent: string | null; claimed_by: { agent?: string } | null };
+  type Start = { data: { open_tasks: { title: string; for_agent: string | null }[]; last_checkpoint: { done: string; agent: string | null } | null; newer_checkpoint_by_another_agent?: { agent: string | null; platform: string | null } } };
+
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    for (const [name, slug] of [['Developer', 'developer'], ['Marketer', 'marketer']]) await owner.json('/api/owner/roles', { json: { name, slug } });
+    grok = (await connectAgent(env, owner, 'Grok')).client;
+    other = (await connectAgent(env, owner, 'Home server')).client;
+    const list = await owner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
+    const id = (n: string) => list.connections.find((c) => c.name === n)!.client_id;
+    await owner.json('/api/owner/agents', { json: { name: 'Ada', platform: id('Grok'), roles: ['developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Hal', platform: id('Home server'), roles: ['developer'] } });
+    await owner.json('/api/owner/agents', { json: { name: 'Mia', platform: id('Grok'), roles: ['marketer'] } });
+  });
+
+  after(async () => {
+    await env.close();
+  });
+
+  it('a coordinator gives one task to the developer on one platform and one to the developer on another', async () => {
+    const forAda = await call<Task>(grok, 'save_task', { title: 'For Ada', role: 'developer', for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' });
+    await call<Task>(grok, 'save_task', { title: 'For Hal', role: 'developer', for_agent: 'hal', claimed_role: 'marketer', agent: 'mia' });
+    await call<Task>(grok, 'save_task', { title: 'For any developer', role: 'developer', claimed_role: 'marketer', agent: 'mia' });
+    assert.equal(forAda.for_agent, 'ada');
+    const ada = await call<Start>(grok, 'start', { role: 'developer', agent: 'ada' });
+    const hal = await call<Start>(other, 'start', { role: 'developer', agent: 'hal' });
+    const anyone = await call<Start>(other, 'start', { role: 'developer' });
+    assert.deepEqual(ada.data.open_tasks.map((t) => t.title), ['For Ada', 'For any developer']);
+    assert.deepEqual(hal.data.open_tasks.map((t) => t.title), ['For Hal', 'For any developer']);
+    assert.deepEqual(anyone.data.open_tasks.map((t) => t.title).sort(), ['For Ada', 'For Hal', 'For any developer']);
+  });
+
+  it('an addressed task is claimed only by its agent, and the claim records the agent', async () => {
+    const found = await call<{ results: { id: string; title: string }[] }>(grok, 'search', { types: ['task'] });
+    const forHal = found.results.find((t) => t.title === 'For Hal')!;
+    await assert.rejects(call(grok, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'ada' }), (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message));
+    const claimed = await call<Task>(other, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'hal' });
+    assert.deepEqual(claimed.claimed_by?.agent, 'hal');
+  });
+
+  it('refuses an unknown agent, an agent that cannot take the role, and an address without a role; null clears it', async () => {
+    for (const [args, reason] of [
+      [{ title: 'X', role: 'developer', for_agent: 'nobody' }, /agent not found/],
+      [{ title: 'X', role: 'developer', for_agent: 'mia' }, /may not take the role "developer"/],
+      [{ title: 'X', for_agent: 'ada' }, /needs a role/],
+    ] as const) {
+      await assert.rejects(call(grok, 'save_task', { ...args, claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'invalid' && reason.test(err(e).message));
+    }
+    const t = await call<Task>(grok, 'save_task', { title: 'Movable', role: 'developer', for_agent: 'ada', claimed_role: 'developer', agent: 'ada' });
+    await assert.rejects(call(grok, 'save_task', { id: t.id, rev: t.rev, role: 'marketer', claimed_role: 'developer', agent: 'ada' }), (e) => /may not take the role "marketer"/.test(err(e).message));
+    const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: null, claimed_role: 'developer', agent: 'ada' });
+    assert.equal(cleared.for_agent, null);
+    assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM task WHERE title = 'X'")!.n, 0);
+  });
+
+  it('start shows an agent its own last checkpoint and points to a newer one by another agent of the role', async () => {
+    await call(grok, 'checkpoint', { role: 'developer', claimed_role: 'developer', agent: 'ada', done: 'Ada did this', stopped_at: 's', next: 'n' });
+    await call(other, 'checkpoint', { role: 'developer', claimed_role: 'developer', agent: 'hal', done: 'Hal did this', stopped_at: 's', next: 'n' });
+    const ada = await call<Start>(grok, 'start', { role: 'developer', agent: 'ada' });
+    assert.equal(ada.data.last_checkpoint?.done, 'Ada did this');
+    assert.deepEqual({ agent: ada.data.newer_checkpoint_by_another_agent?.agent, platform: ada.data.newer_checkpoint_by_another_agent?.platform }, { agent: 'hal', platform: 'Home server' });
+    const hal = await call<Start>(other, 'start', { role: 'developer', agent: 'hal' });
+    assert.equal(hal.data.last_checkpoint?.done, 'Hal did this');
+    assert.equal(hal.data.newer_checkpoint_by_another_agent, undefined);
+    // A caller that names no agent continues from the role's latest checkpoint, as before.
+    const anyone = await call<Start>(grok, 'start', { role: 'developer' });
+    assert.equal(anyone.data.last_checkpoint?.done, 'Hal did this');
+  });
+
+  it('a zip export carries tasks without their addressee, because agents are not exported', () => {
+    const memberId = get<{ member_id: string }>(env.svc.db, 'SELECT member_id FROM agent LIMIT 1')!.member_id;
+    assert.ok(get(env.svc.db, 'SELECT 1 FROM task WHERE agent_id IS NOT NULL'));
+    const { zip } = buildExport(env.svc.db, memberId);
+    const data = JSON.parse(strFromU8(unzipSync(zip)['workspace.json']!)) as { tables: Record<string, { agent_id?: unknown; title?: string }[]> };
+    assert.ok(data.tables.task!.length > 0);
+    assert.ok(data.tables.task!.every((t) => t.agent_id === null));
+    assert.equal(data.tables.agent, undefined);
+  });
+
+  it('removing an agent leaves its tasks with the role, addressed to nobody', async () => {
+    const ada = (await owner.json<{ agents: AgentView[] }>('/api/owner/agents')).agents.find((a) => a.slug === 'ada')!;
+    await owner.json(`/api/owner/agents/${ada.id}`, { method: 'DELETE' });
+    const row = get<{ agent_id: string | null; role: string }>(env.svc.db, "SELECT t.agent_id, r.slug AS role FROM task t JOIN role r ON r.id = t.role_id WHERE t.title = 'For Ada'")!;
+    assert.deepEqual({ ...row }, { agent_id: null, role: 'developer' });
   });
 });

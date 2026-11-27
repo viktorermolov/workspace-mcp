@@ -79,7 +79,9 @@ function tableRows(db: DB, memberId: string, t: (typeof TABLES)[number]): Rows {
   if (t.name === 'github_repo_assigner') {
     return all(db, 'SELECT a.repo_id, a.role_id FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? ORDER BY a.repo_id, a.role_id', memberId);
   }
-  return all(db, `SELECT * FROM ${t.name} WHERE member_id = ? ORDER BY ${t.order}`, memberId);
+  const rows = all<Record<string, unknown>>(db, `SELECT * FROM ${t.name} WHERE member_id = ? ORDER BY ${t.order}`, memberId);
+  // Agents belong to a connection and are not exported, so a task leaves without its addressee (it keeps its role).
+  return t.name === 'task' ? rows.map((r) => ({ ...r, agent_id: null })) : rows;
 }
 
 /** Builds the export zip for one member. */
@@ -319,6 +321,7 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
           vals.entity_id = defaultRulesId;
         }
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
+        if (t.name === 'task') vals.agent_id = null;
         if (parentSpec) vals = omitParentColumn(vals, parentSpec);
         if (t.name === 'github_repo') importedRoleOrThrow(db, memberId, vals.default_role_id, 'github_repo.default_role_id');
         if (t.name === 'github_repo_assigner') importedRoleOrThrow(db, memberId, vals.role_id, 'github_repo_assigner.role_id');

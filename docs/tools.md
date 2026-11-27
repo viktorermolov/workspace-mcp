@@ -111,7 +111,7 @@ Omit `id` and `slug` to update the default working rules, same as before: this r
 
 ### `save_task`
 
-Input: `id`, `rev`, `title`, `description`, `status`, `role` (or `null` to clear), `project` (or `null`), `parent_id` (or `null`), `depends_on` (replaces the list), `priority`, `due_date` (`YYYY-MM-DD` or `null`), `result`, `blocking_reason`, `claimed_role`, `idempotency_key`.
+Input: `id`, `rev`, `title`, `description`, `status`, `role` (or `null` to clear), `project` (or `null`), `for_agent` (the slug of the one agent the task is addressed to, which must be able to take the task's role; `null` for any agent with the role), `parent_id` (or `null`), `depends_on` (replaces the list), `priority`, `due_date` (`YYYY-MM-DD` or `null`), `result`, `blocking_reason`, `claimed_role`, `idempotency_key`.
 
 Cycles in the parent hierarchy or in dependencies are rejected with `invalid`. A task whose dependencies are not done can still be saved; when its last open dependency is finished, an `task.unblocked` event is recorded.
 
@@ -119,7 +119,7 @@ Cycles in the parent hierarchy or in dependencies are rejected with `invalid`. A
 
 Input: `id`, `claimed_role` (your role, for the log), `role` (optional: the role the task is claimed for, and used to set `role_id` if the task has none). Using `role` as the author when `claimed_role` is omitted is deprecated.
 
-Atomically takes an open task that nobody has claimed and sets it to `in_progress`, recording the connection and role. If another agent got it first, the call fails with `conflict`.
+Atomically takes an open task that nobody has claimed and sets it to `in_progress`, recording the connection, role and agent. A task addressed to an agent (`for_agent`) is a `conflict` for a caller that names a different agent. If another agent got it first, the call fails with `conflict`.
 
 ### `comment_task`
 
@@ -155,7 +155,7 @@ Copies the text of an earlier version into a new version. History is never erase
 
 Input: `role` (required: the role this checkpoint belongs to), `claimed_role` (your role, for the log), `project` (optional), `done`, `stopped_at`, `next`, `idempotency_key`. Using `role` as the author when `claimed_role` is omitted is deprecated.
 
-The next `start` for this role returns the latest checkpoint, so another session or another platform continues from the same place.
+The next `start` for this role returns the latest checkpoint (for a caller that names its agent: that agent's own latest, plus `newer_checkpoint_by_another_agent` when another agent of the role wrote a later one), so another session or another platform continues from the same place.
 
 ### `set_issue_role`
 

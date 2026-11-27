@@ -555,4 +555,14 @@ ALTER TABLE checkpoint ADD COLUMN agent TEXT;
 ALTER TABLE review_reply ADD COLUMN agent TEXT;
 `,
   },
+  // Step 3 of decision 0006: a task may be addressed to one agent besides its role.
+  {
+    id: 10,
+    name: 'task-for-agent',
+    sql: `
+ALTER TABLE task ADD COLUMN agent_id TEXT REFERENCES agent(id) ON DELETE SET NULL;
+ALTER TABLE task ADD COLUMN claimed_agent TEXT;
+CREATE INDEX task_agent ON task (agent_id);
+`,
+  },
 ];

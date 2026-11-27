@@ -24,6 +24,9 @@ export interface TaskRow {
   blocking_reason: string;
   claimed_by: string | null;
   claimed_role: string | null;
+  /** The one agent this task is addressed to, besides its role (null: any agent with the role). */
+  agent_id: string | null;
+  claimed_agent: string | null;
   created_by_kind: string;
   created_by_connection: string | null;
   created_by_role: string | null;
@@ -39,7 +42,7 @@ export function requireTask(db: DB, memberId: string, id: string): TaskRow {
   return t;
 }
 
-function slugOf(db: DB, table: 'role' | 'project', id: string | null): string | null {
+function slugOf(db: DB, table: 'role' | 'project' | 'agent', id: string | null): string | null {
   if (!id) return null;
   return get<{ slug: string }>(db, `SELECT slug FROM ${table} WHERE id = ?`, id)?.slug ?? null;
 }
@@ -52,6 +55,7 @@ export function taskSummary(db: DB, t: TaskRow) {
     priority: t.priority,
     role: slugOf(db, 'role', t.role_id),
     project: slugOf(db, 'project', t.project_id),
+    for_agent: slugOf(db, 'agent', t.agent_id),
     parent_id: t.parent_id,
     due_date: t.due_date,
     rev: t.rev,
@@ -73,7 +77,7 @@ export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean; comment
     description: t.description,
     result: t.result,
     blocking_reason: t.blocking_reason,
-    claimed_by: t.claimed_by ? { connection: conn ?? t.claimed_by, role: t.claimed_role } : null,
+    claimed_by: t.claimed_by ? { connection: conn ?? t.claimed_by, role: t.claimed_role, ...(t.claimed_agent ? { agent: t.claimed_agent } : {}) } : null,
     created_by: t.created_by_kind === 'owner' ? 'owner' : { role: t.created_by_role },
     depends_on: deps.slice(0, 100).map((d) => ({ id: d.depends_on_id, title: d.title, status: d.status })),
     ...(deps.length > 100 ? { more_dependencies: deps.length - 100 } : {}),
@@ -146,6 +150,8 @@ export interface SaveTaskInput {
   status?: TaskStatus;
   role?: string | null;
   project?: string | null;
+  /** Agent slug or id the task is addressed to, or null for any agent with the role. */
+  for_agent?: string | null;
   parent_id?: string | null;
   depends_on?: string[];
   priority?: Priority;
@@ -186,19 +192,21 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     const projectId = input.project === undefined ? undefined : input.project === null ? null : requireProject(db, actor.memberId, input.project).id;
     if (input.parent_id) requireTask(db, actor.memberId, input.parent_id);
     for (const dep of input.depends_on ?? []) requireTask(db, actor.memberId, dep);
+    const agentId = input.for_agent === undefined ? undefined : input.for_agent === null || input.for_agent === '' ? null : requireTaskAgent(db, actor.memberId, input.for_agent);
 
     if (!input.id) {
       return idempotent(db, actor.memberId, input.idempotency_key, 'save_task', () => {
         if (!input.title?.trim()) throw invalid('title is required to create a task');
+        if (agentId) assertAgentFitsRole(db, agentId, roleId ?? null);
         const status = input.status ?? 'open';
         if (status === 'blocked' && !input.blocking_reason) throw invalid('blocking_reason is required when status is blocked');
         const id = newId('task');
         const at = now();
         run(
           db,
-          `INSERT INTO task (id, member_id, title, description, status, role_id, project_id, parent_id, priority, due_date, result, blocking_reason,
+          `INSERT INTO task (id, member_id, title, description, status, role_id, project_id, agent_id, parent_id, priority, due_date, result, blocking_reason,
              created_by_kind, created_by_connection, created_by_role, rev, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
           id,
           actor.memberId,
           input.title.trim(),
@@ -206,6 +214,7 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
           status,
           roleId ?? null,
           projectId ?? null,
+          agentId ?? null,
           input.parent_id ?? null,
           input.priority ?? 'normal',
           input.due_date ?? null,
@@ -252,6 +261,12 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     setField('status', input.status);
     setField('role_id', roleId);
     setField('project_id', projectId);
+    setField('agent_id', agentId);
+    {
+      const nextAgent = agentId === undefined ? t.agent_id : agentId;
+      const nextRole = roleId === undefined ? t.role_id : roleId;
+      if (nextAgent && (agentId !== undefined || roleId !== undefined)) assertAgentFitsRole(db, nextAgent, nextRole);
+    }
     if (input.parent_id !== undefined && input.parent_id !== t.parent_id) {
       if (input.parent_id) assertNoParentCycle(db, t.id, input.parent_id);
       setField('parent_id', input.parent_id);
@@ -263,7 +278,7 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
     const newStatus = input.status ?? t.status;
     if (newStatus === 'blocked' && !(input.blocking_reason ?? t.blocking_reason)) throw invalid('blocking_reason is required when status is blocked');
     if (input.status === 'open' && t.status !== 'open') {
-      sets.push('claimed_by = NULL', 'claimed_role = NULL');
+      sets.push('claimed_by = NULL', 'claimed_role = NULL', 'claimed_agent = NULL');
     }
     let depsChanged = false;
     if (input.depends_on) {
@@ -298,11 +313,29 @@ export function saveTask(db: DB, actor: Actor, input: SaveTaskInput) {
   });
 }
 
+function requireTaskAgent(db: DB, memberId: string, ref: string): string {
+  const a = get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND (id = ? OR slug = ?)', memberId, ref, ref);
+  if (!a) throw invalid(`agent not found: ${ref}`);
+  return a.id;
+}
+
+/** A task addressed to an agent must have a role that agent may take, so the agent sees it under that role. */
+function assertAgentFitsRole(db: DB, agentId: string, roleId: string | null): void {
+  const slug = slugOf(db, 'agent', agentId);
+  if (!roleId) throw invalid(`a task addressed to agent "${slug}" needs a role: pass role as well`);
+  const ok = get(db, 'SELECT 1 FROM agent_role WHERE agent_id = ? AND role_id = ?', agentId, roleId);
+  if (!ok) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
+}
+
 /** Atomic claim: only one caller can move an open, unclaimed task to in_progress. */
 export function claimTask(db: DB, actor: Actor, input: { id: string; role?: string }) {
   return tx(db, () => {
     const t = requireTask(db, actor.memberId, input.id);
     assertCanEdit(db, actor, t.role_id, { what: 'task' });
+    const addressed = slugOf(db, 'agent', t.agent_id);
+    if (addressed && actor.kind === 'agent' && actor.agent && actor.agent !== addressed) {
+      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent)`, { for_agent: addressed });
+    }
     const assign = input.role
       ? requireRole(db, actor.memberId, input.role)
       : actor.role
@@ -310,10 +343,11 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
         : undefined;
     const res = run(
       db,
-      `UPDATE task SET status = 'in_progress', claimed_by = ?, claimed_role = ?, role_id = COALESCE(role_id, ?), rev = rev + 1, updated_at = ?
+      `UPDATE task SET status = 'in_progress', claimed_by = ?, claimed_role = ?, claimed_agent = ?, role_id = COALESCE(role_id, ?), rev = rev + 1, updated_at = ?
        WHERE id = ? AND status = 'open' AND claimed_by IS NULL AND archived_at IS NULL`,
       actor.connectionId ?? 'owner',
       actor.role ?? input.role ?? null,
+      actor.agent ?? null,
       assign?.id ?? null,
       now(),
       t.id,
@@ -398,12 +432,12 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
   );
 }
 
-export function lastCheckpoint(db: DB, memberId: string, roleId: string, projectId?: string) {
+export function lastCheckpoint(db: DB, memberId: string, roleId: string, projectId?: string, agent?: string) {
   return get<Record<string, unknown>>(
     db,
     `SELECT c.id, c.done, c.stopped_at, c.next, c.created_at, c.connection_name, c.agent, p.slug AS project
      FROM checkpoint c LEFT JOIN project p ON p.id = c.project_id
-     WHERE c.member_id = ? AND c.role_id = ? ${projectId ? 'AND c.project_id = ?' : ''} ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
-    ...(projectId ? [memberId, roleId, projectId] : [memberId, roleId]),
+     WHERE c.member_id = ? AND c.role_id = ? ${projectId ? 'AND c.project_id = ?' : ''} ${agent ? 'AND c.agent = ?' : ''} ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
+    ...[memberId, roleId, ...(projectId ? [projectId] : []), ...(agent ? [agent] : [])],
   );
 }
