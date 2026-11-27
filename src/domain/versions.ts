@@ -63,7 +63,7 @@ export function versionHistory(db: DB, memberId: string, type: VersionedType, re
   const id = versionedId(db, memberId, type, ref);
   return listVersions(db, type, id, limit, before).map((v) => ({
     number: v.number,
-    author: v.actor_kind === 'owner' ? 'owner' : v.actor_kind === 'system' ? 'system' : { connection: v.connection_name, role: v.claimed_role },
+    author: v.actor_kind === 'owner' ? 'owner' : v.actor_kind === 'system' ? 'system' : { connection: v.connection_name, role: v.claimed_role, ...(v.agent ? { agent: v.agent } : {}) },
     note: v.note,
     rollback_of: v.rollback_of,
     created_at: v.created_at,

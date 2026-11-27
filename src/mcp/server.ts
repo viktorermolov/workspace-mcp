@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import type { DB } from '../db/db.ts';
-import { assertStartRole, attachWarnings, resolveAgentActor, runWithWarnings } from '../domain/access.ts';
+import { assertStartRole, attachWarnings, resolveAgentActor, resolveNamedAgent, runWithWarnings } from '../domain/access.ts';
 import { DomainError, getVersion, LIMITS, MAX_RESPONSE_CHARS, type Actor } from '../domain/core.ts';
 import { saveDocument, saveProject, saveRole, setArchived, updateRules } from '../domain/entities.ts';
 import { ROUTINE_STATUSES, saveRoutine } from '../domain/routines.ts';
@@ -30,6 +30,7 @@ const ARCHIVABLE = ['role', 'project', 'document', 'task', 'routine'] as const;
 const id = z.string().min(1).max(200);
 const rev = z.number().int().positive().describe('The rev you last read (the conflict-check counter, not version / instruction_version / description_version); required for updates.');
 const idem = z.string().min(1).max(200).describe('Optional key that makes a create safe to retry.');
+const agentArg = z.string().max(200).optional().describe('Your agent slug (from start, data.agents), so the log shows which agent on this platform made the change.');
 const note = z.string().max(LIMITS.shortText).describe('Optional note stored with the new version.');
 
 /** Larger results must be paginated or fetched by id. */
@@ -90,13 +91,12 @@ function wrap<A>(fn: (args: A) => unknown) {
 export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, sourceUrl?: string): McpServer {
   // websiteUrl points clients at the source (AGPL-3.0 section 13).
   const server = new McpServer({ name: SERVER_NAME, version, ...(sourceUrl ? { websiteUrl: sourceUrl } : {}) }, { instructions: SERVER_INSTRUCTIONS });
-  const act = (role?: string): Actor => ({ ...actorOf(), role: role?.trim() || undefined });
 
   function writeWrap<A>(claimedOf: (args: A) => { claimed?: string; synonym?: string }, fn: (args: A, actor: Actor) => unknown) {
     return wrap((args: A) => {
       const { value, warnings } = runWithWarnings(() => {
         const { claimed, synonym } = claimedOf(args);
-        const actor = resolveAgentActor(db, actorOf(), claimed, { synonym });
+        const actor = resolveAgentActor(db, actorOf(), claimed, { synonym, agent: (args as { agent?: string }).agent });
         return fn(args, actor);
       });
       return attachWarnings(value, warnings);
@@ -113,16 +113,19 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       inputSchema: z.object({
         role: z.string().max(200).optional().describe('Your role slug or id, if you have one.'),
         project: z.string().max(200).optional().describe('Optional project slug or id. When given, instructions also include that project\'s rules, which supplement the global working rules.'),
+        agent: agentArg,
       }),
       // Read-only for the workspace: the only write is this connection's "previous start" marker,
       // which changes no content. Marking start as a write would make platforms ask the owner to
       // confirm the first call of every session.
       annotations: { ...READ, idempotentHint: false, title: 'Start here' },
     },
-    wrap(({ role, project }) => {
+    wrap(({ role, project, agent }) => {
       const { value, warnings } = runWithWarnings(() => {
-        if (role?.trim()) assertStartRole(db, actorOf(), role.trim());
-        return startView(db, act(role), role, { project });
+        const named = resolveNamedAgent(db, actorOf(), agent);
+        const caller: Actor = { ...actorOf(), agent: named?.slug };
+        if (role?.trim()) assertStartRole(db, caller, role.trim());
+        return startView(db, { ...caller, role: role?.trim() || undefined }, role, { project });
       });
       return attachWarnings(value, warnings);
     }),
@@ -176,7 +179,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         links: z.array(z.object({ to: id, type: z.string().min(1).max(100) })).max(50).optional(),
         parent: z.string().max(200).nullable().optional().describe('Role this one reports to (slug or id). null clears it. Only the owner or a role marked edit_any may set this, including on create. There is no reports_to synonym.'),
         note: note.optional(),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -201,7 +204,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         external_id: z.string().max(200).nullable().optional().describe('Id of this routine on an external platform, if any.'),
         last_run_at: z.string().max(100).nullable().optional().describe('ISO 8601 time of the last run, or null to clear.'),
         last_run_result: z.string().max(LIMITS.shortText).optional(),
-        claimed_role: z.string().max(200).optional(),
+        claimed_role: z.string().max(200).optional(), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -225,7 +228,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         repos: z.array(z.string().max(300)).max(20).optional().describe('Repository URLs or owner/name.'),
         note: note.optional(),
         owner_role: z.string().max(200).nullable().optional().describe('Role that owns this project, or null to leave it shared.'),
-        claimed_role: z.string().max(200).optional(),
+        claimed_role: z.string().max(200).optional(), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -246,7 +249,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         body: z.string().max(LIMITS.document).optional(),
         attach_to: z.object({ type: z.enum(['workspace', 'project', 'role']), id: id.optional() }).optional(),
         note: note.optional(),
-        claimed_role: z.string().max(200).optional(),
+        claimed_role: z.string().max(200).optional(), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -268,7 +271,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         slug: z.string().max(60).optional().describe('Existing slug to update, or a new slug to create a set.'),
         title: z.string().max(LIMITS.title).optional(),
         project: z.string().max(200).nullable().optional().describe('Project slug or id to attach this set to, or null to detach. The default set cannot be attached to a project.'),
-        claimed_role: z.string().max(200).optional(),
+        claimed_role: z.string().max(200).optional(), agent: agentArg,
       }),
       annotations: WRITE_IDEMPOTENT,
     },
@@ -294,7 +297,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
         result: z.string().max(LIMITS.text).optional(),
         blocking_reason: z.string().max(LIMITS.shortText).optional(),
-        claimed_role: z.string().max(200).optional(),
+        claimed_role: z.string().max(200).optional(), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -310,7 +313,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
       inputSchema: z.object({
         id,
         role: z.string().max(200).optional().describe('Role the task belongs to (slug or id). Using this as the author when claimed_role is omitted is deprecated.'),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'), agent: agentArg,
       }),
       annotations: WRITE,
     },
@@ -322,7 +325,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Comment on a task',
       description: 'Add a comment to a task (progress, a question, a hand-off note).',
-      inputSchema: z.object({ id, body: z.string().min(1).max(LIMITS.comment), claimed_role: z.string().max(200).optional(), idempotency_key: idem.optional() }),
+      inputSchema: z.object({ id, body: z.string().min(1).max(LIMITS.comment), claimed_role: z.string().max(200).optional(), agent: agentArg, idempotency_key: idem.optional() }),
       annotations: WRITE,
     },
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => commentTask(db, actor, input)),
@@ -338,7 +341,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         id,
         body: z.string().min(1).max(LIMITS.comment),
         status: z.enum(['answered']).optional().describe('Mark the comment answered when you are allowed to.'),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'), agent: agentArg,
         rev: z.number().int().positive().optional().describe('The rev you last read; fails with conflict if it has changed.'),
         expected_status: z.enum(['open', 'answered', 'resolved']).optional().describe('Fails with conflict if the comment is no longer in this status.'),
         idempotency_key: idem.optional(),
@@ -353,7 +356,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Archive or restore',
       description: 'Archive a role, project, document or task (hidden from lists, kept with history), or restore it with restore=true. Nothing is deleted.',
-      inputSchema: z.object({ type: z.enum(ARCHIVABLE), id, restore: z.boolean().optional(), claimed_role: z.string().max(200).optional() }),
+      inputSchema: z.object({ type: z.enum(ARCHIVABLE), id, restore: z.boolean().optional(), claimed_role: z.string().max(200).optional(), agent: agentArg }),
       annotations: WRITE_IDEMPOTENT,
     },
     writeWrap(claimed, ({ type, id: ref, restore, claimed_role: _c }, actor) => setArchived(db, actor, type, ref, !restore)),
@@ -397,7 +400,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     {
       title: 'Roll back to a version',
       description: 'Restore the text of an earlier version. This creates a new version; history is never erased.',
-      inputSchema: z.object({ type: z.enum(VERSIONED), id: id.optional(), to_version: z.number().int().positive(), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional() }),
+      inputSchema: z.object({ type: z.enum(VERSIONED), id: id.optional(), to_version: z.number().int().positive(), rev: rev.optional(), note: note.optional(), claimed_role: z.string().max(200).optional(), agent: agentArg }),
       annotations: WRITE,
     },
     writeWrap(claimed, ({ type, id: ref, to_version, rev: r, note: n }, actor) => rollback(db, actor, type, ref, to_version, r, n)),
@@ -414,7 +417,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         done: z.string().max(LIMITS.text),
         stopped_at: z.string().max(LIMITS.text),
         next: z.string().max(LIMITS.text),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'), agent: agentArg,
         idempotency_key: idem.optional(),
       }),
       annotations: WRITE,
@@ -433,7 +436,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         repo: z.string().max(200).optional().describe('Repository owner/name. Must be passed together with number, and not with id.'),
         number: z.number().int().positive().optional().describe('Issue number in that repository. Must be passed together with repo, and not with id.'),
         role: z.string().max(200).nullable().optional().describe('Role slug or id to assign, or null/empty to clear.'),
-        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'),
+        claimed_role: z.string().max(200).optional().describe('Your own role, for the log. Required on writes once the owner turns on enforcement.'), agent: agentArg,
       }),
       annotations: WRITE,
     },

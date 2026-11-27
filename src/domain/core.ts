@@ -8,6 +8,8 @@ export interface Actor {
   connectionId?: string;
   connectionName?: string;
   role?: string;
+  /** Slug of the agent the caller named, once the server accepted it. */
+  agent?: string;
 }
 
 export type ErrorCode = 'not_found' | 'conflict' | 'invalid' | 'forbidden' | 'limit';
@@ -115,6 +117,7 @@ export interface EventRecord {
   connection_id: string | null;
   connection_name: string | null;
   claimed_role: string | null;
+  agent?: string | null;
   entity_type: string;
   entity_id: string | null;
   action: string;
@@ -135,14 +138,15 @@ export function recordEvent(
   const at = now();
   const res = run(
     db,
-    `INSERT INTO event (member_id, at, actor_kind, connection_id, connection_name, claimed_role, entity_type, entity_id, action, summary, data)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO event (member_id, at, actor_kind, connection_id, connection_name, claimed_role, agent, entity_type, entity_id, action, summary, data)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     actor.memberId,
     at,
     actor.kind,
     actor.connectionId ?? null,
     actor.connectionName ?? null,
     actor.role ?? null,
+    actor.agent ?? null,
     entityType,
     entityId,
     action,
@@ -157,6 +161,7 @@ export function recordEvent(
     connection_id: actor.connectionId ?? null,
     connection_name: actor.connectionName ?? null,
     claimed_role: actor.role ?? null,
+    agent: actor.agent ?? null,
     entity_type: entityType,
     entity_id: entityId,
     action,
@@ -186,6 +191,7 @@ export interface VersionRow {
   connection_id: string | null;
   connection_name: string | null;
   claimed_role: string | null;
+  agent?: string | null;
   note: string | null;
   rollback_of: number | null;
   created_at: string;
@@ -210,8 +216,8 @@ export function addVersion(
   const at = now();
   const res = run(
     db,
-    `INSERT INTO version (member_id, entity_type, entity_id, number, body, actor_kind, connection_id, connection_name, claimed_role, note, rollback_of, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO version (member_id, entity_type, entity_id, number, body, actor_kind, connection_id, connection_name, claimed_role, agent, note, rollback_of, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     actor.memberId,
     type,
     entityId,
@@ -221,6 +227,7 @@ export function addVersion(
     actor.connectionId ?? null,
     actor.connectionName ?? null,
     actor.role ?? null,
+    actor.agent ?? null,
     note ?? null,
     rollbackOf ?? null,
     at,
@@ -237,6 +244,7 @@ export function addVersion(
     connection_id: actor.connectionId ?? null,
     connection_name: actor.connectionName ?? null,
     claimed_role: actor.role ?? null,
+    agent: actor.agent ?? null,
     note: note ?? null,
     rollback_of: rollbackOf ?? null,
     created_at: at,
@@ -253,7 +261,7 @@ export function currentBody(db: DB, versionId: number | null | undefined): strin
 export function listVersions(db: DB, type: VersionedType, entityId: string, limit = 50, before?: number): VersionRow[] {
   return all<VersionRow>(
     db,
-    `SELECT id, entity_type, entity_id, number, '' AS body, actor_kind, connection_id, connection_name, claimed_role, note,
+    `SELECT id, entity_type, entity_id, number, '' AS body, actor_kind, connection_id, connection_name, claimed_role, agent, note,
        (SELECT t.number FROM version t WHERE t.id = version.rollback_of) AS rollback_of, created_at
      FROM version WHERE entity_type = ? AND entity_id = ? ${before ? 'AND number < ?' : ''} ORDER BY number DESC LIMIT ?`,
     ...(before ? [type, entityId, before, limit] : [type, entityId, limit]),
@@ -339,9 +347,10 @@ export function checkRev(
   }
 }
 
-export function actorLabel(r: { actor_kind?: string | null; connection_name?: string | null; claimed_role?: string | null }): string {
+export function actorLabel(r: { actor_kind?: string | null; connection_name?: string | null; claimed_role?: string | null; agent?: string | null }): string {
   if (r.actor_kind === 'owner') return 'owner';
   if (r.actor_kind === 'system') return 'system';
-  const conn = r.connection_name || 'agent';
+  // "Grok: ada as developer" when the caller named its agent, "Grok as developer" when it did not.
+  const conn = r.agent ? `${r.connection_name || 'agent'}: ${r.agent}` : r.connection_name || 'agent';
   return r.claimed_role ? `${conn} as ${r.claimed_role}` : conn;
 }

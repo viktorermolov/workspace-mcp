@@ -200,3 +200,11 @@ export function deleteAgent(db: DB, actor: Actor, ref: string) {
     return { id: a.id, deleted: true };
   });
 }
+
+/** What `start` tells an agent about itself: its name, platform and the roles it may take. */
+export function agentSelf(db: DB, memberId: string, ref: string) {
+  const a = findAgent(db, memberId, ref);
+  if (!a) return undefined;
+  const v = agentView(db, a);
+  return { slug: v.slug, name: v.name, platform: v.platform.name, roles: v.roles.filter((r) => !r.archived).map((r) => r.slug) };
+}

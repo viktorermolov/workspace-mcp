@@ -85,9 +85,9 @@ export function taskView(db: DB, t: TaskRow, opts: { comments?: boolean; comment
   if (opts.comments) {
     // The newest page of comments, oldest first within the page; `comments_cursor` pages back.
     const before = opts.commentsBefore ? decodeCommentCursor(opts.commentsBefore) : null;
-    const page = all<{ id: string; rowid: number; body: string; actor_kind: string; connection_name: string | null; claimed_role: string | null; created_at: string }>(
+    const page = all<{ id: string; rowid: number; body: string; actor_kind: string; connection_name: string | null; claimed_role: string | null; agent: string | null; created_at: string }>(
       db,
-      `SELECT rowid, id, body, actor_kind, connection_name, claimed_role, created_at FROM task_comment WHERE task_id = ? ${before ? 'AND rowid < ?' : ''} ORDER BY rowid DESC LIMIT ?`,
+      `SELECT rowid, id, body, actor_kind, connection_name, claimed_role, agent, created_at FROM task_comment WHERE task_id = ? ${before ? 'AND rowid < ?' : ''} ORDER BY rowid DESC LIMIT ?`,
       ...(before ? [t.id, before, LIMITS.commentPage + 1] : [t.id, LIMITS.commentPage + 1]),
     );
     const more = page.length > LIMITS.commentPage;
@@ -339,7 +339,7 @@ export function commentTask(db: DB, actor: Actor, input: { id: string; body: str
       const id = newId('cmt');
       run(
         db,
-        'INSERT INTO task_comment (id, member_id, task_id, body, actor_kind, connection_id, connection_name, claimed_role, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO task_comment (id, member_id, task_id, body, actor_kind, connection_id, connection_name, claimed_role, agent, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
         id,
         actor.memberId,
         t.id,
@@ -348,6 +348,7 @@ export function commentTask(db: DB, actor: Actor, input: { id: string; body: str
         actor.connectionId ?? null,
         actor.connectionName ?? null,
         actor.role ?? null,
+        actor.agent ?? null,
         now(),
       );
       recordEvent(db, actor, 'task', t.id, 'task.commented', `Comment on task "${t.title}"`, withOwnerRole(db, t.role_id, { role_id: t.role_id, comment_id: id, from_role: actor.role ?? null }));
@@ -372,8 +373,8 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
       const at = now();
       run(
         db,
-        `INSERT INTO checkpoint (id, member_id, role_id, project_id, done, stopped_at, next, actor_kind, connection_id, connection_name, claimed_role, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO checkpoint (id, member_id, role_id, project_id, done, stopped_at, next, actor_kind, connection_id, connection_name, claimed_role, agent, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         id,
         actor.memberId,
         role.id,
@@ -385,6 +386,7 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
         actor.connectionId ?? null,
         actor.connectionName ?? null,
         actor.role ?? role.slug,
+        actor.agent ?? null,
         at,
       );
       recordEvent(db, actor, 'checkpoint', id, 'checkpoint.created', `Checkpoint for ${role.slug}${project ? ` / ${project.slug}` : ''}`, withOwnerRole(db, role.id, {
@@ -399,7 +401,7 @@ export function writeCheckpoint(db: DB, actor: Actor, input: { role: string; pro
 export function lastCheckpoint(db: DB, memberId: string, roleId: string, projectId?: string) {
   return get<Record<string, unknown>>(
     db,
-    `SELECT c.id, c.done, c.stopped_at, c.next, c.created_at, c.connection_name, p.slug AS project
+    `SELECT c.id, c.done, c.stopped_at, c.next, c.created_at, c.connection_name, c.agent, p.slug AS project
      FROM checkpoint c LEFT JOIN project p ON p.id = c.project_id
      WHERE c.member_id = ? AND c.role_id = ? ${projectId ? 'AND c.project_id = ?' : ''} ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
     ...(projectId ? [memberId, roleId, projectId] : [memberId, roleId]),

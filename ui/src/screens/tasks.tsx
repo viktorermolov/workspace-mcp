@@ -259,6 +259,7 @@ interface TaskComment {
   actor_kind: string;
   connection_name: string | null;
   claimed_role: string | null;
+  agent?: string | null;
   created_at: string;
 }
 
@@ -506,6 +507,7 @@ function TaskExtras({ task, onChange }: { task: TaskFull; onChange: () => void }
           <li key={c.id}>
             <div class="small muted">
               {c.actor_kind === 'owner' ? 'You' : (c.connection_name ?? 'agent')}
+              {c.agent ? `: ${c.agent}` : ''}
               {c.claimed_role ? ` as @${c.claimed_role}` : ''} · <Time at={c.created_at} />
             </div>
             <pre class="prose">{c.body}</pre>

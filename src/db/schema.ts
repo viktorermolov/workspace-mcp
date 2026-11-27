@@ -543,4 +543,16 @@ SELECT b.id, b.role_id FROM agent_backfill b WHERE EXISTS (SELECT 1 FROM agent a
 DROP TABLE agent_backfill;
 `,
   },
+  // Step 2 of decision 0006: a call may name its agent; the records keep it next to the role.
+  {
+    id: 9,
+    name: 'agent-authorship',
+    sql: `
+ALTER TABLE event ADD COLUMN agent TEXT;
+ALTER TABLE version ADD COLUMN agent TEXT;
+ALTER TABLE task_comment ADD COLUMN agent TEXT;
+ALTER TABLE checkpoint ADD COLUMN agent TEXT;
+ALTER TABLE review_reply ADD COLUMN agent TEXT;
+`,
+  },
 ];

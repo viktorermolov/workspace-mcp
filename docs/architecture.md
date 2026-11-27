@@ -81,7 +81,7 @@ Every workspace table has a `member_id`. Today there is exactly one member, the 
 | `idempotency` | Keys that make creates safe to retry. |
 | `start_cursor` | Per connection and role, the event id of the previous `start`, for "changes since your last call". |
 | `connection`, `connection_role` | OAuth clients the owner approved and named, with last activity and revocation, and the confirmed or suggested list of roles each connection may sign writes as. |
-| `agent`, `agent_role` | Named bots on a platform (a connection), each with the roles it may take (decision 0006). Kept by the owner; MCP can read them in `start` and cannot change them. Like connections, they are not part of a zip export (a SQLite backup keeps them); checks on writes still use `connection_role`. |
+| `agent`, `agent_role` | Named bots on a platform (a connection), each with the roles it may take (decision 0006). Kept by the owner; MCP can read them in `start` and cannot change them. Like connections, they are not part of a zip export (a SQLite backup keeps them); a call that names its agent is checked against the agent's roles, and one that does not is checked against `connection_role`. `event`, `version`, `task_comment`, `review_reply` and `checkpoint` have an `agent` column with the slug the caller named. |
 | `oauth_diag` | Steps of authorization attempts, without secrets. |
 | `setup_code` | Hashes of setup and recovery codes. |
 | `search_fts` | FTS5 index of titles and bodies. |

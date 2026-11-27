@@ -19,7 +19,7 @@ import {
 } from './entities.ts';
 import { getReviewComment, listReviewSearch, openReviewComments, searchReviewHits, startReviewComments } from './reviews.ts';
 import { listRoutines, requireRoutine, routineSummary, routineView } from './routines.ts';
-import { agentSummaries } from './agents.ts';
+import { agentSelf, agentSummaries } from './agents.ts';
 
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
 
@@ -322,6 +322,7 @@ export function changes(db: DB, memberId: string, input: { cursor?: number; limi
         at: e.at,
         by: actorLabel(e),
         claimed_role: e.claimed_role,
+        ...(e.agent ? { agent: e.agent } : {}),
         owner_role,
         whose: editedWhoseLabel(owner_role, e.claimed_role),
         entity_type: e.entity_type,
@@ -351,6 +352,7 @@ export const SAFETY_RULE =
 export const START_LIST_MAX = 50;
 
 export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget?: number; project?: string } = {}) {
+  const self = actor.agent ? agentSelf(db, actor.memberId, actor.agent) : undefined;
   const memberId = actor.memberId;
   const rules = getRules(db, memberId);
   const projectRow = opts.project ? findProject(db, memberId, opts.project) : undefined;
@@ -459,6 +461,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       save_state_rule: SAVE_STATE_RULE,
       safety_rule: SAFETY_RULE,
       ...(role ? { role_instruction: instr === null ? roleInstruction : preview(roleInstruction!, instr), role: role.slug } : {}),
+      ...(self ? { agent: self } : {}),
       ...(instr === null
         ? {}
         : {

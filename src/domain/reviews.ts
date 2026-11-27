@@ -642,7 +642,7 @@ export function replyReviewComment(
       const at = now();
       run(
         db,
-        'INSERT INTO review_reply (id, member_id, comment_id, body, actor_kind, connection_id, connection_name, claimed_role, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO review_reply (id, member_id, comment_id, body, actor_kind, connection_id, connection_name, claimed_role, agent, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
         replyId,
         actor.memberId,
         c.id,
@@ -651,6 +651,7 @@ export function replyReviewComment(
         actor.connectionId ?? null,
         actor.connectionName ?? null,
         actor.role ?? null,
+        actor.agent ?? null,
         at,
       );
       if (statusChanged) {

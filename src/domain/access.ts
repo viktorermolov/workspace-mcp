@@ -121,8 +121,10 @@ const SYNONYM_WARNING =
  * In warn mode, problems are returned as additive warnings and the write may proceed.
  * In enforce mode, missing claimed_role is invalid; any other failure is forbidden.
  */
-export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | undefined, opts?: { synonym?: string }): Actor {
+export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | undefined, opts?: { synonym?: string; agent?: string }): Actor {
   if (actor.kind !== 'agent') return actor;
+  const named = resolveNamedAgent(db, actor, opts?.agent);
+  actor = { ...actor, agent: named?.slug };
 
   let claimed = claimedRole?.trim() || undefined;
   let usedSynonym = false;
@@ -174,6 +176,20 @@ export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | un
     return { ...actor, role: role.slug };
   }
 
+  if (named) {
+    // A named agent answers with its own role list; the connection's flat list is for calls that name no agent.
+    if (!agentMayTake(db, named.id, role.id)) {
+      const message = `agent "${named.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles on the Connections screen`;
+      if (mode === 'enforce') {
+        auditRoleCheck(db, actor, 'rejected', { reason: 'agent_role_not_allowed', claimed_role: role.slug, agent: named.slug });
+        throw new DomainError('forbidden', message);
+      }
+      addWarning({ code: 'agent_role_not_allowed', message });
+      auditRoleCheck(db, actor, 'warning', { reason: 'agent_role_not_allowed', claimed_role: role.slug, agent: named.slug });
+    }
+    return { ...actor, role: role.slug };
+  }
+
   if (!isRoleAllowedForConnection(db, actor.connectionId, role.id)) {
     const confirmed = connectionHasConfirmedList(db, actor.connectionId);
     const message = confirmed
@@ -190,12 +206,52 @@ export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | un
   return { ...actor, role: role.slug };
 }
 
+function agentMayTake(db: DB, agentId: string, roleId: string): boolean {
+  return !!get(db, 'SELECT 1 FROM agent_role ar JOIN role r ON r.id = ar.role_id WHERE ar.agent_id = ? AND ar.role_id = ? AND r.archived_at IS NULL', agentId, roleId);
+}
+
+/**
+ * Checks the agent a caller named: it must exist and run on the caller's platform. The server can
+ * verify only the platform, so this guards against mix-ups, not against a hostile caller.
+ * Naming no agent is allowed; when the platform has agents, the response says so once.
+ * In warn mode a wrong name is reported and not recorded; in enforce it is forbidden.
+ */
+export function resolveNamedAgent(db: DB, actor: Actor, agentRef: string | undefined): { id: string; slug: string } | undefined {
+  if (actor.kind !== 'agent') return undefined;
+  const ref = agentRef?.trim();
+  if (!ref) {
+    if (actor.connectionId && get(db, 'SELECT 1 FROM agent WHERE client_id = ? LIMIT 1', actor.connectionId)) {
+      addWarning({ code: 'agent_missing', message: 'This platform has named agents: pass agent (your agent slug from start, data.agents) so the log shows who made the change.' });
+    }
+    return undefined;
+  }
+  const mode = getEnforcement(db, actor.memberId);
+  const a = get<{ id: string; slug: string; client_id: string }>(db, 'SELECT id, slug, client_id FROM agent WHERE member_id = ? AND (id = ? OR slug = ?)', actor.memberId, ref, ref);
+  const problem = !a
+    ? { code: 'agent_not_found', message: `agent not found: ${ref}` }
+    : a.client_id !== actor.connectionId
+      ? { code: 'agent_wrong_platform', message: `agent "${a.slug}" does not run on this platform` }
+      : undefined;
+  if (!problem) return { id: a!.id, slug: a!.slug };
+  if (mode === 'enforce') {
+    auditRoleCheck(db, actor, 'rejected', { reason: problem.code, agent: ref });
+    throw new DomainError('forbidden', problem.message);
+  }
+  addWarning(problem);
+  auditRoleCheck(db, actor, 'warning', { reason: problem.code, agent: ref });
+  return undefined;
+}
+
 /** For start: in enforce, the requested role must be on the confirmed list. */
 export function assertStartRole(db: DB, actor: Actor, roleRef: string): void {
   if (actor.kind !== 'agent' || !actor.connectionId) return;
   const role = roleByRef(db, actor.memberId, roleRef, true);
   if (!role) return; // startView already handles unknown roles
   const mode = getEnforcement(db, actor.memberId);
+  if (actor.agent) {
+    const a = get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND slug = ? AND client_id = ?', actor.memberId, actor.agent, actor.connectionId);
+    if (a && agentMayTake(db, a.id, role.id)) return;
+  }
   if (isRoleAllowedForConnection(db, actor.connectionId, role.id)) return;
   const confirmed = connectionHasConfirmedList(db, actor.connectionId);
   const message = confirmed
