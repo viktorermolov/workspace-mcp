@@ -337,6 +337,10 @@ describe('tasks addressed to an agent', () => {
     const found = await call<{ results: { id: string; title: string }[] }>(grok, 'search', { types: ['task'] });
     const forHal = found.results.find((t) => t.title === 'For Hal')!;
     await assert.rejects(call(grok, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'ada' }), (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message));
+    // A call without agent is not the addressee, on another platform or on the addressee's own.
+    for (const c of [grok, other]) {
+      await assert.rejects(call(c, 'claim_task', { id: forHal.id, claimed_role: 'developer' }), (e) => err(e).error === 'conflict' && /addressed to agent "hal".*named no agent/.test(err(e).message));
+    }
     const claimed = await call<Task>(other, 'claim_task', { id: forHal.id, claimed_role: 'developer', agent: 'hal' });
     assert.deepEqual(claimed.claimed_by?.agent, 'hal');
   });
