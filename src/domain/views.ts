@@ -418,7 +418,9 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   let seenUpTo = latest;
   if (prev) {
     const ch = changes(db, memberId, { cursor: prev.last_event_id, limit: 30 });
-    since = { since_event: prev.last_event_id, events: ch.events, has_more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
+    // Fields that are empty for an event are left out, so the list costs an agent less to read.
+    const events = ch.events.map((e) => Object.fromEntries(Object.entries(e).filter(([, v]) => v !== null && v !== undefined)));
+    since = { since_event: prev.last_event_id, events, has_more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
     if (ch.has_more) seenUpTo = ch.next_cursor;
   }
   run(
@@ -474,9 +476,10 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       ...out,
       roles: roles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, area: preview(r.area, pv), parent: r.parent_id ? (roleSlugById.get(r.parent_id) ?? null) : null })),
       ...(roles.length > START_LIST_MAX ? { more_roles: roles.length - START_LIST_MAX } : {}),
+      // Archived roles keep their slugs reserved, so only the slugs are listed; search with include_archived finds the rest.
       ...(archivedRoles.length
         ? {
-            archived_roles: archivedRoles.slice(0, START_LIST_MAX).map((r) => ({ id: r.id, slug: r.slug, name: r.name, archived: true })),
+            archived_role_slugs: archivedRoles.slice(0, START_LIST_MAX).map((r) => r.slug),
             ...(archivedRoles.length > START_LIST_MAX ? { more_archived_roles: archivedRoles.length - START_LIST_MAX } : {}),
           }
         : {}),
@@ -502,7 +505,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     },
   });
   const BUDGET = opts.budget ?? MAX_RESPONSE_CHARS - 16 * 1024;
-  const fits = (v: unknown) => JSON.stringify(v, null, 1).length <= BUDGET;
+  const fits = (v: unknown) => JSON.stringify(v).length <= BUDGET;
   let result = build(LIMITS.preview, 4000, null, 'full');
   if (fits(result)) return result;
   result = build(100, 500, null, 'full');
