@@ -1,3 +1,4 @@
+import { worksWith } from '../works-with.ts';
 import { Markdown } from '../markdown.ts';
 import { groupChanges } from '../changes.ts';
 import { useEffect, useState } from 'preact/hooks';
@@ -198,11 +199,19 @@ export function RoleScreen({ id }: { id: string }) {
   const role = useData(() => (isNew ? Promise.resolve(null) : api<RoleFull>(`/entity/role/${enc(id)}`)), [id]);
   const choices = useData(() => api<{ roles: { slug: string; name: string }[] }>('/choices'));
   // Tasks, routines, agents and the last checkpoint of the role come from the same view the Map uses.
-  const map = useData(() => (isNew ? Promise.resolve(null) : api<{ roles: RoleOverview[] }>('/map')), [id]);
+  const map = useData(
+    () =>
+      isNew
+        ? Promise.resolve(null)
+        : api<{ roles: RoleOverview[]; links: { from: string; to: string; type: string }[]; interactions: { from: string; to: string; kind: string; count: number }[] }>('/map'),
+    [id],
+  );
   // A role that was just created stays in the form, so its links and reporting line can be set at once.
   const [editing, setEditing] = useState(isNew || new URLSearchParams(location.search).has('edit'));
   const r = role.data;
   const o = r ? map.data?.roles.find((x) => x.slug === r.slug) : undefined;
+  // Declared links and recorded hand-offs, in both directions, in words.
+  const works = r && map.data ? worksWith(r.slug, map.data.links, map.data.interactions) : [];
   return (
     <Page
       title={isNew ? 'New role' : (r?.name ?? 'Role')}
@@ -285,6 +294,23 @@ export function RoleScreen({ id }: { id: string }) {
                   <RoutineItem key={rt.id} routine={rt} />
                 ))}
               </ul>
+            )}
+
+            {works.length > 0 && (
+              <>
+                <div class="section-head">
+                  <h2>Works with</h2>
+                </div>
+                <ul class="plain small works-with">
+                  {works.map((w, i) => (
+                    <li key={i}>
+                      {w.before}
+                      <a href={`/roles/${enc(w.other)}`}>@{w.other}</a>
+                      {w.after}
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
 
             {o?.last_checkpoint && (

@@ -114,7 +114,8 @@ test('owner creates roles, a project and a task', async () => {
 
   await go('Map');
   await expect(page.locator('.graph')).toBeVisible();
-  await expect(page.locator('.card').filter({ hasText: 'Writer' }).getByText('1 open')).toBeVisible();
+  // The tree card of a role carries its open-task count; the details are on the role page.
+  await expect(page.locator('.graph-card[data-slug="writer"]')).toContainText('1 open');
   await go('Tasks');
   await expect(page.getByText('Draft the intro')).toBeVisible();
 });
@@ -143,7 +144,17 @@ test('the map lays a parent and child out as a tree, including at 390×844', asy
   const graph = page.locator('.graph');
   await expect(graph).toBeVisible();
   await expect(graph).toHaveAttribute('data-layout', 'tree');
-  await expect(page.locator('.card').filter({ hasText: 'Writer' }).getByText('Morning check')).toBeVisible();
+  // The map lists each role once, in the tree; a tap opens the role page, where its routines are.
+  await expect(page.locator('.cards')).toHaveCount(0);
+  await page.locator('.graph-card[data-slug="writer"]').click();
+  await expect(page).toHaveURL(/\/roles\/writer$/);
+  await expect(page.locator('.routine-item').filter({ hasText: 'Morning check' })).toBeVisible();
+  await expect(page.locator('.role-view')).toContainText('reports to Editor');
+  await expect(page.locator('.works-with')).toHaveText('is delegated to by @editor');
+  await page.goto('/roles/editor');
+  await expect(page.locator('.works-with')).toContainText('@writer reports to it');
+  await page.goto('/');
+  await expect(graph).toBeVisible();
 
   const box = async (slug: string) => {
     const b = await page.locator(`.graph-card[data-slug="${slug}"]`).boundingBox();
