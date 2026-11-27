@@ -58,6 +58,7 @@ describe('role checks on writes', () => {
         [9, 'agent-authorship'],
         [10, 'task-for-agent'],
         [11, 'role-routes-tasks'],
+        [12, 'agents-skipped-by-slug'],
       ],
     );
   });

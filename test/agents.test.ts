@@ -174,6 +174,73 @@ describe('agents on a platform', () => {
 });
 
 describe('agents migration', () => {
+  it('migration 12 adds an agent migration 8 skipped over a slug collision, and only that', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
+    const db = openDatabase(path.join(dir, 'w.sqlite'));
+    const apply = (id: number, at: string) =>
+      tx(db, () => {
+        const m = migrations.find((x) => x.id === id)!;
+        db.exec(m.sql);
+        run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, at);
+      });
+    const pairs = () =>
+      all<{ client_id: string; role: string }>(db, 'SELECT a.client_id, r.slug AS role FROM agent a JOIN agent_role ar ON ar.agent_id = a.id JOIN role r ON r.id = ar.role_id ORDER BY a.client_id, r.slug').map((p) => `${p.client_id}/${p.role}`);
+    try {
+      db.exec('CREATE TABLE app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+      for (const m of migrations.filter((x) => x.id < 8)) tx(db, () => db.exec(m.sql));
+      const t = '2026-01-01T00:00:00.000Z';
+      run(db, "INSERT INTO member (id, name, is_owner, created_at) VALUES ('mem_1', 'Owner', 1, ?)", t);
+      for (const [id, slug] of [['role_b', 'builder'], ['role_b2', 'builder-2'], ['role_x', 'extra']] as const) {
+        run(db, 'INSERT INTO role (id, member_id, slug, name, created_at, updated_at) VALUES (?,?,?,?,?,?)', id, 'mem_1', slug, slug, t, t);
+      }
+      for (const [id, created] of [['cA', '2026-01-01T00:00:00.000Z'], ['cB', '2026-01-02T00:00:00.000Z']] as const) {
+        run(db, 'INSERT INTO connection (client_id, member_id, name, created_at, approved_at, roles_confirmed_at) VALUES (?,?,?,?,?,?)', id, 'mem_1', id, created, created, t);
+      }
+      // The case from #154: A is confirmed for builder and builder-2, B (newer) for builder, whose numbered slug is builder-2.
+      for (const [c, r] of [['cA', 'role_b'], ['cA', 'role_b2'], ['cB', 'role_b']] as const) run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES (?, ?, 'owner')", c, r);
+      apply(8, '2026-02-01T00:00:00.000Z');
+      assert.equal(pairs().length, 2, 'migration 8 skips one of the three pairs');
+      for (const id of [9, 10, 11]) apply(id, '2026-02-01T00:00:00.000Z');
+      // Confirmed after migration 8: no agent for it is the owner's state, not a skipped one.
+      run(db, "INSERT INTO connection (client_id, member_id, name, created_at, approved_at, roles_confirmed_at) VALUES ('cC', 'mem_1', 'cC', ?, ?, '2026-03-01T00:00:00.000Z')", t, t);
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('cC', 'role_x', 'owner')");
+
+      apply(12, '2026-04-01T00:00:00.000Z');
+      assert.deepEqual(pairs(), ['cA/builder', 'cA/builder-2', 'cB/builder']);
+      const slugs = all<{ slug: string }>(db, 'SELECT slug FROM agent ORDER BY slug').map((a) => a.slug);
+      assert.equal(new Set(slugs).size, 3);
+      assert.ok(slugs.some((x) => /^builder(-2)?-[0-9a-f]{6}$/.test(x)), slugs.join());
+      assert.equal(get(db, "SELECT 1 FROM sqlite_master WHERE name = 'agent_backfill'"), undefined);
+    } finally {
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 12 adds nothing once the owner has changed any agent', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
+    const db = openDatabase(path.join(dir, 'w.sqlite'));
+    try {
+      db.exec('CREATE TABLE app_migration (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+      const t = '2026-01-01T00:00:00.000Z';
+      for (const m of migrations.filter((x) => x.id < 12)) {
+        tx(db, () => db.exec(m.sql));
+        run(db, 'INSERT INTO app_migration (id, name, applied_at) VALUES (?, ?, ?)', m.id, m.name, '2026-02-01T00:00:00.000Z');
+      }
+      run(db, "INSERT INTO member (id, name, is_owner, created_at) VALUES ('mem_1', 'Owner', 1, ?)", t);
+      run(db, "INSERT INTO role (id, member_id, slug, name, created_at, updated_at) VALUES ('role_b', 'mem_1', 'builder', 'Builder', ?, ?)", t, t);
+      run(db, "INSERT INTO connection (client_id, member_id, name, created_at, approved_at, roles_confirmed_at) VALUES ('cA', 'mem_1', 'cA', ?, ?, ?)", t, t, t);
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('cA', 'role_b', 'owner')");
+      // The owner removed the agent migration 8 made: the pair has no agent on purpose.
+      run(db, "INSERT INTO event (member_id, at, actor_kind, entity_type, action, summary) VALUES ('mem_1', ?, 'owner', 'agent', 'agent.deleted', 'Agent removed')", t);
+      tx(db, () => db.exec(migrations.find((m) => m.id === 12)!.sql));
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 0);
+    } finally {
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('creates agents only from the roles the owner confirmed for a connection', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
     const db = openDatabase(path.join(dir, 'w.sqlite'));
