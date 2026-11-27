@@ -82,6 +82,8 @@ With a query, results are ranked by SQLite FTS5 relevance with a short snippet, 
 
 Like `changes`, a page ends with `has_more` and `next_cursor`: while `has_more` is true, pass `next_cursor` to read on; otherwise `has_more` is false and `next_cursor` is `null`. If `total_exact` is also `false`, the search stopped early and there may be more matches: narrow the query or the filters to find them.
 
+`for_agent` (an agent slug) narrows the result to tasks addressed to that agent or taken by it; other types have no agent and are left out. It combines with `query`, `role`, `project` and `status`. An unknown agent is `invalid`.
+
 ### `save_role`
 
 Input: `id` and `rev` (for updates), `name`, `slug`, `area` (area of responsibility), `instruction`, `setup_notes` (what a new platform must recreate by hand: connectors, wake-up triggers; structured schedules belong in `save_routine`), `links` (array of `{to, type}`; the type is free-form, for example `delegates_to` or `reviews`; replaces all links of the role), `parent` (slug or id of the role this one reports to, or `null` to clear; omitted, the parent is left unchanged), `note` (stored with a new instruction version), `claimed_role`, `idempotency_key`.

@@ -216,6 +216,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         status: z.array(z.string().max(40)).max(10).optional().describe('Statuses to include (task, issue, routine or review_comment).'),
         role: z.string().max(200).optional(),
         project: z.string().max(200).optional(),
+        for_agent: z.string().max(200).optional().describe('An agent slug: only tasks addressed to that agent or taken by it.'),
         include_archived: z.boolean().optional(),
         limit: z.number().int().min(1).max(LIMITS.listMax).optional(),
         cursor: z.string().max(100).optional(),
