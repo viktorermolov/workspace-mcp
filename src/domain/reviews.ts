@@ -19,9 +19,10 @@ import {
   type VersionRow,
 } from './core.ts';
 
-export const TARGET_TYPES = ['rules', 'role', 'project', 'document'] as const;
+export const TARGET_TYPES = ['rules', 'role', 'project', 'document', 'routine'] as const;
 export type ReviewTargetType = (typeof TARGET_TYPES)[number];
-export const REVIEW_FIELDS = ['text', 'instruction', 'setup_notes', 'description', 'body'] as const;
+/** `item` is a comment on the whole item (a routine): no version, no line range, nothing to re-anchor. */
+export const REVIEW_FIELDS = ['text', 'instruction', 'setup_notes', 'description', 'body', 'item'] as const;
 export type ReviewField = (typeof REVIEW_FIELDS)[number];
 export const REVIEW_STATUSES = ['open', 'answered', 'resolved'] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
@@ -33,6 +34,7 @@ const FIELDS: Record<ReviewTargetType, readonly ReviewField[]> = {
   role: ['instruction', 'setup_notes'],
   project: ['description'],
   document: ['body'],
+  routine: ['item'],
 };
 
 const VERSION_FIELD: Record<ReviewTargetType, ReviewField> = {
@@ -40,6 +42,7 @@ const VERSION_FIELD: Record<ReviewTargetType, ReviewField> = {
   role: 'instruction',
   project: 'description',
   document: 'body',
+  routine: 'item',
 };
 
 const TARGET_TABLE: Record<ReviewTargetType, string> = {
@@ -47,6 +50,7 @@ const TARGET_TABLE: Record<ReviewTargetType, string> = {
   role: 'role',
   project: 'project',
   document: 'document',
+  routine: 'routine',
 };
 
 /** One budget for remapping every open or answered comment on a new version. */
@@ -325,6 +329,9 @@ export function responsibleRoleId(db: DB, c: Pick<ReviewCommentRow, 'member_id' 
     const d = get<{ scope_type: string; scope_id: string | null }>(db, 'SELECT scope_type, scope_id FROM document WHERE id = ?', c.target_id);
     return d ? documentOwnerRoleId(db, d) : null;
   }
+  if (c.target_type === 'routine') {
+    return get<{ role_id: string | null }>(db, 'SELECT role_id FROM routine WHERE id = ?', c.target_id)?.role_id ?? null;
+  }
   return null;
 }
 
@@ -489,7 +496,10 @@ export function createReviewComment(
       let lineEnd = input.line_end ?? null;
       let state: AnchorState = 'none';
 
-      if (field === 'setup_notes') {
+      if (field === 'item') {
+        lineStart = null;
+        lineEnd = null;
+      } else if (field === 'setup_notes') {
         const role = get<{ setup_notes: string }>(db, 'SELECT setup_notes FROM role WHERE id = ?', target.id);
         if (!role) throw notFound('role', target.id);
         const text = role.setup_notes ?? '';
@@ -1209,7 +1219,7 @@ export function attachReviewHooks(): void {
 
 /** Deletes comments and setup-notes history for a purged entity. Call while purge_guard is set, before versions. */
 export function purgeReviewData(db: DB, type: string, id: string): void {
-  if (type === 'role' || type === 'project' || type === 'document' || type === 'rules') {
+  if (type === 'role' || type === 'project' || type === 'document' || type === 'rules' || type === 'routine') {
     const comments = all<{ id: string }>(db, 'SELECT id FROM review_comment WHERE target_type = ? AND target_id = ?', type, id);
     for (const c of comments) {
       run(db, 'DELETE FROM review_reply WHERE comment_id = ?', c.id);

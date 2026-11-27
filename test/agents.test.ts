@@ -387,3 +387,60 @@ describe('tasks addressed to an agent', () => {
     assert.deepEqual({ ...row }, { agent_id: null, role: 'developer' });
   });
 });
+
+describe('owner comments reach the responsible agent', () => {
+  let env: TestEnv;
+  let owner: Browser;
+  let grok: Awaited<ReturnType<typeof connectAgent>>['client'];
+  type Start = {
+    data: {
+      owner_comments_waiting_on_tasks?: { task_id: string; title: string; comment: string }[];
+      review_comments?: { id: string; target_type: string; target_id: string; body: string }[];
+    };
+  };
+
+  before(async () => {
+    env = await startService();
+    owner = (await registerOwner(env)).browser;
+    await owner.json('/api/owner/roles', { json: { name: 'Developer', slug: 'developer' } });
+    await owner.json('/api/owner/roles', { json: { name: 'Marketer', slug: 'marketer' } });
+    grok = (await connectAgent(env, owner, 'Grok')).client;
+  });
+
+  after(async () => {
+    await env.close();
+  });
+
+  it('an owner comment on a task shows in start for the task role until an agent answers', async () => {
+    const task = await call<{ id: string }>(grok, 'save_task', { title: 'Ship it', role: 'developer', claimed_role: 'developer' });
+    await call(grok, 'comment_task', { id: task.id, body: 'Started.', claimed_role: 'developer' });
+    assert.equal((await call<Start>(grok, 'start', { role: 'developer' })).data.owner_comments_waiting_on_tasks, undefined);
+    await owner.json(`/api/owner/tasks/${task.id}/comment`, { json: { body: 'Why is this taking so long?' } });
+    const waiting = (await call<Start>(grok, 'start', { role: 'developer' })).data.owner_comments_waiting_on_tasks;
+    assert.deepEqual(waiting?.map((c) => [c.task_id, c.title, c.comment]), [[task.id, 'Ship it', 'Why is this taking so long?']]);
+    assert.equal((await call<Start>(grok, 'start', { role: 'marketer' })).data.owner_comments_waiting_on_tasks, undefined);
+    await call(grok, 'comment_task', { id: task.id, body: 'Blocked on review, done tomorrow.', claimed_role: 'developer' });
+    assert.equal((await call<Start>(grok, 'start', { role: 'developer' })).data.owner_comments_waiting_on_tasks, undefined);
+  });
+
+  it('the owner comments on a routine, its role sees and answers it, and the owner resolves it', async () => {
+    const routine = await call<{ id: string }>(grok, 'save_routine', { name: 'Morning brief', role: 'developer', schedule: '30 8 * * 1-5', claimed_role: 'developer' });
+    const comment = await owner.json<{ id: string; target_type: string; anchor_state: string; responsible_role: string }>('/api/owner/reviews', {
+      json: { target_type: 'routine', target_id: routine.id, field: 'item', body: 'Too early, move it to 9:30.' },
+    });
+    assert.deepEqual([comment.target_type, comment.anchor_state, comment.responsible_role], ['routine', 'none', 'developer']);
+    const start = await call<Start>(grok, 'start', { role: 'developer' });
+    assert.deepEqual(start.data.review_comments?.map((c) => [c.id, c.target_type, c.target_id]), [[comment.id, 'routine', routine.id]]);
+    assert.equal((await call<Start>(grok, 'start', { role: 'marketer' })).data.review_comments?.length ?? 0, 0);
+    const got = await call<{ open_review_comments: { id: string }[] }>(grok, 'get', { type: 'routine', id: routine.id });
+    assert.deepEqual(got.open_review_comments.map((c) => c.id), [comment.id]);
+    const replied = await call<{ status: string }>(grok, 'reply_review_comment', { id: comment.id, body: 'Moved to 9:30.', status: 'answered', claimed_role: 'developer' });
+    assert.equal(replied.status, 'answered');
+    const bad = await owner.fetch('/api/owner/reviews', { json: { target_type: 'routine', target_id: routine.id, field: 'body', body: 'x' } });
+    assert.equal(bad.status, 400);
+    // Deleting the routine removes its comments.
+    await owner.json('/api/owner/archive', { json: { type: 'routine', id: routine.id } });
+    await owner.json('/api/owner/purge', { json: { type: 'routine', id: routine.id } });
+    assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM review_comment WHERE target_id = ?', routine.id)!.n, 0);
+  });
+});
