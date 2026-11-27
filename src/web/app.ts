@@ -6,6 +6,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { CLIENT_IP_HEADER, type Auth } from '../auth/auth.ts';
+import { completePendingBind } from '../auth/connections.ts';
 import { classifyAuthPath, recordDiag, safeParams } from '../auth/diagnostics.ts';
 import { hasOwner, verifyCode } from '../auth/setup.ts';
 import type { Config } from '../config.ts';
@@ -122,6 +123,19 @@ export function createApp(deps: AppDeps) {
     }
     const res = await auth.handler(req);
     if (step) await diagAuth(db, step, req, url, form, res);
+    if (step === 'token' && res.ok) {
+      const grant = form instanceof URLSearchParams ? form.get('grant_type') : typeof form?.grant_type === 'string' ? form.grant_type : null;
+      if (grant === 'authorization_code') {
+        const clientId = tokenRequestClientId(req, form);
+        if (clientId) {
+          try {
+            completePendingBind(db, clientId);
+          } catch (e) {
+            log.error('pending client bind failed after token exchange', { error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+      }
+    }
     return res;
   });
 
@@ -214,6 +228,27 @@ function withCors(res: Response): Response {
   r.headers.set('access-control-allow-methods', 'GET, OPTIONS');
   r.headers.set('access-control-allow-headers', 'mcp-protocol-version, authorization, content-type');
   return r;
+}
+
+/** client_id from a token request body or HTTP Basic client authentication. */
+function tokenRequestClientId(req: Request, form: URLSearchParams | Record<string, unknown> | null): string | null {
+  if (form instanceof URLSearchParams) {
+    const id = form.get('client_id');
+    if (id) return id;
+  } else if (form && typeof form.client_id === 'string' && form.client_id) {
+    return form.client_id;
+  }
+  const header = req.headers.get('authorization');
+  if (header?.startsWith('Basic ')) {
+    try {
+      const decoded = atob(header.slice(6).trim());
+      const id = decoded.split(':')[0];
+      if (id) return id;
+    } catch {
+      // ignore malformed basic auth
+    }
+  }
+  return null;
 }
 
 export function sameOrigin(c: Context, origin: string): boolean {

@@ -381,7 +381,7 @@ describe('migration 7 upgrade from a populated 0.2.0 database', () => {
     );
 
     const applied = runAppMigrations(db);
-    assert.equal(applied, 11);
+    assert.equal(applied, 12);
     assert.equal(get<{ name: string }>(db, 'SELECT name FROM app_migration WHERE id = 5')!.name, 'role_parent');
     assert.equal(get<{ name: string }>(db, 'SELECT name FROM app_migration WHERE id = 6')!.name, 'review-comments');
     assert.equal(get<{ name: string }>(db, 'SELECT name FROM app_migration WHERE id = 7')!.name, 'github-issue-roles');
