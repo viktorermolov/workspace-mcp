@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- The first `start` by agent name alone continued from the platform's role-less marker instead of the marker of the role the bot had been starting with, so changes were shown again or `changes_since_previous_start` was `null` and they were never shown. It now continues from the marker of the agent's role; for an agent with several roles from the oldest of their markers, so nothing is skipped and a change already seen under one role may be shown once more. (#172)
+
 ### Added
 
 - `search` takes `for_agent`: only tasks addressed to that agent or taken by it. Task results show `for_agent` when the task is addressed. The `agent_missing` warning now also says what to do when the client's tools have no `agent` argument: the connector holds the tool list from before agents existed and has to be reconnected. (#165)

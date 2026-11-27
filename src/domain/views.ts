@@ -458,8 +458,17 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   const key = self ? `${roleKey}@${self.slug}` : roleKey;
   const connKey = actor.connectionId ?? 'owner';
   const cursorOf = (k: string) => get<{ last_event_id: number }>(db, 'SELECT last_event_id FROM start_cursor WHERE connection_id = ? AND role_key = ?', connKey, k);
-  // The first start by name continues from the marker the platform had for the role before agents had their own.
-  const prev = cursorOf(key) ?? (self ? cursorOf(roleKey) : undefined);
+  // The first start by name continues from the markers the platform had before agents had their own (#172).
+  // With a role, that is the role's marker. By name alone it is the marker of the agent's role, which is what
+  // the bot started with until now; with several roles the oldest of them, so nothing is skipped (a change
+  // already seen under a newer one may be shown once more). Only without any of these: the role-less marker.
+  const inherited = (): { last_event_id: number } | undefined => {
+    if (!self) return undefined;
+    if (roleRef) return cursorOf(roleKey);
+    const ofRoles = blocks.flatMap((b) => cursorOf(b.view.id) ?? []);
+    return ofRoles.sort((a, b) => a.last_event_id - b.last_event_id)[0] ?? cursorOf('*');
+  };
+  const prev = cursorOf(key) ?? inherited();
   const latest = latestEventId(db, memberId);
   let since: unknown = null;
   // The cursor moves only past the events shown: when more than fit, the next start continues
