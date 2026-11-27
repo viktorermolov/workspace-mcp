@@ -95,6 +95,13 @@ function actorHasEditAny(db: DB, actor: Actor): boolean {
   return !!r && !r.archived_at && r.edit_any === 1;
 }
 
+/** A role the owner marked as a coordinator: it may address any task to an agent (for_agent), and nothing more. */
+export function actorRoutesTasks(db: DB, actor: Actor): boolean {
+  if (actor.kind !== 'agent' || !actor.role) return false;
+  const r = get<{ routes_tasks: number }>(db, 'SELECT routes_tasks FROM role WHERE member_id = ? AND (id = ? OR slug = ?) AND archived_at IS NULL', actor.memberId, actor.role, actor.role);
+  return r?.routes_tasks === 1;
+}
+
 export function auditRoleCheck(
   db: DB,
   actor: Actor,
@@ -542,6 +549,17 @@ export function setRoleEditAny(db: DB, actor: Actor, roleRef: string, editAny: b
   });
 }
 
+export function setRoleRoutesTasks(db: DB, actor: Actor, roleRef: string, routes: boolean): void {
+  if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can mark a role as allowed to address tasks to agents');
+  const role = roleByRef(db, actor.memberId, roleRef, true);
+  if (!role) throw new DomainError('not_found', `role not found: ${roleRef}`);
+  run(db, 'UPDATE role SET routes_tasks = ?, updated_at = ? WHERE id = ?', routes ? 1 : 0, now(), role.id);
+  recordEvent(db, actor, 'role', role.id, 'role.privilege_updated', `Role "${role.name}" ${routes ? 'may' : 'may no longer'} address any task to an agent`, {
+    routes_tasks: routes,
+    owner_role: role.slug,
+  });
+}
+
 export function setEnforcement(
   db: DB,
   actor: Actor,
@@ -598,15 +616,15 @@ export function connectionAccessView(db: DB, memberId: string, clientId: string)
 }
 
 export function workspaceAccessSettings(db: DB, memberId: string) {
-  const roles = all<{ id: string; slug: string; name: string; edit_any: number }>(
+  const roles = all<{ id: string; slug: string; name: string; edit_any: number; routes_tasks: number }>(
     db,
-    'SELECT id, slug, name, edit_any FROM role WHERE member_id = ? AND archived_at IS NULL ORDER BY name',
+    'SELECT id, slug, name, edit_any, routes_tasks FROM role WHERE member_id = ? AND archived_at IS NULL ORDER BY name',
     memberId,
   );
   return {
     role_enforcement: getEnforcement(db, memberId),
     unconfirmed_active: unconfirmedActiveConnections(db, memberId),
-    roles: roles.map((r) => ({ id: r.id, slug: r.slug, name: r.name, edit_any: r.edit_any === 1 })),
+    roles: roles.map((r) => ({ id: r.id, slug: r.slug, name: r.name, edit_any: r.edit_any === 1, routes_tasks: r.routes_tasks === 1 })),
   };
 }
 

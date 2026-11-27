@@ -563,4 +563,12 @@ ALTER TABLE task ADD COLUMN claimed_agent TEXT;
 CREATE INDEX task_agent ON task (agent_id);
 `,
   },
+  // #148: a role the owner marks may address any task to an agent, without the right to edit any item.
+  {
+    id: 11,
+    name: 'role-routes-tasks',
+    sql: `
+ALTER TABLE role ADD COLUMN routes_tasks INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];
