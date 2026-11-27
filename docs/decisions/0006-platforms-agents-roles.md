@@ -33,3 +33,49 @@ Delivery, each step leaving a working release:
 ## Why
 
 The agent is the thing the owner names, watches and talks to, and the role is what is portable between platforms; keeping them in one record forced one of the two to be wrong. A single list (agents and their roles) replaces the flat role list per connection instead of adding a second mechanism. Starting with a record that changes no check lets the data move first and the rules follow.
+
+## How this was reached
+
+This section is for a reviewer who was not in the discussion. It records the path, including the proposals that were dropped, so the implementation can be checked against the reasoning. The discussion was between Viktor and Claude on 26 November 2026, after Viktor asked for a review of the project's design, code and decisions and said he was not satisfied with the design.
+
+### What the review found
+
+The code was judged sound: one transaction per change with its log entry and version, immutable history, conflict checks, OAuth and passkeys from a maintained library, outbound requests protected against internal addresses. The weak points were elsewhere:
+
+- **Interface.** The Map showed every role twice (the tree, then the same roles as cards in a different order). The change feed was the raw log, so one new task produced two cards. Reading and editing the same item lived in separate sections. The menu had 16 flat entries.
+- **`start`.** The response limit is 512 KiB, far more than an agent's context can hold, and a call without a role was mostly archived test roles and unrelated log events.
+- **`rev` and `version`.** Two similar numbers that agents mix up.
+- **Documentation drift.** README and architecture said 16 tools; there are 18.
+
+### Proposals that were withdrawn, and why
+
+Claude first read the product as a store for agents with a secondary web interface, and proposed three things that Viktor corrected:
+
+1. *"The main user is the agent; the web interface is for rare checks."* Wrong. Viktor uses the web interface as the one place to see every agent's instruction, tasks and routines across platforms, because the platforms themselves make this hard to view. The interface is a primary part of the product.
+2. *"Owner comments with re-anchoring were not worth building."* Wrong for the same reason: comments are how Viktor steers agents. He wants them on instructions, tasks and routines. Today they cover versioned text only; tasks have a separate, simpler comment and routines have none (step 3 below closes this).
+3. *"Go back to a role being only a label and drop the checks."* Withdrawn once the real setup was clear: one platform (Grok) runs several agents, so a list of who may act as what on a platform has a real use.
+
+Then two models of the role were tried and rejected before the final one:
+
+4. *"A role is an agent on a platform, so a role has one current platform."* Rejected by Viktor's next example: "developer" can be taken by an agent on Grok and by an agent on Claude, a coordinator may give a task to either, and a single agent on another platform may take "developer" for one task and "marketer" for the next. A role is therefore a function with an instruction, and the many-to-many link between platforms and roles was right.
+5. *"Keep two records and write the agent's name into the role name."* This is what the live workspace did ("<agent> — coordinator"). Viktor's statement that settled it: the agent is one thing on one platform, and coordinator is its role. Two records cannot express that without one of them being wrong, so the agent became a third record.
+
+### Choices inside the decision
+
+- **No per-agent keys.** Already considered and dropped in [0002](0002-role-checks-on-writes.md). The server can verify only the platform; the agent's name and role are checked against the owner's lists. This protects against mix-ups, which is the actual problem, and stays simple.
+- **Agents are kept by the owner only.** They say who may act as what, so they sit with connections and enforcement, outside MCP.
+- **Step 1 changes no check.** The data moves first (migration 8 creates agents from what each connection is listed for or has already written as), so an upgrade cannot lock out a working bot. The checks follow in step 2, and calls that do not name an agent keep working with a warning.
+- **Nothing to re-enter.** Viktor asked for the change to be carried out without manual work, so the migration fills agents in, named after their role; renaming them is optional.
+- **Agents are not in a zip export.** They point at a connection, and connections are never exported.
+- **The interface work comes last** (step 4), because what the map and the pages show depends on agents existing.
+
+### How the work is carried out
+
+Viktor asked Claude to implement all four steps from start to finish and said that for this work the pull requests are merged by Claude on green CI, without waiting for Dev Guardian's PASS; he will send the Grok team to review everything afterwards. This is his exception for this piece of work, not a change to [CONTRIBUTING](../../CONTRIBUTING.md). Releases are not part of the exception: no release pull request is opened, and changes stay under `[Unreleased]` until Viktor says yes.
+
+### What a reviewer should check
+
+- Migration 8 on a copy of the live database: the agents it creates match what each platform really does, and `connection_role` is unchanged.
+- Step 2: a call that names an agent from another platform, or a role the agent may not take, is refused once enforcement is on and only warned about before that; a call that names no agent still works.
+- That no MCP tool can create, change or remove an agent.
+- Existing test expectations that changed are only the counts and lists of migrations.
