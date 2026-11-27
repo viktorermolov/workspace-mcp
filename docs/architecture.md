@@ -48,7 +48,7 @@ Workspace MCP is a modular monolith: one Node.js process, one SQLite file, one c
 | `src/cli.ts`, `bin/` | Offline administration: version, backups, restore, verify, export, import, recovery code. |
 | `src/db/` | Opening the database (WAL, foreign keys, exclusive lock) and the numbered migrations. |
 | `src/domain/` | All workspace logic, shared by MCP and the owner API: `entities.ts` (rules, roles, projects, documents, archive, purge), `routines.ts` (scheduled routines), `tasks.ts` (tasks, claims, comments, dependencies, checkpoints), `reviews.ts` (owner review comments, replies, re-anchoring, setup-notes history), `versions.ts` (history, comparison, rollback), `views.ts` (`start`, `get`, `search`, `changes`), `agents.ts` (agents on a platform and their roles), `access.ts` (connection allow-lists, `claimed_role` checks, who may edit what), `core.ts` (ids, limits, events, versions, search index). |
-| `src/mcp/` | The MCP server and its 16 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
+| `src/mcp/` | The MCP server and its 18 tools (`server.ts`), and the `/mcp` endpoint that checks tokens and serves each request statelessly (`endpoint.ts`). |
 | `src/auth/` | better-auth setup (`auth.ts`), connections and revocation (`connections.ts`), OAuth diagnostics (`diagnostics.ts`), setup and recovery codes (`setup.ts`). |
 | `src/web/` | The HTTP app with security headers and rate limits (`app.ts`), the owner API (`owner-api.ts`) and its read models (`owner-views.ts`). |
 | `src/webhooks/` | Per-role wake-up webhooks: queueing, coalescing, signing, retries (`dispatcher.ts`) and the SSRF-safe sender (`transport.ts`). |

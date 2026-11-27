@@ -79,3 +79,47 @@ Viktor asked Claude to implement all four steps from start to finish and said th
 - Step 2: a call that names an agent from another platform, or a role the agent may not take, is refused once enforcement is on and only warned about before that; a call that names no agent still works.
 - That no MCP tool can create, change or remove an agent.
 - Existing test expectations that changed are only the counts and lists of migrations.
+
+## What was delivered
+
+All four steps are on `master` under `[Unreleased]`. Nothing has been released; the release is Viktor's decision.
+
+| Step | What | Issue | Pull request |
+| --- | --- | --- | --- |
+| 0 | This record and the change to the brief | #106, #111 | #108, #112 |
+| 1 | Agents as a record: migration 8, owner screens, `start` lists agents | #107 | #109 |
+| 2 | Agents name themselves: `agent` on `start` and on writes, checks, the agent in the log, versions, comments and checkpoints (migration 9) | #110 | #113 |
+| 2 | Smaller responses: compact JSON, archived roles by slug, no empty event fields | #114 | #115 |
+| 3 | A task can be addressed to one agent; own checkpoint first (migration 10) | #116 | #117 |
+| 3 | Owner comments reach the agent: waiting task comments in `start`, comments on routines | #118 | #119 |
+| 4 | Change feed grouped by item; sidebar in three groups | #120 | #121 |
+| 4 | Map: platforms with their agents, agents on roles | #122 | #123 |
+| 4 | Rules and role instructions listed with projects and documents | #126 | #127 |
+| 4 | Role page reads first, with tasks, routines and routine comments | #128 | #129 |
+| 4 | Agent page | #130 | #131 |
+| 4 | Project and task pages read first | #132 | #133 |
+| 4 | Map lists each role once; "Works with" on the role page | #134 | #135 |
+
+A defect reported from the live instance during this work was fixed on the way: a document opened from Projects showed its Markdown source (#124, #125).
+
+### Where the result differs from the plan
+
+- **Owner comments on tasks did not become review comments.** A task already has a comment thread the owner can write in, so a second kind of comment on the same page would have been the duplication this work set out to remove. Instead `start` tells the role which of its tasks have an unanswered owner comment. Routines had no comments at all, so they did get review comments (whole item, no line range, nothing to re-anchor).
+- **The reporting tree was kept.** It had just been redesigned (#103) and its browser tests hold. The duplication on the Map was removed from the other side: the second copy of every role (the card grid) is gone, and what only those cards showed moved to the role page.
+- **`start` was trimmed less than first proposed.** Archived roles are still listed, by slug only, because an earlier decision relies on agents seeing that a slug is taken. Events are not filtered by relevance, only stripped of empty fields; filtering would change what "changes since your previous start" means and is left for a separate decision.
+- **Checks still read two lists.** A call that names its agent is checked against the agent's roles; a call that does not is checked against the connection's flat role list, as before. The flat list is not removed, so existing bots keep working. Removing it is a later step once every bot passes `agent`.
+
+### Existing tests that changed
+
+- The list of migrations and the count of pending migrations in four tests, three times (migrations 8, 9 and 10).
+- `test/mcp.test.ts`: `start` lists archived roles in `archived_role_slugs` instead of `archived_roles`.
+- `e2e/workspace.spec.ts`: two flows that opened a role or a task and used the form at once now press **Edit** first, and two assertions that looked at the removed Map cards now check the same facts on the tree card and on the role page.
+
+No test was removed or skipped.
+
+### Not done
+
+- The interface still says "connection" and "role" in most places; only the Map and the new pages speak of platforms and agents.
+- `rev` is still a number that agents can mix up with `version`.
+- The agent's own instruction stays with the role; an agent has no text of its own.
+- Agents are not in a zip export.
