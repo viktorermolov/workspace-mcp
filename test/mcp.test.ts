@@ -283,6 +283,41 @@ describe('MCP behaviour', () => {
     await a.close();
   });
 
+  it('never drops an argument in silence: a write with an unknown argument is refused, a read warns', async () => {
+    const c = (await connectAgent(env, owner, 'Typos')).client;
+    await call(c, 'save_task', { title: 'Guard: open' });
+    const done = await call<{ id: string; rev: number }>(c, 'save_task', { title: 'Guard: done' });
+    await call(c, 'save_task', { id: done.id, rev: done.rev, status: 'done', result: 'ok' });
+    type Found = { results: { title: string; status?: string }[]; warnings?: { code: string; message: string }[] };
+    const mine = (r: Found) => r.results.filter((i) => i.title.startsWith('Guard:')).map((i) => i.title);
+
+    // The reported case: statuses for status. The read answers and says what it ignored.
+    const typo = await call<Found>(c, 'search', { types: ['task'], statuses: ['open', 'in_progress'] });
+    assert.deepEqual(mine(typo).sort(), ['Guard: done', 'Guard: open']);
+    assert.deepEqual((typo.warnings ?? []).map((w) => w.code), ['unknown_arguments']);
+    assert.match(typo.warnings![0]!.message, /search has no argument "statuses" \(did you mean "status"\?\)\. Its arguments: query, types, status, .*It was ignored/);
+    const right = await call<Found>(c, 'search', { types: ['task'], status: ['open', 'in_progress'] });
+    assert.deepEqual(mine(right), ['Guard: open']);
+    assert.equal(right.warnings, undefined);
+    const start = await call<{ data: unknown; warnings?: { code: string }[] }>(c, 'start', { rol: 'x' });
+    assert.ok(start.data);
+    assert.ok(start.warnings!.some((w) => w.code === 'unknown_arguments'));
+
+    // A write changes nothing and says which argument it does not have.
+    const before = get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM task')!.n;
+    await assert.rejects(call(c, 'save_task', { title: 'Guard: lost addressee', for_agnet: 'ada' }), (e) => {
+      const x = err(e) as { error: string; message: string; unknown_arguments?: string[] };
+      return x.error === 'invalid' && /save_task has no argument "for_agnet" \(did you mean "for_agent"\?\).*Nothing was changed/.test(x.message) && x.unknown_arguments?.join() === 'for_agnet';
+    });
+    await assert.rejects(call(c, 'claim_task', { id: done.id, zzz: 1 }), (e) => err(e).error === 'invalid' && /claim_task has no argument "zzz"\. Its arguments:/.test(err(e).message));
+    assert.equal(get<{ n: number }>(env.svc.db, 'SELECT count(*) AS n FROM task')!.n, before);
+    // Every tool is guarded, and each still advertises its arguments.
+    const tools = (await c.listTools()).tools;
+    assert.equal(tools.length, 18);
+    for (const t of tools) assert.ok(t.inputSchema.properties && Object.keys(t.inputSchema.properties).length > 0, t.name);
+    await c.close();
+  });
+
   it('archives and restores, and paginates the change log', async () => {
     const a = (await connectAgent(env, owner, 'Platform H')).client;
     const t = await call(a, 'save_task', { title: 'Temporary', role: 'dev' });

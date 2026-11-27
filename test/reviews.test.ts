@@ -681,9 +681,11 @@ describe('reply_review_comment MCP tool', () => {
       await browser.json(`/api/owner/connections/${encodeURIComponent(clientId)}/roles`, { json: { roles: ['writer'], confirm: true } });
       const out = await call(client, 'reply_review_comment', { id: c.id, body: 'Will do.', status: 'answered', claimed_role: 'writer' });
       assert.equal(out.status, 'answered');
-      const ignored = await call(client, 'reply_review_comment', { id: c.id, body: 'A follow-up.', role: 'writer' });
-      const last = ignored.replies[ignored.replies.length - 1];
-      assert.notEqual(last.author.role, 'writer', 'role is not accepted as a synonym of claimed_role');
+      // role is not a synonym of claimed_role: the call is refused and points at the right name (#157).
+      await assert.rejects(
+        () => call(client, 'reply_review_comment', { id: c.id, body: 'A follow-up.', role: 'writer' }),
+        (e: unknown) => /reply_review_comment has no argument \W+role\W+ .did you mean \W+claimed_role\W+/.test((e as Error).message),
+      );
       const start = await call(client, 'start', { role: 'writer' });
       assert.equal(start.data.review_comments_open_total, 0);
       await client.close();
