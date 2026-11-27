@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- A task of a role that several agents may take must name its agent. `save_task` that creates a task, or changes its role or `for_agent`, without an agent (`for_agent` left out, empty or `null`) for such a role is refused with `invalid`; the error names the role and its agents, and nothing is created or changed. A role with one agent gets that agent, and a role with no agents behaves as before. `for_agent: "*"` is the explicit "any agent of the role" and needs a role. The owner's task form follows the same rule and offers "any agent with the role". Other edits of an existing task are not re-checked. See `docs/decisions/0010-require-for-agent-on-multi-agent-roles.md`. (#181)
+
+### Upgrade
+
+- Calls that create or re-address a task of a role with several agents without naming the agent now fail with `invalid`. Pass the agent's slug in `for_agent`, or `"*"` for any agent of the role; `null` no longer means "any agent" for such a role.
+- Existing tasks with no agent are unchanged by the upgrade and can still be edited. To address one, call `save_task` with its `id`, `rev` and `for_agent` (the owner, its role, or a coordinator role).
+- Roles with one agent are addressed to that agent automatically, and older connectors whose tools have no `for_agent` keep working with no reconnect.
+
 ## [0.6.1] - 2026-11-27
 
 ### Fixed
