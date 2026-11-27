@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-27
+
 ### Added
 
 - `search` takes `for_agent`: only tasks addressed to that agent or taken by it. Task results show `for_agent` when the task is addressed. The `agent_missing` warning now also says what to do when the client's tools have no `agent` argument: the connector holds the tool list from before agents existed and has to be reconnected. (#165)
@@ -17,6 +19,15 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - Two agents of one role on one platform shared the marker for "changes since your previous start", so the first to call `start` used up the changes for the other. A named agent now has its own marker; its first `start` by name continues from the platform's marker for the role. (#162)
+
+### Upgrade
+
+- Upgrading from 0.4.1 applies one additive migration (13) automatically, after a pre-migration backup. Existing data is kept.
+- Nothing changes for a bot until you act: `start` with a role works as before, and the one-agent mark is off for every platform.
+- To let a bot start by name alone, give it the new text from `docs/agent-instruction.md`. A client that connected before 0.4.0 has to be reconnected to see the `agent` argument.
+- If you tick "is the only agent on this platform", calls from that platform that name no agent are checked against that agent's roles instead of the platform's whole list. With enforcement on, a write under a role the platform has and the agent does not is then refused.
+- A named agent's first `start` after the upgrade continues from the platform's marker for the role, so no change is shown twice or skipped.
+- Rollback to 0.4.1 is possible only by restoring the pre-migration backup.
 
 ## [0.4.1] - 2026-11-27
 
