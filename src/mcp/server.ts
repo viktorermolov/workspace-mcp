@@ -76,6 +76,40 @@ function fail(err: unknown) {
   throw err;
 }
 
+type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
+
+/** The known name a misspelled argument most likely stands for: one contains the other, or they differ by up to two edits. */
+function nearestName(name: string, known: string[]): string | undefined {
+  const a = name.toLowerCase();
+  const distance = (x: string, y: string): number => {
+    const row = Array.from({ length: y.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= x.length; i++) {
+      let prev = row[0]!;
+      row[0] = i;
+      for (let j = 1; j <= y.length; j++) {
+        const keep = row[j]!;
+        row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (x[i - 1] === y[j - 1] ? 0 : 1));
+        prev = keep;
+      }
+    }
+    return row[y.length]!;
+  };
+  return known.find((k) => Math.min(k.length, a.length) >= 4 && (a.includes(k) || k.includes(a))) ?? known.map((k) => [k, distance(a, k)] as const).filter(([, d]) => d <= 2).sort((p, q) => p[1] - q[1])[0]?.[0];
+}
+
+/** Adds one warning to a tool result that is a JSON object; an error result is returned as it is. */
+function withWarning(result: ToolResult, warning: { code: string; message: string }): ToolResult {
+  if (result.isError) return result;
+  try {
+    const value = JSON.parse(result.content[0]!.text) as unknown;
+    const base = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : { result: value };
+    const warnings = [...(Array.isArray(base.warnings) ? base.warnings : []), warning];
+    return { content: [{ type: 'text', text: JSON.stringify({ ...base, warnings }) }] };
+  } catch {
+    return result;
+  }
+}
+
 function wrap<A>(fn: (args: A) => unknown) {
   return async (args: A) => {
     try {
@@ -91,6 +125,35 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
   // websiteUrl points clients at the source (AGPL-3.0 section 13).
   const server = new McpServer({ name: SERVER_NAME, version, ...(sourceUrl ? { websiteUrl: sourceUrl } : {}) }, { instructions: SERVER_INSTRUCTIONS });
 
+  /**
+   * Registers a tool and refuses to lose an argument in silence (#157). The SDK drops arguments a schema
+   * does not name, so a misspelled one (statuses for status, for_agnet for for_agent) used to give a
+   * normal answer computed without it. A write with an unknown argument is refused before anything is
+   * changed. A read is answered without it and carries a warning that names what was ignored.
+   */
+  function register<S extends z.ZodObject>(
+    name: string,
+    config: { title: string; description: string; inputSchema: S; annotations: { readOnlyHint: boolean } & Record<string, unknown> },
+    handler: (args: z.infer<S>) => Promise<ToolResult>,
+  ): void {
+    const known = Object.keys(config.inputSchema.shape);
+    const guarded = async (raw: Record<string, unknown>): Promise<ToolResult> => {
+      const unknown = Object.keys(raw).filter((k) => !known.includes(k));
+      if (unknown.length === 0) return handler(raw as z.infer<S>);
+      const named = unknown.map((k) => {
+        const near = nearestName(k, known);
+        return near ? `"${k}" (did you mean "${near}"?)` : `"${k}"`;
+      });
+      const what = `${name} has no argument ${named.join(', ')}. Its arguments: ${known.join(', ')}.`;
+      if (!config.annotations.readOnlyHint) {
+        return fail(new DomainError('invalid', `${what} Nothing was changed.`, { unknown_arguments: unknown }));
+      }
+      const clean = Object.fromEntries(Object.entries(raw).filter(([k]) => known.includes(k)));
+      return withWarning(await handler(clean as z.infer<S>), { code: 'unknown_arguments', message: `${what} It was ignored, so this answer does not reflect it.` });
+    };
+    server.registerTool(name, { ...config, inputSchema: config.inputSchema.loose() }, guarded as never);
+  }
+
   function writeWrap<A>(claimedOf: (args: A) => { claimed?: string; synonym?: string }, fn: (args: A, actor: Actor) => unknown) {
     return wrap((args: A) => {
       const { value, warnings } = runWithWarnings(() => {
@@ -103,7 +166,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
   }
   const claimed = <A extends { claimed_role?: string }>(args: A) => ({ claimed: args.claimed_role });
 
-  server.registerTool(
+  register(
     'start',
     {
       title: 'Start here',
@@ -130,7 +193,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     }),
   );
 
-  server.registerTool(
+  register(
     'get',
     {
       title: 'Get by id',
@@ -142,7 +205,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     wrap(({ type, id: ref, cursor }) => getEntity(db, actorOf().memberId, type, ref, { cursor })),
   );
 
-  server.registerTool(
+  register(
     'search',
     {
       title: 'Search and list',
@@ -162,7 +225,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     wrap((args) => search(db, actorOf().memberId, args)),
   );
 
-  server.registerTool(
+  register(
     'save_role',
     {
       title: 'Create or update a role',
@@ -186,7 +249,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveRole(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'save_routine',
     {
       title: 'Create or update a routine',
@@ -211,7 +274,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveRoutine(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'save_project',
     {
       title: 'Create or update a project',
@@ -235,7 +298,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveProject(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'save_document',
     {
       title: 'Create or update a document',
@@ -256,7 +319,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveDocument(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'update_rules',
     {
       title: 'Update or create a rules set',
@@ -277,7 +340,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => updateRules(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'save_task',
     {
       title: 'Create or update a task',
@@ -305,7 +368,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => saveTask(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'claim_task',
     {
       title: 'Claim a task',
@@ -320,7 +383,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap((a) => ({ claimed: a.claimed_role, synonym: a.role }), ({ id: taskId, role }, actor) => claimTask(db, actor, { id: taskId, role })),
   );
 
-  server.registerTool(
+  register(
     'comment_task',
     {
       title: 'Comment on a task',
@@ -331,7 +394,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => commentTask(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'reply_review_comment',
     {
       title: 'Reply to a review comment',
@@ -351,7 +414,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => replyReviewComment(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'archive',
     {
       title: 'Archive or restore',
@@ -362,7 +425,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ type, id: ref, restore, claimed_role: _c }, actor) => setArchived(db, actor, type, ref, !restore)),
   );
 
-  server.registerTool(
+  register(
     'versions',
     {
       title: 'Version history',
@@ -395,7 +458,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     }),
   );
 
-  server.registerTool(
+  register(
     'rollback',
     {
       title: 'Roll back to a version',
@@ -406,7 +469,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ type, id: ref, to_version, rev: r, note: n }, actor) => rollback(db, actor, type, ref, to_version, r, n)),
   );
 
-  server.registerTool(
+  register(
     'checkpoint',
     {
       title: 'Write a checkpoint',
@@ -425,7 +488,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap((a) => ({ claimed: a.claimed_role, synonym: a.role }), (input, actor) => writeCheckpoint(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'set_issue_role',
     {
       title: 'Set the role on a mirrored GitHub issue',
@@ -443,7 +506,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
     writeWrap(claimed, ({ claimed_role: _c, ...input }, actor) => setMirroredIssueRole(db, actor, input)),
   );
 
-  server.registerTool(
+  register(
     'changes',
     {
       title: 'Changes by cursor',

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- A misspelled tool argument is no longer dropped in silence. Every tool used to accept arguments it does not have and answer as if they were not there, so `search` with `statuses` instead of `status` returned tasks in every status. A write with an unknown argument is now refused before anything changes (`invalid`, with the argument, the likely intended name and the tool's arguments). A read is answered without it and carries an `unknown_arguments` warning. **A bot that passes a stray argument on a write will now get an error** instead of a quiet success. (#157)
+
 ## [0.4.0] - 2026-11-26
 
 ### Added

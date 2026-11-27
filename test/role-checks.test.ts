@@ -229,12 +229,16 @@ describe('role checks on writes', () => {
       },
     );
 
-    // MCP cannot grant edit_any (the field is stripped by the tool schema and rejected in the domain).
+    // MCP cannot grant edit_any: the tool has no such argument and refuses the call (#157), and the domain rejects it too.
     const roleBefore = await call<{ edit_any: boolean; rev: number }>(agent, 'get', { type: 'role', id: leadId });
     assert.equal(roleBefore.edit_any, false);
-    await call(agent, 'save_role', { id: leadId, rev: roleBefore.rev, area: 'still lead', claimed_role: 'lead', edit_any: true });
+    await assert.rejects(
+      () => call(agent, 'save_role', { id: leadId, rev: roleBefore.rev, area: 'still lead', claimed_role: 'lead', edit_any: true }),
+      (e: unknown) => /save_role has no argument \W+edit_any\W+/.test((e as Error).message),
+    );
     const roleAfterMcp = await call<{ edit_any: boolean; rev: number }>(agent, 'get', { type: 'role', id: leadId });
     assert.equal(roleAfterMcp.edit_any, false);
+    assert.equal(roleAfterMcp.rev, roleBefore.rev);
 
     const agentActor: Actor = { kind: 'agent', memberId, connectionId: clientId, connectionName: 'Grok', role: 'lead' };
     assert.throws(

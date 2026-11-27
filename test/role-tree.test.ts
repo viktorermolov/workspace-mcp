@@ -325,13 +325,11 @@ describe('role reporting tree', () => {
 
   it('save_role has no reports_to synonym for parent', async () => {
     const intern = await roleOf('intern');
-    const out = await call<{ parent: { slug: string } | null }>(agent, 'save_role', {
-      id: intern.id,
-      rev: intern.rev,
-      reports_to: 'lead',
-      claimed_role: 'intern',
-    });
-    assert.equal(out.parent, intern.parent);
+    // Not a synonym: the call is refused and names the unknown argument (#157), instead of being accepted without it.
+    await assert.rejects(
+      () => call(agent, 'save_role', { id: intern.id, rev: intern.rev, reports_to: 'lead', claimed_role: 'intern' }),
+      (e: unknown) => /save_role has no argument \W+reports_to\W+/.test((e as Error).message),
+    );
     const intern2 = await roleOf('intern');
     assert.equal(intern2.parent, null);
   });
