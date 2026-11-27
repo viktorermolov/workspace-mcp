@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { CLIENT_IP_HEADER, type Auth } from '../auth/auth.ts';
-import { approveConnection, clientInfo, getConnection, listConnections, listUnapprovedClients, renameConnection, revokeConnection } from '../auth/connections.ts';
+import { approveConnection, clientInfo, getConnection, liveConnectionForClient, listConnections, listUnapprovedClients, pendingTransfer, reauthContinueOptions, renameConnection, revokeConnection, rollbackClientTransfer } from '../auth/connections.ts';
 import { listDiag, recordDiag } from '../auth/diagnostics.ts';
 import { issueCode } from '../auth/setup.ts';
 import type { Config } from '../config.ts';
@@ -92,14 +92,37 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     const id = c.req.query('client_id') ?? '';
     const info = clientInfo(db, id);
     if (!info) return c.json({ error: 'not_found', message: 'Unknown client' }, 404);
-    return c.json({ client: info, connection: getConnection(db, id) ?? null });
+    const live = liveConnectionForClient(db, id);
+    const byPk = getConnection(db, id);
+    const connection = live ?? (byPk && !byPk.merged_into_client_id ? byPk : null);
+    return c.json({ client: info, connection, continue_with: reauthContinueOptions(db, actor(c).memberId, id) });
   });
   api.post('/consent', async (c) => {
-    const b = await body<{ oauth_query?: string; accept?: boolean; name?: string }>(c);
+    const b = await body<{ oauth_query?: string; accept?: boolean; name?: string; continue_client_id?: string | null }>(c);
     if (typeof b.oauth_query !== 'string' || b.oauth_query.length > 8000) throw new DomainError('invalid', 'oauth_query is required');
     const clientId = new URLSearchParams(b.oauth_query).get('client_id');
     if (!clientId) throw new DomainError('invalid', 'oauth_query has no client_id');
     if (b.accept && !(typeof b.name === 'string' && b.name.trim())) throw new DomainError('invalid', 'Name the connection');
+    const options = reauthContinueOptions(db, actor(c).memberId, clientId);
+    let continueClientId: string | null | undefined;
+    let autoContinue = false;
+    if (b.accept) {
+      if (options.mode === 'auto') {
+        autoContinue = true;
+        continueClientId = options.target.client_id;
+      } else if (options.mode === 'choice') {
+        if (b.continue_client_id === null || b.continue_client_id === '') {
+          continueClientId = null;
+        } else if (typeof b.continue_client_id === 'string') {
+          if (!options.candidates.some((x) => x.client_id === b.continue_client_id)) {
+            throw new DomainError('invalid', 'That platform is not a candidate for this client');
+          }
+          continueClientId = b.continue_client_id;
+        } else {
+          throw new DomainError('invalid', 'Choose to continue an existing platform or create a new one');
+        }
+      }
+    }
     const res = await auth.handler(
       new Request(`${config.publicUrl}/api/auth/oauth2/consent`, {
         method: 'POST',
@@ -108,11 +131,11 @@ export function createOwnerApi(deps: OwnerApiDeps) {
       }),
     );
     const out = (await res.json().catch(() => ({}))) as { url?: string; redirect?: boolean; error?: string; error_description?: string; message?: string };
-    recordDiag(db, { step: 'consent', client_id: clientId, method: 'POST', path: '/oauth2/consent', status: res.status, outcome: res.ok && out.url ? 'ok' : 'error', detail: res.ok ? { accepted: !!b.accept } : { error: out.error ?? null } });
+    recordDiag(db, { step: 'consent', client_id: clientId, method: 'POST', path: '/oauth2/consent', status: res.status, outcome: res.ok && out.url ? 'ok' : 'error', detail: res.ok ? { accepted: !!b.accept, continue_client_id: continueClientId ?? null, auto: autoContinue } : { error: out.error ?? null } });
     if (!res.ok || !out.url) {
       return c.json({ error: out.error ?? 'consent_failed', message: out.error_description ?? out.message ?? 'The authorization request is invalid or expired. Start the connection again from the platform.' }, 400);
     }
-    if (b.accept) approveConnection(db, actor(c), clientId, b.name!);
+    if (b.accept) approveConnection(db, actor(c), clientId, b.name!, { continueClientId, autoContinue });
     return c.json({ url: out.url });
   });
 
@@ -157,6 +180,13 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     return c.json({ ok: true });
   });
   api.post('/connections/:id/revoke', (c) => c.json({ revoked: revokeConnection(db, actor(c), c.req.param('id')) }));
+  api.post('/connections/:id/rollback-transfer', (c) => {
+    const id = c.req.param('id');
+    if (!getConnection(db, id)) throw new DomainError('not_found', 'connection not found');
+    if (!pendingTransfer(db, id)) throw new DomainError('conflict', 'There is no client transfer to roll back on this platform');
+    return c.json(rollbackClientTransfer(db, actor(c), id));
+  });
+
   api.post('/connections/:id/rename', async (c) => {
     const b = await body<{ name?: string }>(c);
     if (typeof b.name !== 'string' || !b.name.trim()) throw new DomainError('invalid', 'name is required');
@@ -195,7 +225,10 @@ export function createOwnerApi(deps: OwnerApiDeps) {
   api.delete('/clients/:id', async (c) => {
     const id = c.req.param('id');
     const conn = getConnection(db, id);
-    if (conn && !conn.revoked_at) throw new DomainError('invalid', 'Revoke the connection first');
+    if (conn && !conn.revoked_at && !conn.merged_into_client_id) throw new DomainError('invalid', 'Revoke the connection first');
+    if (liveConnectionForClient(db, id) || get(db, 'SELECT 1 FROM connection WHERE current_client_id = ?', id)) {
+      throw new DomainError('invalid', 'This client is bound to a platform; revoke the platform first');
+    }
     await auth.api.deleteOAuthClient({ headers: c.req.raw.headers, body: { client_id: id } });
     return c.json({ ok: true });
   });

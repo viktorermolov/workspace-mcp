@@ -137,9 +137,31 @@ export function LoginScreen() {
   );
 }
 
+interface ContinueTarget {
+  client_id: string;
+  name: string;
+  agents: number;
+  roles: { slug: string; name: string }[];
+  sole_agent: boolean;
+}
+
+type ContinueWith =
+  | { mode: 'auto'; target: ContinueTarget }
+  | { mode: 'choice'; candidates: ContinueTarget[] }
+  | { mode: 'new' };
+
 interface ConsentInfo {
   client: { client_id: string; name: string | null; uri: string | null; redirect_uris: string[]; registration: string; created_at: string | null };
   connection: { name: string; approved_at: string | null; revoked_at: string | null } | null;
+  continue_with: ContinueWith;
+}
+
+function platformSummary(t: ContinueTarget): string {
+  const bits = [`${t.agents} ${t.agents === 1 ? 'agent' : 'agents'}`];
+  if (t.roles.length) bits.push(`roles ${t.roles.map((r) => r.name).join(', ')}`);
+  else bits.push('no confirmed roles');
+  if (t.sole_agent) bits.push('sole agent');
+  return bits.join(', ');
 }
 
 /** OAuth consent: shows who asks and where the answer goes, and names the connection. */
@@ -149,6 +171,7 @@ export function ConsentScreen() {
   const clientId = params.get('client_id') ?? '';
   const redirect = params.get('redirect_uri') ?? '';
   const [name, setName] = useState('');
+  const [choice, setChoice] = useState<string>(''); // '' = new platform
   const act = useAction();
   const info = useData(async () => {
     try {
@@ -165,12 +188,23 @@ export function ConsentScreen() {
     const c = info.data;
     // The suggested name fills only an empty field: this runs after the screen is shown, and the owner
     // may already have typed a name by then.
-    if (c) setName((typed) => typed || (c.connection?.name ?? c.client.name ?? ''));
+    if (c) {
+      const suggested = c.continue_with.mode === 'auto' ? c.continue_with.target.name : (c.connection?.name ?? c.client.name ?? '');
+      setName((typed) => typed || suggested);
+    }
   }, [info.data]);
 
   const decide = (accept: boolean) =>
     act.run(async () => {
-      const r = await post<{ url: string }>('/consent', { accept, name: name.trim(), oauth_query: oauthQuery });
+      const cont = info.data?.continue_with;
+      const autoName = cont?.mode === 'auto' ? cont.target.name : '';
+      const body: { accept: boolean; name: string; oauth_query: string; continue_client_id?: string | null } = {
+        accept,
+        name: name.trim() || autoName,
+        oauth_query: oauthQuery,
+      };
+      if (accept && cont?.mode === 'choice') body.continue_client_id = choice || null;
+      const r = await post<{ url: string }>('/consent', body);
       location.assign(r.url);
     });
 
@@ -222,12 +256,36 @@ export function ConsentScreen() {
             )}
           </dl>
           <p class="muted small">Approve only a connection you started yourself just now. You can revoke it at any time under Platforms.</p>
-          <Field label="Name this platform" hint="For example Grok or Claude. Shown in the log next to everything it does.">
-            <input value={name} maxLength={100} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="For example: Claude on my phone" />
-          </Field>
+          {info.data.continue_with.mode === 'auto' && (
+            <p class="notice" role="status">
+              Continues platform {info.data.continue_with.target.name}: {platformSummary(info.data.continue_with.target)}.
+            </p>
+          )}
+          {info.data.continue_with.mode === 'choice' && (
+            <fieldset class="stack">
+              <legend>This client can continue an existing platform, or start a new one</legend>
+              {info.data.continue_with.candidates.map((t) => (
+                <label class="row" key={t.client_id}>
+                  <input type="radio" name="continue" checked={choice === t.client_id} onChange={() => setChoice(t.client_id)} />
+                  <span>
+                    Continue platform {t.name}: {platformSummary(t)}
+                  </span>
+                </label>
+              ))}
+              <label class="row">
+                <input type="radio" name="continue" checked={choice === ''} onChange={() => setChoice('')} />
+                <span>New platform</span>
+              </label>
+            </fieldset>
+          )}
+          {info.data.continue_with.mode !== 'auto' && (
+            <Field label="Name this platform" hint="For example Grok or Claude. Shown in the log next to everything it does.">
+              <input value={name} maxLength={100} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="For example: Claude on my phone" />
+            </Field>
+          )}
           {act.error && <Alert>{act.error}</Alert>}
           <div class="row">
-            <Button kind="primary" onClick={() => decide(true)} busy={act.busy} disabled={!name.trim()}>
+            <Button kind="primary" onClick={() => decide(true)} busy={act.busy} disabled={info.data.continue_with.mode !== 'auto' && !name.trim()}>
               Approve
             </Button>
             <Button onClick={() => decide(false)} busy={act.busy}>
