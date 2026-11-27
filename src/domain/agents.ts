@@ -3,14 +3,16 @@ import { checkLen, checkRev, DomainError, invalid, LIMITS, newId, notFound, reco
 import { agentMayTake, isRoleAllowedForConnection, roleByRef } from './access.ts';
 
 /**
- * An agent is a named bot on one platform (an approved connection) with the roles it may take
+ * An agent is a named bot on one platform (an approved connection) with the roles it may take. After a zip
+ * import an agent has no platform until the owner attaches it to one; until then it can do nothing.
  * (decision 0006). Only the owner creates, changes or removes agents; MCP can read them.
  * The server can verify only the platform, so this is a record the owner keeps, not an identity check.
  */
 export interface AgentRow {
   id: string;
   member_id: string;
-  client_id: string;
+  /** null: imported and not yet attached to a platform. */
+  client_id: string | null;
   slug: string;
   name: string;
   rev: number;
@@ -39,12 +41,12 @@ function agentRoles(db: DB, agentId: string) {
 }
 
 export function agentView(db: DB, a: AgentRow) {
-  const c = get<{ name: string; revoked_at: string | null }>(db, 'SELECT name, revoked_at FROM connection WHERE client_id = ?', a.client_id);
+  const c = a.client_id ? get<{ name: string; revoked_at: string | null }>(db, 'SELECT name, revoked_at FROM connection WHERE client_id = ?', a.client_id) : undefined;
   return {
     id: a.id,
     slug: a.slug,
     name: a.name,
-    platform: { id: a.client_id, name: c?.name ?? a.client_id, active: !!c && !c.revoked_at },
+    platform: a.client_id ? { id: a.client_id, name: c?.name ?? a.client_id, active: !!c && !c.revoked_at } : null,
     // usable: the role is also on the platform's confirmed list, so the agent can really act as it.
     roles: agentRoles(db, a.id).map((r) => ({ id: r.id, slug: r.slug, name: r.name, archived: !!r.archived_at, usable: agentMayTake(db, a.id, r.id) })),
     rev: a.rev,
@@ -188,20 +190,22 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       throw invalid(`an agent's slug cannot be changed: its history, checkpoints and claims are recorded under "${a.slug}". Change the name, or remove the agent and add a new one`);
     }
     const moved = input.platform !== undefined && input.platform !== a.client_id;
-    const platform = requirePlatform(db, actor.memberId, moved ? input.platform! : a.client_id, moved);
+    const platform = moved ? requirePlatform(db, actor.memberId, input.platform!) : a.client_id ? requirePlatform(db, actor.memberId, a.client_id, false) : undefined;
     const held = agentRoles(db, a.id);
     if (moved) {
       sets.push('client_id = ?');
-      vals.push(platform.client_id);
+      vals.push(platform!.client_id);
       changed.push('platform');
       // On a new platform every role must be confirmed there, also the ones the agent keeps.
-      if (input.roles === undefined) assertOnPlatform(db, platform, held.filter((r) => !r.archived_at));
+      if (input.roles === undefined) assertOnPlatform(db, platform!, held.filter((r) => !r.archived_at));
     }
     if (input.roles !== undefined) {
       const next = resolveRoles(db, actor.memberId, input.roles);
       const heldIds = new Set(held.map((r) => r.id));
       // A role the agent already holds may stay while its platform list is unconfirmed; only what is added is checked.
-      assertOnPlatform(db, platform, moved ? next : next.filter((r) => !heldIds.has(r.id)));
+      const added = moved ? next : next.filter((r) => !heldIds.has(r.id));
+      if (!platform && added.length) throw invalid(`agent "${a.slug}" has no platform yet: attach it to a platform before giving it roles`);
+      if (platform) assertOnPlatform(db, platform, added);
       const before = held
         .map((r) => r.id)
         .sort();
@@ -215,7 +219,7 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
     vals.push(now(), a.id);
     run(db, `UPDATE agent SET ${sets.join(', ')} WHERE id = ?`, ...vals);
     const view = agentView(db, requireAgent(db, actor.memberId, a.id));
-    recordEvent(db, actor, 'agent', a.id, 'agent.updated', `Agent "${view.name}" updated: ${changed.join(', ')}`, { changed, slug: view.slug, platform: view.platform.name, roles: view.roles.map((r) => r.slug) });
+    recordEvent(db, actor, 'agent', a.id, 'agent.updated', `Agent "${view.name}" updated: ${changed.join(', ')}`, { changed, slug: view.slug, platform: view.platform?.name ?? null, roles: view.roles.map((r) => r.slug) });
     return view;
   });
 }
@@ -236,7 +240,7 @@ export function agentSelf(db: DB, memberId: string, ref: string) {
   const a = findAgent(db, memberId, ref);
   if (!a) return undefined;
   const v = agentView(db, a);
-  return { slug: v.slug, name: v.name, platform: v.platform.name, roles: v.roles.filter((r) => r.usable).map((r) => r.slug) };
+  return { slug: v.slug, name: v.name, platform: v.platform?.name ?? null, roles: v.roles.filter((r) => r.usable).map((r) => r.slug) };
 }
 
 /**
@@ -251,27 +255,24 @@ export function agentOverview(db: DB, memberId: string, ref: string) {
   const addressed = all<Parameters<typeof task>[0]>(db, `SELECT ${cols} WHERE t.member_id = ? AND t.agent_id = ? AND ${open} ORDER BY t.updated_at DESC LIMIT 50`, memberId, a.id).map(task);
   const claimed = all<Parameters<typeof task>[0]>(
     db,
-    `SELECT ${cols} WHERE t.member_id = ? AND t.claimed_agent = ? AND t.claimed_by = ? AND (t.agent_id IS NULL OR t.agent_id <> ?) AND ${open} ORDER BY t.updated_at DESC LIMIT 50`,
+    `SELECT ${cols} WHERE t.member_id = ? AND t.claimed_agent = ? AND (t.agent_id IS NULL OR t.agent_id <> ?) AND ${open} ORDER BY t.updated_at DESC LIMIT 50`,
     memberId,
     a.slug,
-    a.client_id,
     a.id,
   ).map(task);
   const checkpoint = get<{ id: string; done: string; stopped_at: string; next: string; created_at: string; role: string; project: string | null }>(
     db,
     `SELECT c.id, c.done, c.stopped_at, c.next, c.created_at, r.slug AS role, p.slug AS project FROM checkpoint c
      JOIN role r ON r.id = c.role_id LEFT JOIN project p ON p.id = c.project_id
-     WHERE c.member_id = ? AND c.agent = ? AND c.connection_id = ? ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
+     WHERE c.member_id = ? AND c.agent = ? ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1`,
     memberId,
     a.slug,
-    a.client_id,
   );
   const recent = all<{ id: number; at: string; claimed_role: string | null; entity_type: string; entity_id: string | null; action: string; summary: string }>(
     db,
-    'SELECT id, at, claimed_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND agent = ? AND connection_id = ? ORDER BY id DESC LIMIT 20',
+    'SELECT id, at, claimed_role, entity_type, entity_id, action, summary FROM event WHERE member_id = ? AND agent = ? ORDER BY id DESC LIMIT 20',
     memberId,
     a.slug,
-    a.client_id,
   );
   return { ...agentView(db, a), tasks_for_agent: addressed, tasks_claimed: claimed, last_checkpoint: checkpoint ?? null, recent };
 }

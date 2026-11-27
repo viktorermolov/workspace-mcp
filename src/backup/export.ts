@@ -15,6 +15,7 @@ import { applyImportedParentLinks, omitParentColumn, parentSpecFor } from './par
  *   workspace.json  every workspace table (structure, links, full version history, log)
  *   *.md            readable views (rules, roles, routines, projects, documents, tasks) with YAML front matter
  * Secrets, tokens, webhooks, connections and github_config (the encrypted GitHub token) are never included.
+ * Agents are included without their platform (a connection), which the owner sets again after an import.
  * The local GitHub mirror (repositories, default role, assigners, and issues including their role label) is included so a zip import can restore them; the owner reconnects the token after import.
  * Import reads workspace.json only; the Markdown files are views for people and other tools.
  */
@@ -30,6 +31,8 @@ const TABLES: { name: string; member: boolean; order: string }[] = [
   { name: 'version', member: true, order: 'id' },
   { name: 'role', member: true, order: 'created_at, id' },
   { name: 'setup_notes_history', member: true, order: 'id' },
+  { name: 'agent', member: true, order: 'created_at, id' },
+  { name: 'agent_role', member: false, order: 'agent_id, role_id' },
   { name: 'role_link', member: true, order: 'created_at, id' },
   { name: 'routine', member: true, order: 'created_at, id' },
   { name: 'project', member: true, order: 'created_at, id' },
@@ -79,9 +82,17 @@ function tableRows(db: DB, memberId: string, t: (typeof TABLES)[number]): Rows {
   if (t.name === 'github_repo_assigner') {
     return all(db, 'SELECT a.repo_id, a.role_id FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? ORDER BY a.repo_id, a.role_id', memberId);
   }
+  if (t.name === 'agent_role') {
+    return all(db, 'SELECT ar.agent_id, ar.role_id FROM agent_role ar JOIN agent a ON a.id = ar.agent_id WHERE a.member_id = ? ORDER BY ar.agent_id, ar.role_id', memberId);
+  }
   const rows = all<Record<string, unknown>>(db, `SELECT * FROM ${t.name} WHERE member_id = ? ORDER BY ${t.order}`, memberId);
-  // Agents belong to a connection and are not exported, so a task leaves without its addressee (it keeps its role).
-  return t.name === 'task' ? rows.map((r) => ({ ...r, agent_id: null })) : rows;
+  // Connections are never exported, so an agent leaves without its platform: the name is kept for the reader,
+  // and after an import the owner attaches the agent to a platform again. Its roles and tasks stay with it.
+  if (t.name === 'agent') {
+    const names = new Map(all<{ client_id: string; name: string }>(db, 'SELECT client_id, name FROM connection WHERE member_id = ?', memberId).map((c) => [c.client_id, c.name]));
+    return rows.map((r) => ({ ...r, client_id: null, platform_name: names.get(String(r.client_id)) ?? null }));
+  }
+  return rows;
 }
 
 /** Builds the export zip for one member. */
@@ -250,7 +261,7 @@ export function readExport(zip: Uint8Array): { manifest: Manifest; data: { membe
 
 /** True when the member has no content (only the empty rules row created at first start). */
 export function isWorkspaceEmpty(db: DB, memberId: string): boolean {
-  for (const t of ['version', 'role', 'project', 'document', 'task', 'checkpoint', 'routine', 'github_repo', 'github_issue']) {
+  for (const t of ['version', 'role', 'agent', 'project', 'document', 'task', 'checkpoint', 'routine', 'github_repo', 'github_issue']) {
     if (get(db, `SELECT 1 FROM ${t} WHERE member_id = ? LIMIT 1`, memberId)) return false;
   }
   if (get(db, 'SELECT 1 FROM github_repo_assigner a JOIN github_repo r ON r.id = a.repo_id WHERE r.member_id = ? LIMIT 1', memberId)) return false;
@@ -321,7 +332,7 @@ export function importExport(db: DB, memberId: string, zip: Uint8Array): { count
           vals.entity_id = defaultRulesId;
         }
         if (t.name === 'event') vals.id = Number(vals.id) + offset;
-        if (t.name === 'task') vals.agent_id = null;
+        if (t.name === 'agent') vals.client_id = null;
         if (parentSpec) vals = omitParentColumn(vals, parentSpec);
         if (t.name === 'github_repo') importedRoleOrThrow(db, memberId, vals.default_role_id, 'github_repo.default_role_id');
         if (t.name === 'github_repo_assigner') importedRoleOrThrow(db, memberId, vals.role_id, 'github_repo_assigner.role_id');

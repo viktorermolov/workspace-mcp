@@ -88,7 +88,7 @@ tasks/<title>-<id>.md  each task with its fields, comments and result
 
 The Markdown files have YAML front matter with ids, links and times, so the folder opens in Obsidian or any editor. `workspace.json` is the complete data and is what import reads.
 
-An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, and no GitHub token (`github_config`). The local GitHub mirror (`github_repo`, including `default_role_id`; `github_repo_assigner`; and `github_issue`, including the role label) is included so those settings and labels survive a move.
+An export never contains secrets or live access: no OAuth clients, tokens, sessions or passkeys, no webhook URLs or secrets, and no GitHub token (`github_config`). Connections are not exported, so agents travel with their roles and without their platform: after an import, connect each platform again, confirm its roles, and attach its agents under **Agents without a platform** on the Connections screen. Tasks keep the agent they are addressed to. The local GitHub mirror (`github_repo`, including `default_role_id`; `github_repo_assigner`; and `github_issue`, including the role label) is included so those settings and labels survive a move.
 
 Make an export in the web interface (**Download export**) or offline:
 
