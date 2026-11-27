@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { repairReauthDuplicateConnections } from './repair-reauth-duplicates.ts';
+import { repairEmptyActiveDuplicates } from './repair-empty-active-duplicates.ts';
 
 /**
  * Application schema migrations. Each entry runs once, in order, inside a transaction.
@@ -647,5 +648,19 @@ CREATE TABLE connection_transfer (
 CREATE INDEX connection_transfer_platform ON connection_transfer (platform_client_id, id);
 `,
     run: (db) => repairReauthDuplicateConnections(db),
+  },
+  // After 0.6.0's `repair-reauth-duplicate-connections` (id 14). Archives an empty
+  // same-type duplicate that migration 14 left in place because the original was
+  // still in use (`original_still_active`), when the pair is unique and the
+  // duplicate has no agents, no roles, and no journal besides its own approval.
+  // The original platform and its tokens are not changed. See
+  // docs/decisions/0009-reauth-configured-candidates.md. No binding table is added;
+  // the original's accepted client is unchanged. An unused consent is not
+  // configuration and is revoked so the archived client cannot obtain a token.
+  // The owner can undo the archive.
+  {
+    id: 15,
+    name: 'repair-empty-active-duplicates',
+    run: (db) => repairEmptyActiveDuplicates(db),
   },
 ];

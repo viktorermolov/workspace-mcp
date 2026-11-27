@@ -146,7 +146,7 @@ interface ContinueTarget {
 }
 
 type ContinueWith =
-  | { mode: 'auto'; target: ContinueTarget }
+  | { mode: 'auto'; target: ContinueTarget; archive?: ContinueTarget[] }
   | { mode: 'choice'; candidates: ContinueTarget[] }
   | { mode: 'new' };
 
@@ -162,6 +162,14 @@ function platformSummary(t: ContinueTarget): string {
   else bits.push('no confirmed roles');
   if (t.sole_agent) bits.push('sole agent');
   return bits.join(', ');
+}
+
+function archiveSentence(dups: ContinueTarget[] | undefined): string {
+  if (!dups?.length) return '';
+  if (dups.length === 1) return ` The empty platform ${dups[0]!.name} will be archived.`;
+  const names = dups.map((d) => d.name);
+  const last = names.pop();
+  return ` The empty platforms ${names.join(', ')} and ${last} will be archived.`;
 }
 
 /** OAuth consent: shows who asks and where the answer goes, and names the connection. */
@@ -260,6 +268,7 @@ export function ConsentScreen() {
           {info.data.continue_with.mode === 'auto' && (
             <p class="notice" role="status">
               Continues platform {info.data.continue_with.target.name}: {platformSummary(info.data.continue_with.target)}.
+              {archiveSentence(info.data.continue_with.archive)}
             </p>
           )}
           {info.data.continue_with.mode === 'choice' && (
