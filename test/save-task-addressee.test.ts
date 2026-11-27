@@ -123,24 +123,37 @@ describe('save_task respects the addressee and the claimed agent', () => {
     const t = await addressed('Coordinator Route');
     const routed = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'hal', claimed_role: 'coordinator', agent: 'mia' });
     assert.equal(routed.for_agent, 'hal');
-    const refused = (e: unknown) => {
-      const x = err(e);
-      return (
-        (x.error === 'conflict' && /addressed to agent "hal"/.test(x.message)) ||
-        (x.error === 'forbidden' && /belongs to role "developer"/.test(x.message))
-      );
-    };
-    await assert.rejects(call(grok, 'save_task', { id: routed.id, rev: routed.rev, status: 'done', claimed_role: 'coordinator', agent: 'mia' }), refused);
-    await assert.rejects(call(grok, 'save_task', { id: routed.id, rev: routed.rev, result: 'Mia wrote this', claimed_role: 'coordinator', agent: 'mia' }), refused);
-    // Even when the coordinator also takes the task's role, status and result stay protected.
+    const row = () => get<{ status: string; result: string; rev: number }>(env.svc.db, 'SELECT status, result, rev FROM task WHERE id = ?', routed.id)!;
+
+    // Forbidden-first: acting as coordinator is refused by the role check.
+    const beforeForbidden = row();
+    await assert.rejects(
+      call(grok, 'save_task', { id: routed.id, rev: routed.rev, status: 'done', claimed_role: 'coordinator', agent: 'mia' }),
+      (e) => err(e).error === 'forbidden' && /belongs to role "developer"/.test(err(e).message),
+    );
+    assert.deepEqual(row(), beforeForbidden);
+    await assert.rejects(
+      call(grok, 'save_task', { id: routed.id, rev: routed.rev, result: 'Mia wrote this', claimed_role: 'coordinator', agent: 'mia' }),
+      (e) => err(e).error === 'forbidden' && /belongs to role "developer"/.test(err(e).message),
+    );
+    assert.deepEqual(row(), beforeForbidden);
+    assert.equal(row().rev, routed.rev);
+
+    // Conflict: even when the coordinator also takes the task's role, the addressee check refuses.
+    const beforeConflict = row();
     await assert.rejects(
       call(grok, 'save_task', { id: routed.id, rev: routed.rev, status: 'done', claimed_role: 'developer', agent: 'mia' }),
       (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message),
     );
-    const again = get<{ status: string; result: string; rev: number }>(env.svc.db, 'SELECT status, result, rev FROM task WHERE id = ?', routed.id)!;
-    assert.equal(again.status, t.status);
-    assert.equal(again.result, t.result);
-    assert.equal(again.rev, routed.rev);
+    assert.deepEqual(row(), beforeConflict);
+    await assert.rejects(
+      call(grok, 'save_task', { id: routed.id, rev: routed.rev, result: 'Mia wrote this', claimed_role: 'developer', agent: 'mia' }),
+      (e) => err(e).error === 'conflict' && /addressed to agent "hal"/.test(err(e).message),
+    );
+    assert.deepEqual(row(), beforeConflict);
+    assert.equal(row().status, t.status);
+    assert.equal(row().result, t.result);
+    assert.equal(row().rev, routed.rev);
   });
 
   it('the owner can change status, result, reopen, and re-address an addressed task', async () => {
@@ -213,37 +226,51 @@ describe('save_task respects the addressee and the claimed agent', () => {
     assert.equal(routed.for_agent, 'hal');
   });
 
-  it('in warn mode the same cases attach a warning and an audit entry, and the write may proceed', async () => {
+  it('in warn mode a second agent is also refused with the same conflict, the task and rev stay the same, and the refusal is audited', async () => {
     await setMode('warn');
     const t = await addressed('Warn Guard');
-    const status = await call<Task>(home, 'save_task', { id: t.id, rev: t.rev, status: 'in_progress', claimed_role: 'developer', agent: 'hal' });
-    assert.equal(status.status, 'in_progress');
-    assert.ok(status.warnings?.some((w) => w.code === 'task_addressed' && /addressed to agent "ada"/.test(w.message)));
-    const result = await call<Task>(home, 'save_task', { id: t.id, rev: status.rev, result: 'Hal in warn', claimed_role: 'developer', agent: 'hal' });
-    assert.equal(result.result, 'Hal in warn');
-    assert.ok(result.warnings?.some((w) => w.code === 'task_addressed'));
-    const readdr = await call<Task>(home, 'save_task', { id: t.id, rev: result.rev, for_agent: 'hal', claimed_role: 'developer', agent: 'hal' });
-    assert.equal(readdr.for_agent, 'hal');
-    assert.ok(readdr.warnings?.some((w) => w.code === 'task_addressed'));
-    const open = await call<Task>(grok, 'save_task', { title: 'Warn Reopen', role: 'developer', for_agent: 'ada', claimed_role: 'developer', agent: 'ada' });
-    const finished = await call<Task>(grok, 'save_task', { id: open.id, rev: open.rev, status: 'done', claimed_role: 'developer', agent: 'ada' });
-    const reopened = await call<Task>(home, 'save_task', { id: open.id, rev: finished.rev, status: 'open', claimed_role: 'developer', agent: 'hal' });
-    assert.equal(reopened.status, 'open');
-    assert.ok(reopened.warnings?.some((w) => w.code === 'task_addressed'));
-    const warned = get<{ n: number }>(
+    const snapshot = () => get<{ status: string; result: string; blocking_reason: string; rev: number; agent_id: string | null }>(env.svc.db, 'SELECT status, result, blocking_reason, rev, agent_id FROM task WHERE id = ?', t.id)!;
+    const before = snapshot();
+    const auditsBefore = get<{ n: number }>(
       env.svc.db,
-      "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'warning' AND detail LIKE '%task_addressed%'",
-    )!;
-    assert.ok(warned.n >= 4, `expected audit warnings, got ${warned.n}`);
+      "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%task_addressed%'",
+    )!.n;
+
+    for (const patch of [{ status: 'in_progress' }, { result: 'Hal in warn' }, { status: 'blocked', blocking_reason: 'waiting' }, { for_agent: 'hal' }]) {
+      await assert.rejects(
+        call(home, 'save_task', { id: t.id, rev: t.rev, ...patch, claimed_role: 'developer', agent: 'hal' }),
+        (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+      );
+      assert.deepEqual(snapshot(), before, `task changed on ${JSON.stringify(patch)} in warn mode`);
+      assert.equal(snapshot().rev, t.rev);
+    }
+
+    await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, status: 'done', claimed_role: 'developer', agent: 'ada' });
+    const done = snapshot();
+    await assert.rejects(
+      call(home, 'save_task', { id: t.id, rev: done.rev, status: 'open', claimed_role: 'developer', agent: 'hal' }),
+      (e) => err(e).error === 'conflict' && /addressed to agent "ada"/.test(err(e).message),
+    );
+    assert.equal(snapshot().status, 'done');
+    assert.equal(snapshot().rev, done.rev);
+    const auditsAfter = get<{ n: number }>(
+      env.svc.db,
+      "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%task_addressed%'",
+    )!.n;
+    assert.ok(auditsAfter >= auditsBefore + 5, `expected refusal audits in warn mode, got ${auditsAfter - auditsBefore}`);
 
     const claimedSrc = await call<Task>(grok, 'save_task', { title: 'Warn Claimed', role: 'developer', claimed_role: 'developer', agent: 'ada' });
     const claimed = await call<Task>(grok, 'claim_task', { id: claimedSrc.id, claimed_role: 'developer', agent: 'ada' });
-    const claimedOut = await call<Task>(home, 'save_task', { id: claimed.id, rev: claimed.rev, status: 'done', claimed_role: 'developer', agent: 'hal' });
-    assert.equal(claimedOut.status, 'done');
-    assert.ok(claimedOut.warnings?.some((w) => w.code === 'task_claimed' && /claimed by agent "ada"/.test(w.message)));
+    const claimedBefore = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', claimed.id)!;
+    await assert.rejects(
+      call(home, 'save_task', { id: claimed.id, rev: claimed.rev, status: 'done', claimed_role: 'developer', agent: 'hal' }),
+      (e) => err(e).error === 'conflict' && /claimed by agent "ada"/.test(err(e).message),
+    );
+    const claimedAfter = get<{ status: string; rev: number }>(env.svc.db, 'SELECT status, rev FROM task WHERE id = ?', claimed.id)!;
+    assert.deepEqual(claimedAfter, claimedBefore);
     const claimedAudit = get<{ n: number }>(
       env.svc.db,
-      "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'warning' AND detail LIKE '%task_claimed%'",
+      "SELECT count(*) AS n FROM oauth_diag WHERE step = 'role_check' AND outcome = 'rejected' AND detail LIKE '%task_claimed%'",
     )!;
     assert.ok(claimedAudit.n >= 1);
   });

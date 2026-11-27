@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { actorRoutesTasks, addWarning, agentMayTake, assertCanEdit, auditRoleCheck, getEnforcement, withOwnerRole } from './access.ts';
+import { actorRoutesTasks, agentMayTake, assertCanEdit, auditRoleCheck, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -366,8 +366,8 @@ function taskHandlerConflict(taskId: string, kind: 'addressed' | 'claimed', slug
  * On a task addressed to an agent (`for_agent`) or claimed by a named agent, only that
  * agent (or the owner) may change status, result or blocking_reason, reopen it, or
  * address it to themselves. A coordinator may still re-address it (routing only).
- * In enforce mode this is the same `conflict` as claim_task; in warn mode the write
- * may proceed with a warning and an audit entry.
+ * In both warn and enforce mode this is the same `conflict` as claim_task; the write
+ * does not proceed, and the refusal is audited.
  */
 function assertTaskHandler(db: DB, actor: Actor, t: TaskRow): void {
   if (actor.kind !== 'agent') return;
@@ -381,12 +381,8 @@ function assertTaskHandler(db: DB, actor: Actor, t: TaskRow): void {
   const err = taskHandlerConflict(t.id, kind, slug, actor);
   const reason = kind === 'addressed' ? 'task_addressed' : 'task_claimed';
   const detail = { reason, agent: actor.agent ?? null, ...(kind === 'addressed' ? { for_agent: slug } : { claimed_agent: slug }) };
-  if (getEnforcement(db, actor.memberId) === 'enforce') {
-    auditRoleCheck(db, actor, 'rejected', detail, 409);
-    throw err;
-  }
-  addWarning({ code: reason, message: err.message });
-  auditRoleCheck(db, actor, 'warning', detail);
+  auditRoleCheck(db, actor, 'rejected', detail, 409);
+  throw err;
 }
 
 /** Atomic claim: only one caller can move an open, unclaimed task to in_progress. */
