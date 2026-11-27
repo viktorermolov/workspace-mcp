@@ -110,6 +110,12 @@ export function createOwnerApi(deps: OwnerApiDeps) {
       if (options.mode === 'auto') {
         autoContinue = true;
         continueClientId = options.target.client_id;
+        if (b.continue_client_id === null || b.continue_client_id === '') {
+          throw new DomainError('invalid', 'This client continues an existing platform; start the connection again from the platform.');
+        }
+        if (typeof b.continue_client_id === 'string' && b.continue_client_id !== options.target.client_id) {
+          throw new DomainError('invalid', 'The platform shown is no longer the one this client would continue; start the connection again from the platform.');
+        }
       } else if (options.mode === 'choice') {
         if (b.continue_client_id === null || b.continue_client_id === '') {
           continueClientId = null;
@@ -135,7 +141,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     if (!res.ok || !out.url) {
       return c.json({ error: out.error ?? 'consent_failed', message: out.error_description ?? out.message ?? 'The authorization request is invalid or expired. Start the connection again from the platform.' }, 400);
     }
-    if (b.accept) approveConnection(db, actor(c), clientId, b.name!, { continueClientId, autoContinue });
+    if (b.accept) approveConnection(db, actor(c), clientId, b.name!, { continueClientId, autoContinue, offeredChoice: options.mode === 'choice' && !continueClientId });
     return c.json({ url: out.url });
   });
 

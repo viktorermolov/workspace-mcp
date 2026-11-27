@@ -9,7 +9,7 @@ import { migrations } from '../src/db/schema.ts';
 import { repairReauthDuplicateConnections } from '../src/db/repair-reauth-duplicates.ts';
 import { setLogLevel } from '../src/util/log.ts';
 import { approveConnection, type ConnectionRow } from '../src/auth/connections.ts';
-import { connectAgent, registerOwner, startService, TestOAuthProvider, type TestEnv, type Browser } from './helpers/harness.ts';
+import { call, connectAgent, registerOwner, startService, TestOAuthProvider, type TestEnv, type Browser } from './helpers/harness.ts';
 
 const GROK_CB = 'https://grok.com/connectors-oauth-exchange-code/';
 const OTHER_CB = 'https://other.example/connectors-oauth-exchange-code/';
@@ -350,6 +350,48 @@ describe('migration 14 repair-reauth-duplicate-connections', () => {
       close();
     }
   });
+
+  it('rollback of a migration merge rejects earlier access and refresh tokens of both clients', () => {
+    const { db, close } = tmpDb();
+    try {
+      applyThrough(db, 13);
+      stubOauth(db);
+      seedMember(db);
+      putClient(db, 'orig');
+      putClient(db, 'dup');
+      putConnection(db, 'orig', { created: '2026-01-01T00:00:00.000Z', confirmed: '2026-01-01T00:00:00.000Z' });
+      confirmRoles(db, 'orig');
+      addAgent(db, 'orig');
+      putConnection(db, 'dup', { created: '2026-02-01T00:00:00.000Z', approved: '2026-02-01T00:00:00.000Z' });
+      run(db, "INSERT INTO oauthAccessToken (id, clientId, token) VALUES ('a-orig', 'orig', 'SECRETTOKEN_orig_access')");
+      run(db, "INSERT INTO oauthRefreshToken (id, clientId, token) VALUES ('r-orig', 'orig', 'SECRETTOKEN_orig_refresh')");
+      run(db, "INSERT INTO oauthAccessToken (id, clientId, token) VALUES ('a-dup', 'dup', 'SECRETTOKEN_dup_access')");
+      run(db, "INSERT INTO oauthRefreshToken (id, clientId, token) VALUES ('r-dup', 'dup', 'SECRETTOKEN_dup_refresh')");
+      captureRepair(db);
+      assert.equal(getConnection(db, 'orig')!.current_client_id, 'dup');
+      // A leftover grant for the previous client may still exist in some workspaces; put one back for the rollback to clear.
+      run(db, "INSERT INTO oauthRefreshToken (id, clientId, token) VALUES ('r-orig-left', 'orig', 'SECRETTOKEN_orig_refresh')");
+      const iat = Math.floor(Date.now() / 1000) - 60;
+      assert.equal(checkAccess(db, 'dup', iat).ok, true, 'live token works on the original before rollback');
+      const started = Date.now();
+      rollbackClientTransfer(db, { kind: 'owner', memberId: 'mem_1' }, 'orig');
+      const orig = getConnection(db, 'orig')!;
+      const dup = getConnection(db, 'dup')!;
+      assert.equal(orig.current_client_id, 'orig');
+      assert.equal(dup.merged_into_client_id, null);
+      assert.equal(dup.revoked_at, null);
+      assert.ok(Date.parse(orig.approved_at) >= started);
+      assert.ok(Date.parse(dup.approved_at) >= started);
+      assert.equal(checkAccess(db, 'orig', iat).ok, false);
+      assert.equal(checkAccess(db, 'dup', iat).ok, false);
+      assert.equal(get(db, "SELECT 1 FROM oauthAccessToken WHERE clientId IN ('orig', 'dup')"), undefined);
+      assert.equal(get(db, "SELECT 1 FROM oauthRefreshToken WHERE clientId IN ('orig', 'dup')"), undefined);
+    } finally {
+      close();
+    }
+  });
+
+
 });
 
 function captureRepair(db: DB) {
@@ -370,6 +412,17 @@ function captureRepair(db: DB) {
 function repairedOf(logs: { fields: Record<string, unknown> }[]): number {
   const last = logs.filter((l) => l.fields && 'repaired' in l.fields).at(-1);
   return Number(last?.fields.repaired ?? -1);
+}
+
+
+async function assertRefreshRejected(env: TestEnv, clientId: string, refreshToken: string): Promise<void> {
+  const as = (await (await fetch(`${env.base}/.well-known/oauth-authorization-server`)).json()) as { token_endpoint: string };
+  const r = await fetch(as.token_endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, resource: env.config.mcpUrl }),
+  });
+  assert.notEqual(r.status, 200, await r.text());
 }
 
 describe('re-auth continuation and rollback', () => {
@@ -475,21 +528,92 @@ describe('re-auth continuation and rollback', () => {
     void connected;
   });
 
-  it('lets only the owner roll back a transfer, restoring the previous client', async () => {
+  it('lets only the owner roll back a re-auth transfer, and rejects earlier tokens of both clients', async () => {
     const first = await connectAgent(env, owner, 'Rollback Grok');
+    const firstTok = first.provider.tokens()!;
     const second = await connectAgent(env, owner, 'Rollback Grok');
+    const secondTok = second.provider.tokens()!;
     const platform = listConnections(env.svc.db).find((c) => c.active && c.name === 'Rollback Grok')!;
     const oldId = first.provider.clientInformation().client_id;
     const newId = second.provider.clientInformation().client_id;
     assert.equal(platform.current_client_id, newId);
+    assert.ok(firstTok.refresh_token && secondTok.refresh_token);
     const memberId = platform.member_id;
     assert.throws(() => rollbackClientTransfer(env.svc.db, { kind: 'agent', memberId }, platform.client_id), /only the owner/);
+    const iat = Math.floor(Date.now() / 1000) - 60;
+    const started = Date.now();
     const after = await owner.json<ConnectionRow>(`/api/owner/connections/${encodeURIComponent(platform.client_id)}/rollback-transfer`, { method: 'POST' });
     assert.equal(after.current_client_id, oldId);
-    assert.equal(checkAccess(env.svc.db, newId, Math.floor(Date.now() / 1000) + 60).ok, false);
+    assert.ok(Date.parse(after.approved_at!) >= started);
+    assert.equal(checkAccess(env.svc.db, oldId, iat).ok, false);
+    assert.equal(checkAccess(env.svc.db, newId, iat).ok, false);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthRefreshToken WHERE clientId IN (?, ?)', oldId, newId), undefined);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthAccessToken WHERE clientId IN (?, ?)', oldId, newId), undefined);
+    await assertRefreshRejected(env, oldId, firstTok.refresh_token!);
+    await assertRefreshRejected(env, newId, secondTok.refresh_token!);
     assert.equal(liveConnectionForClient(env.svc.db, oldId)?.client_id, platform.client_id);
     assert.equal(pendingTransfer(env.svc.db, platform.client_id), undefined);
     await assert.rejects(owner.json(`/api/owner/connections/${encodeURIComponent(platform.client_id)}/rollback-transfer`, { method: 'POST' }), /no client transfer|no transfer/i);
+  });
+
+  it('choosing New platform creates an empty platform and does not transfer rights', async () => {
+    const first = await connectAgent(env, owner, 'Keep Rights');
+    const orig = listConnections(env.svc.db).find((c) => c.name === 'Keep Rights')!;
+    await call(first.client, 'save_role', { name: 'Admin', slug: 'kept-admin', instruction: 'Keep this.' });
+    await owner.json(`/api/owner/connections/${encodeURIComponent(orig.client_id)}/roles`, { json: { roles: ['kept-admin'], confirm: true } });
+    await owner.json('/api/owner/agents', { json: { name: 'Keeper', platform: orig.client_id, roles: ['kept-admin'] } });
+    await owner.json(`/api/owner/connections/${encodeURIComponent(orig.client_id)}/sole-agent`, { json: { sole_agent: true } });
+    const second = await connectAgent(env, owner, 'Fresh Platform');
+    const neu = listConnections(env.svc.db).find((c) => c.name === 'Fresh Platform')!;
+    const still = listConnections(env.svc.db).find((c) => c.client_id === orig.client_id)!;
+    assert.ok(neu);
+    assert.notEqual(neu.client_id, orig.client_id);
+    assert.equal(neu.current_client_id, second.provider.clientInformation().client_id);
+    assert.notEqual(neu.current_client_id, still.current_client_id);
+    const agents = (await owner.json<{ agents: { slug: string; platform: { id: string } | null }[] }>('/api/owner/agents')).agents;
+    assert.equal(agents.filter((a) => a.platform?.id === neu.client_id).length, 0);
+    assert.ok(agents.some((a) => a.platform?.id === orig.client_id && a.slug === 'keeper'));
+    assert.notEqual(neu.sole_agent, 1);
+    assert.equal(still.sole_agent, 1);
+    assert.ok(still.roles_confirmed_at);
+    assert.ok(!neu.roles_confirmed_at);
+    const ev = get<{ data: string }>(env.svc.db, "SELECT data FROM event WHERE action = 'connection.approved' AND entity_id = ? ORDER BY id DESC LIMIT 1", neu.client_id);
+    const data = ev ? (JSON.parse(ev.data) as { offered?: boolean; choice?: string }) : {};
+    assert.equal(data.offered, true);
+    assert.equal(data.choice, 'new');
+  });
+
+  it('revoke after a transfer removes access and refresh tokens of the live client', async () => {
+    const first = await connectAgent(env, owner, 'Revoke After');
+    const second = await connectAgent(env, owner, 'Revoke After');
+    const platform = listConnections(env.svc.db).find((c) => c.active && c.name === 'Revoke After')!;
+    const liveId = second.provider.clientInformation().client_id;
+    const prevId = first.provider.clientInformation().client_id;
+    const liveTok = second.provider.tokens()!;
+    assert.equal(platform.current_client_id, liveId);
+    assert.ok(liveTok.refresh_token);
+    await owner.json(`/api/owner/connections/${encodeURIComponent(platform.client_id)}/revoke`, { method: 'POST' });
+    assert.equal(checkAccess(env.svc.db, liveId, Math.floor(Date.now() / 1000) + 60).ok, false);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthRefreshToken WHERE clientId = ?', liveId), undefined);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthAccessToken WHERE clientId = ?', liveId), undefined);
+    assert.equal(get(env.svc.db, 'SELECT 1 FROM oauthRefreshToken WHERE clientId = ?', prevId), undefined);
+    await assertRefreshRejected(env, liveId, liveTok.refresh_token!);
+  });
+
+  it('the single-agent marker works with the live client after a transfer', async () => {
+    const first = await connectAgent(env, owner, 'Sole After');
+    const platform = listConnections(env.svc.db).find((c) => c.name === 'Sole After')!;
+    await call(first.client, 'save_role', { name: 'Admin', slug: 'sole-admin', instruction: 'Run as the only agent.' });
+    await owner.json(`/api/owner/connections/${encodeURIComponent(platform.client_id)}/roles`, { json: { roles: ['sole-admin'], confirm: true } });
+    await owner.json('/api/owner/agents', { json: { name: 'Hermes', platform: platform.client_id, roles: ['sole-admin'] } });
+    await owner.json(`/api/owner/connections/${encodeURIComponent(platform.client_id)}/sole-agent`, { json: { sole_agent: true } });
+    await call(first.client, 'save_task', { title: 'Rotate logs', role: 'sole-admin', claimed_role: 'sole-admin' });
+    const second = await connectAgent(env, owner, 'Sole After');
+    const s = await call<{ instructions: { agent?: { slug: string }; role?: string }; data: { open_tasks?: { title: string }[] }; warnings?: { code: string }[] }>(second.client, 'start');
+    assert.equal(s.instructions.agent!.slug, 'hermes');
+    assert.equal(s.instructions.role, 'sole-admin');
+    assert.deepEqual((s.data.open_tasks ?? []).map((x) => x.title), ['Rotate logs']);
+    assert.ok(!(s.warnings ?? []).some((w) => w.code === 'agent_missing'));
   });
 
   it('keeps a bound current_client_id out of expireUnusedClients', async () => {

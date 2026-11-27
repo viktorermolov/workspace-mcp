@@ -165,7 +165,11 @@ export function reauthContinueOptions(db: DB, memberId: string, incomingClientId
     if (existing && sameClientType(existing, incoming)) matches.push(continueTarget(db, row));
   }
   if (matches.length === 1) return { mode: 'auto', target: matches[0]! };
-  const candidates = active.map((row) => continueTarget(db, row));
+  const matchIds = new Set(matches.map((m) => m.client_id));
+  const candidates = [
+    ...active.filter((row) => matchIds.has(row.client_id)).map((row) => continueTarget(db, row)),
+    ...active.filter((row) => !matchIds.has(row.client_id)).map((row) => continueTarget(db, row)),
+  ];
   return { mode: 'choice', candidates };
 }
 
@@ -174,6 +178,8 @@ export interface ApproveOptions {
   continueClientId?: string | null;
   /** Consent computed an automatic continuation; the owner is not asked to pick. */
   autoContinue?: boolean;
+  /** The consent screen offered a choice and the owner picked a new platform. */
+  offeredChoice?: boolean;
 }
 
 /** Called from the consent screen when the owner approves. Re-approving a revoked (not merged) client reactivates it. */
@@ -231,7 +237,10 @@ export function approveConnection(db: DB, actor: Actor, clientId: string, name: 
       t,
       clientId,
     );
-    recordEvent(db, actor, 'connection', clientId, 'connection.approved', `Connection "${clean}" approved`, { client_name: info?.name ?? null });
+    recordEvent(db, actor, 'connection', clientId, 'connection.approved', `Connection "${clean}" approved`, {
+      client_name: info?.name ?? null,
+      ...(opts.offeredChoice ? { offered: true, choice: 'new' } : {}),
+    });
     return getConnection(db, clientId)!;
   });
 }
@@ -378,20 +387,22 @@ export function rollbackClientTransfer(db: DB, actor: Actor, platformClientId: s
     if (!transfer) throw new DomainError('invalid', 'There is no client transfer to roll back on this platform');
     const t = now();
     dropGrants(db, transfer.to_client_id);
+    dropGrants(db, transfer.from_client_id);
     run(
       db,
       'UPDATE connection SET current_client_id = ?, approved_at = ? WHERE client_id = ?',
       transfer.from_client_id,
-      transfer.previous_approved_at ?? platform.approved_at,
+      t,
       platform.client_id,
     );
     if (transfer.kind === 'migration' && transfer.archived_client_id) {
       run(
         db,
         `UPDATE connection
-            SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL
+            SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL, approved_at = ?
           WHERE client_id = ? AND merged_into_client_id = ?`,
         transfer.archived_client_id,
+        t,
         transfer.archived_client_id,
         platform.client_id,
       );
