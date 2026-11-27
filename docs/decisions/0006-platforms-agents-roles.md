@@ -66,7 +66,7 @@ Then two models of the role were tried and rejected before the final one:
 - **Agents are kept by the owner only.** They say who may act as what, so they sit with connections and enforcement, outside MCP.
 - **Step 1 changes no check.** The data moves first (migration 8 creates agents from the roles the owner confirmed for each connection), so an upgrade cannot lock out a working bot. The checks follow in step 2, and calls that do not name an agent keep working with a warning.
 - **Nothing to re-enter.** Viktor asked for the change to be carried out without manual work, so the migration fills agents in, named after their role; renaming them is optional. After review (#138) it uses only owner-confirmed roles: a role a connection merely claimed in a call must not become a grant, so a connection with no confirmed list gets no agent and the owner adds it by hand.
-- **Agents are not in a zip export.** They point at a connection, and connections are never exported.
+- **Agents in a zip export (changed after review, #146).** First they were left out, because they point at a connection and connections are never exported; a task then lost its addressee. Now an agent is exported with its roles and without its platform, and after an import the owner attaches it to a platform again. An agent with no platform can do nothing.
 - **The interface work comes last** (step 4), because what the map and the pages show depends on agents existing.
 
 ### How the work is carried out
@@ -122,4 +122,3 @@ No test was removed or skipped.
 - The interface still says "connection" and "role" in most places; only the Map and the new pages speak of platforms and agents.
 - `rev` is still a number that agents can mix up with `version`.
 - The agent's own instruction stays with the role; an agent has no text of its own.
-- Agents are not in a zip export.

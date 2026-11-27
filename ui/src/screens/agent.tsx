@@ -13,7 +13,7 @@ interface AgentOverview {
   id: string;
   slug: string;
   name: string;
-  platform: { id: string; name: string; active: boolean };
+  platform: { id: string; name: string; active: boolean } | null;
   roles: { id: string; slug: string; name: string; archived: boolean }[];
   tasks_for_agent: AgentTask[];
   tasks_claimed: AgentTask[];
@@ -51,8 +51,17 @@ export function AgentScreen({ id }: { id: string }) {
         {a && (
           <div class="agent-view">
             <p class="small">
-              Runs on <strong>{a.platform.name}</strong>
-              {!a.platform.active && <span class="muted"> (revoked)</span>} <span class="muted">· @{a.slug}</span>
+              {a.platform ? (
+                <>
+                  Runs on <strong>{a.platform.name}</strong>
+                  {!a.platform.active && <span class="muted"> (revoked)</span>}
+                </>
+              ) : (
+                <>
+                  <strong>No platform yet.</strong> <a href="/connections">Attach it to a platform</a> so it can work.
+                </>
+              )}{' '}
+              <span class="muted">· @{a.slug}</span>
             </p>
             <div class="section-head">
               <h2>Roles it may take</h2>

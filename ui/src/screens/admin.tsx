@@ -167,6 +167,7 @@ export function ConnectionsScreen() {
             run={act.run}
           />
         )}
+        <UnattachedAgents agents={(agents.data?.agents ?? []).filter((a) => !a.platform)} platforms={active} onChanged={() => agents.reload()} />
         <h2>Active</h2>
         {!active.length && <Empty>No platform is connected yet.</Empty>}
         <ul class="list">
@@ -212,7 +213,7 @@ export function ConnectionsScreen() {
                 />
               )}
               {list.data && c.active && (
-                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
+                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform?.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
               )}
             </li>
           ))}
@@ -405,8 +406,73 @@ interface Agent {
   slug: string;
   name: string;
   rev: number;
-  platform: { id: string; name: string; active: boolean };
+  platform: { id: string; name: string; active: boolean } | null;
   roles: { id: string; slug: string; name: string; archived: boolean; usable: boolean }[];
+}
+
+/**
+ * Agents that came in with a zip import: connections are never exported, so each waits here until the
+ * owner says which platform it runs on. It keeps the roles that are confirmed for that platform.
+ */
+function UnattachedAgents({ agents, platforms, onChanged }: { agents: Agent[]; platforms: Connection[]; onChanged: () => void }) {
+  const [target, setTarget] = useState<Record<string, string>>({});
+  const act = useAction();
+  if (!agents.length) return null;
+  const attach = (a: Agent) => {
+    const p = platforms.find((c) => c.client_id === target[a.id]);
+    if (!p) return;
+    const confirmed = new Set(p.roles_confirmed ? (p.roles ?? []).map((r) => r.id) : []);
+    act.run(async () => {
+      await post('/agents', { id: a.id, rev: a.rev, platform: p.client_id, roles: a.roles.filter((r) => confirmed.has(r.id)).map((r) => r.id) });
+      onChanged();
+    });
+  };
+  const remove = (a: Agent) => {
+    if (!confirm(`Remove the agent "${a.name}"? The log keeps what it did.`)) return;
+    act.run(async () => {
+      await del(`/agents/${enc(a.id)}`);
+      onChanged();
+    });
+  };
+  return (
+    <Card class="notice">
+      <h2>Agents without a platform</h2>
+      <p class="small">
+        These agents came from an import. Connect their platform, confirm its roles, then attach each agent. An agent keeps the roles that are confirmed for
+        the platform you choose; the others are dropped and can be given again later.
+      </p>
+      {act.error && <Alert>{act.error}</Alert>}
+      <ul class="plain">
+        {agents.map((a) => (
+          <li key={a.id} class="version-row">
+            <div>
+              <a href={`/agents/${enc(a.slug)}`}>
+                <strong>{a.name}</strong>
+              </a>{' '}
+              <span class="muted small">@{a.slug}</span>
+              <div class="row">{a.roles.length ? a.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>) : <span class="muted small">no roles</span>}</div>
+            </div>
+            <div class="row">
+              <select aria-label={`Platform for ${a.name}`} value={target[a.id] ?? ''} onChange={(e) => setTarget({ ...target, [a.id]: (e.target as HTMLSelectElement).value })}>
+                <option value="">Choose a platform</option>
+                {platforms.map((c) => (
+                  <option key={c.client_id} value={c.client_id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <Button kind="default" onClick={() => attach(a)} busy={act.busy} disabled={!target[a.id]}>
+                Attach
+              </Button>
+              <Button kind="quiet" onClick={() => remove(a)} busy={act.busy}>
+                Remove
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }
 
 /** The named bots that run on one platform, and the roles each of them may take. */

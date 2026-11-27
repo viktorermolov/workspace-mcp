@@ -511,7 +511,7 @@ CREATE INDEX github_repo_assigner_role ON github_repo_assigner (role_id);
 CREATE TABLE agent (
   id TEXT PRIMARY KEY,
   member_id TEXT NOT NULL REFERENCES member(id),
-  client_id TEXT NOT NULL REFERENCES connection(client_id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES connection(client_id) ON DELETE SET NULL,
   slug TEXT NOT NULL,
   name TEXT NOT NULL,
   rev INTEGER NOT NULL DEFAULT 1,

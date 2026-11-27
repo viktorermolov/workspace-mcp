@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { strFromU8, unzipSync } from 'fflate';
-import { buildExport } from '../src/backup/export.ts';
+import { buildExport, importExport } from '../src/backup/export.ts';
 import { all, get, openDatabase, run, tx } from '../src/db/db.ts';
 import { migrations } from '../src/db/schema.ts';
 import { saveAgent } from '../src/domain/agents.ts';
@@ -465,14 +465,50 @@ describe('tasks addressed to an agent', () => {
     assert.equal(anyone.data.last_checkpoint?.done, 'Hal did this');
   });
 
-  it('a zip export carries tasks without their addressee, because agents are not exported', () => {
+  it('a zip export carries agents without their platform; after an import the owner attaches them and tasks keep their addressee', async () => {
     const memberId = get<{ member_id: string }>(env.svc.db, 'SELECT member_id FROM agent LIMIT 1')!.member_id;
-    assert.ok(get(env.svc.db, 'SELECT 1 FROM task WHERE agent_id IS NOT NULL'));
     const { zip } = buildExport(env.svc.db, memberId);
-    const data = JSON.parse(strFromU8(unzipSync(zip)['workspace.json']!)) as { tables: Record<string, { agent_id?: unknown; title?: string }[]> };
-    assert.ok(data.tables.task!.length > 0);
-    assert.ok(data.tables.task!.every((t) => t.agent_id === null));
-    assert.equal(data.tables.agent, undefined);
+    const data = JSON.parse(strFromU8(unzipSync(zip)['workspace.json']!)) as { tables: Record<string, Record<string, unknown>[]> };
+    const exported = data.tables.agent!.map((a) => [a.slug, a.client_id, a.platform_name]);
+    assert.deepEqual(exported.sort(), [['ada', null, 'Grok'], ['hal', null, 'Home server'], ['mia', null, 'Grok']]);
+    assert.ok(data.tables.task!.some((t) => t.agent_id !== null));
+
+    const dst = await startService();
+    try {
+      const dstOwner = (await registerOwner(dst)).browser;
+      const dstMember = get<{ id: string }>(dst.svc.db, 'SELECT id FROM member')!.id;
+      importExport(dst.svc.db, dstMember, zip);
+      const agents = (await dstOwner.json<{ agents: (Omit<AgentView, 'platform'> & { platform: null | { id: string } })[] }>('/api/owner/agents')).agents;
+      assert.deepEqual(agents.map((a) => [a.slug, a.platform, a.roles.map((r) => r.slug)]), [['ada', null, ['developer']], ['hal', null, ['developer']], ['mia', null, ['marketer']]]);
+      const addressed = all<{ title: string; slug: string }>(dst.svc.db, 'SELECT t.title, a.slug FROM task t JOIN agent a ON a.id = t.agent_id ORDER BY t.title');
+      assert.ok(addressed.some((t) => t.title === 'For Hal' && t.slug === 'hal'));
+      // The agent page still shows what the agent did before the move.
+      const page = await dstOwner.json<{ platform: null; last_checkpoint: { done: string } | null; recent: unknown[] }>('/api/owner/agents/hal');
+      assert.equal(page.platform, null);
+      assert.equal(page.last_checkpoint?.done, 'Hal did this');
+      assert.ok(page.recent.length > 0);
+
+      // Without a platform an agent can do nothing and cannot be given roles.
+      const ada = agents.find((a) => a.slug === 'ada')!;
+      const client = (await connectAgent(dst, dstOwner, 'New Grok')).client;
+      const stray = await call<{ warnings?: { code: string }[] }>(client, 'save_task', { title: 'Before attach', claimed_role: 'developer', agent: 'ada' });
+      assert.ok((stray.warnings ?? []).some((w) => w.code === 'agent_wrong_platform'));
+      assert.equal(get<{ agent: string | null }>(dst.svc.db, "SELECT agent FROM event WHERE action = 'task.created' ORDER BY id DESC LIMIT 1")!.agent, null);
+      const noRoles = await dstOwner.fetch('/api/owner/agents', { json: { id: ada.id, rev: ada.rev, roles: ['developer', 'marketer'] } });
+      assert.equal(noRoles.status, 400);
+      // The owner connects the platform, confirms its roles and attaches the agent.
+      const list = await dstOwner.json<{ connections: { client_id: string; name: string }[] }>('/api/owner/connections');
+      const newId = list.connections.find((c) => c.name === 'New Grok')!.client_id;
+      await confirmRoles(dstOwner, newId, ['developer']);
+      const attached = await dstOwner.json<AgentView>('/api/owner/agents', { json: { id: ada.id, rev: ada.rev, platform: newId, roles: ['developer'] } });
+      assert.equal(attached.platform.name, 'New Grok');
+      const ok = await call<{ id: string; warnings?: unknown[] }>(client, 'save_task', { title: 'After attach', claimed_role: 'developer', agent: 'ada' });
+      assert.ok(ok.id);
+      const start = await call<{ data: { agents: { slug: string }[] } }>(client, 'start');
+      assert.deepEqual(start.data.agents.map((a) => a.slug), ['ada']);
+    } finally {
+      await dst.close();
+    }
   });
 
   it('the owner page of an agent shows its tasks, its own checkpoint and what it changed', async () => {
