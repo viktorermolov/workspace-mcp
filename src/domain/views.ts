@@ -383,6 +383,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
   let role: ReturnType<typeof roleView> | undefined;
   let roleTasks: unknown[] | undefined;
   let checkpoint: unknown;
+  let newerCheckpoint: unknown;
   if (roleRef) {
     const r = findRole(db, memberId, roleRef, false);
     if (!r) {
@@ -397,14 +398,20 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
       throw new DomainError('not_found', `role not found: ${roleRef}. Available roles: ${roles.map((x) => x.slug).join(', ') || '(none yet)'}`);
     }
     role = roleView(db, r);
+    // A caller that named its agent sees the role's tasks addressed to it (first) and those addressed to nobody.
+    const me = self ? (get<{ id: string }>(db, 'SELECT id FROM agent WHERE member_id = ? AND slug = ?', memberId, self.slug)?.id ?? null) : null;
     roleTasks = all<TaskRow>(
       db,
-      "SELECT * FROM task WHERE role_id = ? AND archived_at IS NULL AND status NOT IN ('done','cancelled') ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC LIMIT 30",
-      r.id,
+      `SELECT * FROM task WHERE role_id = ? AND archived_at IS NULL AND status NOT IN ('done','cancelled') ${me ? 'AND (agent_id IS NULL OR agent_id = ?)' : ''}
+       ORDER BY ${me ? 'agent_id IS NULL,' : ''} CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC LIMIT 30`,
+      ...(me ? [r.id, me] : [r.id]),
     ).map((t) => taskSummary(db, t));
-    const cp = lastCheckpoint(db, memberId, r.id);
+    // The agent's own last checkpoint comes first; if another agent of the role wrote a newer one, it is pointed to.
+    const latest = lastCheckpoint(db, memberId, r.id);
+    const own = self ? lastCheckpoint(db, memberId, r.id, undefined, self.slug) : undefined;
     // Long checkpoint parts are shortened; get(type: checkpoint, id) returns them in full.
-    checkpoint = cp;
+    checkpoint = own ?? latest;
+    if (own && latest && latest.id !== own.id) newerCheckpoint = { id: latest.id, agent: latest.agent ?? null, platform: latest.connection_name ?? null, created_at: latest.created_at };
   }
 
   // Changes since this connection's previous start call for the same role.
@@ -495,6 +502,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
             last_checkpoint: checkpoint
               ? { ...(checkpoint as Record<string, unknown>), done: cpPart((checkpoint as Record<string, unknown>).done, long), stopped_at: cpPart((checkpoint as Record<string, unknown>).stopped_at, long), next: cpPart((checkpoint as Record<string, unknown>).next, long) }
               : null,
+            ...(newerCheckpoint ? { newer_checkpoint_by_another_agent: newerCheckpoint } : {}),
             role_routines: roleRoutines.slice(0, START_LIST_MAX).map((r) => routineSummary(db, r, long)),
             ...(roleRoutines.length > START_LIST_MAX ? { more_role_routines: roleRoutines.length - START_LIST_MAX } : {}),
           }

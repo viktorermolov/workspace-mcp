@@ -10,7 +10,7 @@ import { setConnectionRoles, setEnforcement, setRoleEditAny, workspaceAccessSett
 import { DomainError, getVersion, LIMITS, recordEvent, type Actor, type VersionedType } from '../domain/core.ts';
 import { listRules, memberByUser, purge, saveDocument, saveProject, saveRole, setArchived, updateRules, type ArchivableType } from '../domain/entities.ts';
 import { saveRoutine } from '../domain/routines.ts';
-import { deleteAgent, listAgents, saveAgent } from '../domain/agents.ts';
+import { agentSummaries, deleteAgent, listAgents, saveAgent } from '../domain/agents.ts';
 import { claimTask, commentTask, saveTask } from '../domain/tasks.ts';
 import { compareVersions, rollback, versionedId, versionHistory } from '../domain/versions.ts';
 import { createReviewComment, getReviewComment, listReviewComments, listSetupNotesHistory, replyReviewComment, reviewCounts, setReviewCommentStatus, type ReviewStatus } from '../domain/reviews.ts';
@@ -216,6 +216,7 @@ export function createOwnerApi(deps: OwnerApiDeps) {
     c.json({
       roles: all(db, 'SELECT slug, name FROM role WHERE member_id = ? AND archived_at IS NULL ORDER BY name', actor(c).memberId),
       projects: all(db, 'SELECT slug, name FROM project WHERE member_id = ? AND archived_at IS NULL ORDER BY name', actor(c).memberId),
+      agents: agentSummaries(db, actor(c).memberId, 200).agents,
     }),
   );
   api.get('/map', (c) => c.json(mapView(db, actor(c).memberId)));

@@ -535,7 +535,7 @@ describe('role reporting tree: scale, cap and upgrade', () => {
     assert.ok(!colsBefore.includes('parent_id'));
 
     const applied = runAppMigrations(db);
-    assert.equal(applied, 5);
+    assert.equal(applied, 6);
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 5")?.name, 'role_parent');
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 6")?.name, 'review-comments');
     assert.equal(get<{ name: string }>(db, "SELECT name FROM app_migration WHERE id = 7")?.name, 'github-issue-roles');

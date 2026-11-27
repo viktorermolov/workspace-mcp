@@ -39,9 +39,16 @@ interface Tree {
   issues: Issue[];
 }
 
+interface AgentChoice {
+  slug: string;
+  name: string;
+  platform: string;
+  roles: string[];
+}
+
 /** Role and project choices for selects. */
 export function useChoices() {
-  return useData(() => api<{ roles: { slug: string; name: string }[]; projects: { slug: string; name: string }[] }>('/choices'));
+  return useData(() => api<{ roles: { slug: string; name: string }[]; projects: { slug: string; name: string }[]; agents?: AgentChoice[] }>('/choices'));
 }
 
 type Dep = { title: string; status: string };
@@ -240,6 +247,7 @@ export function TasksScreen() {
 }
 
 interface TaskFull extends TaskSummary {
+  for_agent?: string | null;
   description: string;
   result: string;
   blocking_reason: string;
@@ -280,6 +288,7 @@ export function TaskScreen({ id }: { id: string }) {
             defaults={{ project: q.get('project') ?? '', parent_id: q.get('parent') ?? '' }}
             roles={choices.data?.roles ?? []}
             projects={choices.data?.projects ?? []}
+            agents={choices.data?.agents ?? []}
             others={(all.data?.tasks ?? []).filter((x) => x.id !== id)}
             onSaved={(saved) => (isNew ? navigate(`/tasks/${enc(saved.id)}`, true) : task.reload())}
           />
@@ -295,6 +304,7 @@ function TaskForm({
   defaults,
   roles,
   projects,
+  agents,
   others,
   onSaved,
 }: {
@@ -302,6 +312,7 @@ function TaskForm({
   defaults: { project: string; parent_id: string };
   roles: { slug: string; name: string }[];
   projects: { slug: string; name: string }[];
+  agents: AgentChoice[];
   others: TaskSummary[];
   onSaved: (t: { id: string }) => void;
 }) {
@@ -312,6 +323,7 @@ function TaskForm({
     status: task?.status ?? 'open',
     priority: task?.priority ?? 'normal',
     role: task?.role ?? '',
+    for_agent: task?.for_agent ?? '',
     project: task?.project ?? defaults.project,
     parent_id: task?.parent_id ?? defaults.parent_id,
     due_date: task?.due_date ?? '',
@@ -331,6 +343,7 @@ function TaskForm({
         status: f.status,
         priority: f.priority,
         role: f.role || null,
+        for_agent: f.for_agent || null,
         project: f.project || null,
         parent_id: f.parent_id || null,
         due_date: f.due_date || null,
@@ -378,6 +391,20 @@ function TaskForm({
             ))}
           </select>
         </Field>
+        {(agents.length > 0 || f.for_agent) && (
+          <Field label="For agent" hint="Optional. Only agents that may take the chosen role.">
+            <select value={f.for_agent} onChange={set('for_agent')}>
+              <option value="">any agent with the role</option>
+              {agents
+                .filter((a) => a.slug === f.for_agent || (f.role && a.roles.includes(f.role)))
+                .map((a) => (
+                  <option key={a.slug} value={a.slug}>
+                    {a.name} · {a.platform}
+                  </option>
+                ))}
+            </select>
+          </Field>
+        )}
         <Field label="Project">
           <select value={f.project} onChange={set('project')}>
             <option value="">no project</option>

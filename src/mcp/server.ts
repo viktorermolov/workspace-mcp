@@ -290,6 +290,7 @@ export function buildMcpServer(db: DB, actorOf: () => Actor, version: string, so
         status: z.enum(TASK_STATUSES).optional(),
         role: z.string().max(200).nullable().optional().describe('Role slug or id the task belongs to.'),
         project: z.string().max(200).nullable().optional(),
+        for_agent: z.string().max(200).nullable().optional().describe('Agent slug the task is addressed to (it must be able to take the task\'s role), or null for any agent with the role.'),
         parent_id: id.nullable().optional(),
         depends_on: z.array(id).max(50).optional().describe('Replaces the dependency list.'),
         priority: z.enum(PRIORITIES).optional(),
