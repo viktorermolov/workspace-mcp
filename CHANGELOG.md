@@ -10,6 +10,31 @@ All notable changes to this project are documented here. The format follows [Kee
 - Comments on a closed task reach its assignee and its creator: `start` lists them under `comments_on_closed_tasks` (with `you_are`: `creator`, `assignee` or both), and the creator's role is woken with `task.commented`, as the task's role already was. The writer does not see its own comment there. Comments on open tasks are unchanged. (#183)
 - Both lists in `start` are a session inbox: each item is shown once, by the next `start` of that platform, agent and role, even when `changes_since_previous_start` is paged. No new tools, arguments, rights or migrations; older connectors keep working without a reconnect. (#183)
 
+### Changed
+
+- A task of a role that several agents may take must name its agent. `save_task` that creates a task, or changes its role or `for_agent`, without an agent (`for_agent` left out, empty or `null`) for such a role is refused with `invalid`; the error names the role and its agents, and nothing is created or changed. A role with one agent gets that agent, and a role with no agents behaves as before. `for_agent: "*"` is the explicit "any agent of the role" and needs a role. The owner's task form follows the same rule and offers "any agent with the role". Other edits of an existing task are not re-checked. See `docs/decisions/0010-require-for-agent-on-multi-agent-roles.md`. (#181)
+
+### Upgrade
+
+- Calls that create or re-address a task of a role with several agents without naming the agent now fail with `invalid`. Pass the agent's slug in `for_agent`, or `"*"` for any agent of the role; `null` no longer means "any agent" for such a role.
+- Existing tasks with no agent are unchanged by the upgrade and can still be edited. To address one, call `save_task` with its `id`, `rev` and `for_agent` (the owner, its role, or a coordinator role).
+- Roles with one agent are addressed to that agent automatically, and older connectors whose tools have no `for_agent` keep working with no reconnect.
+
+## [0.6.2] - 2026-11-27
+
+### Fixed
+
+- Re-authorizing a platform no longer drops the previous client's tokens at the consent screen. The rebind (switching the accepted client, revoking previous grants, and recording the transfer) waits until the new client completes the authorization-code exchange. Until then the previous access and refresh tokens keep working. A second consent for the same platform, or several new clients from repeated attempts, replaces the pending bind instead of stacking rebinds. After Approve, the consent page shows a continue link and hides the Approve button, so a page that stays open (for example on iPhone, when the platform's app is installed) is not left in an approvable state. (#189)
+
+### Upgrade
+
+- Upgrading from 0.6.1 applies one additive migration (16, `pending-client-bind`) automatically, after a pre-migration backup. Existing data is kept.
+- Make a consistent local backup of the database before upgrading, for example with `cli backup` or with the container stopped.
+- After the upgrade, reconnect a platform as usual from the product and approve the consent screen. The previous connection stays in use until the product finishes the authorization-code exchange. If you reconnect from Safari on iPhone and the product's app is installed, the phone may open the app and leave the consent page on screen: do not press Approve again. If access does not complete, long-press the continue link and open it in Safari. These iPhone steps follow Apple's documentation for choosing the browser instead of the app, and have not been tested on a real iPhone. See [Connecting Grok](docs/platforms/grok.md#reconnecting).
+- Upgrading from 0.6.0 applies migrations 15 and 16.
+- Upgrading from 0.5.0 applies migrations 14, 15 and 16.
+- Rollback to 0.6.1, 0.6.0 or 0.5.0 is possible only by restoring the pre-migration backup.
+
 ## [0.6.1] - 2026-11-27
 
 ### Fixed
