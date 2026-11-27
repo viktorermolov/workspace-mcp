@@ -109,7 +109,7 @@ describe('closed tasks reach their creator (#183)', () => {
   });
 
   it('wakes the creator role with the existing task.updated type, even when the closer has the same role', async () => {
-    const t = await call(grok, 'save_task', { title: 'Ben closes this', role: 'lead', claimed_role: 'lead', agent: 'ada' });
+    const t = await call(grok, 'save_task', { title: 'Ben closes this', role: 'lead', for_agent: '*', claimed_role: 'lead', agent: 'ada' });
     await env.svc.webhooks.tick(later(3600));
     received = [];
     await call(grok, 'save_task', { id: t.id, rev: t.rev, status: 'done', claimed_role: 'lead', agent: 'ben' });
@@ -121,7 +121,7 @@ describe('closed tasks reach their creator (#183)', () => {
   });
 
   it('a creator closing its own task gets no notice', async () => {
-    const t = await call(grok, 'save_task', { title: 'My own chore', role: 'lead', claimed_role: 'lead', agent: 'ada' });
+    const t = await call(grok, 'save_task', { title: 'My own chore', role: 'lead', for_agent: '*', claimed_role: 'lead', agent: 'ada' });
     await env.svc.webhooks.tick(later(3600));
     received = [];
     await call(grok, 'save_task', { id: t.id, rev: t.rev, status: 'done', claimed_role: 'lead', agent: 'ada' });
