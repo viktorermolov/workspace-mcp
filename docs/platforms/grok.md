@@ -29,6 +29,21 @@ Checked on 25 November 2026.
 4. Add each bot as an agent under the connection (**Add an agent**): a name, a short name, and the roles it may take, chosen from the list you confirmed. Each bot passes its role as `claimed_role` and its short name as `agent` in `start` and on every write, so the log shows which bot acted and a task can be addressed to one bot with `for_agent`. When several bots may take a role, a new task of that role must name one of them, or `"*"` for any of them; a role with one bot gets that bot. Put both into the bot's standing instruction: see [agent-instruction.md](../agent-instruction.md).
 5. In a chat with the connector enabled, say: *"This is my workspace. Call `start` and continue from there."*
 
+## Reconnecting
+
+The existing connection stays in use until Grok completes the authorization-code exchange. Approving the consent screen alone does not drop the previous tokens. If you approve more than once before the exchange finishes, only one switch happens, and only after a successful exchange.
+
+**If you reconnect from Safari on iPhone** (or another iOS browser) and the Grok app is installed, iOS may open the app and leave the consent page on screen. The documented callback, `https://grok.com/connectors-oauth-exchange-code/`, is claimed as a universal link by the Grok app (its [apple-app-site-association](https://grok.com/.well-known/apple-app-site-association) file matches all paths except an explicit exclude list, and this callback is not excluded). That hand-off is decided by iOS, not by this server.
+
+Do not press **Approve** again. If access does not complete, try opening the callback in Safari so the page on grok.com can finish the exchange:
+
+1. If the consent page still shows a **Continue to the platform** link, long-press it.
+2. Choose to open the link in Safari (not in the Grok app).
+
+Apple documents this long-press choice in [TN3155](https://developer.apple.com/documentation/technotes/tn3155-debugging-universal-links): on iOS, long-pressing a universal link offers the app and the browser, and the option you pick becomes the default for that domain. **These reconnect steps have not been tested on a real iPhone**; they follow Apple's documented control, not a trial of this flow.
+
+If the Grok app itself offers a way to add or reconnect the connector, starting from the app may also work, because the app then holds the authorization request. That path is likewise untested here.
+
 ## If it fails
 
 Open **Platforms → Diagnostics** in the web interface. Every step of the attempt is recorded: discovery, registration, authorization, token exchange.
