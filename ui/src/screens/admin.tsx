@@ -103,6 +103,7 @@ export function ConnectionsScreen() {
   const welcome = new URLSearchParams(location.search).has('welcome');
   const me = useMe();
   const list = useData(() => api<ConnectionsPayload>('/connections'));
+  const agents = useData(() => api<{ agents: Agent[] }>('/agents'));
   const [diagFor, setDiagFor] = useState<string | null>(null);
   const [showManual, setShowManual] = useState(false);
   const act = useAction();
@@ -196,6 +197,9 @@ export function ConnectionsScreen() {
                 </div>
               </div>
               {diagFor === c.client_id && <Diagnostics clientId={c.client_id} />}
+              {list.data && c.active && (
+                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
+              )}
               {list.data && (
                 <ConnectionRoleList
                   key={`${c.client_id}:${c.roles_confirmed_at ?? ''}`}
@@ -365,6 +369,131 @@ function RoleAccessSettings({
         </ul>
       </Card>
     </>
+  );
+}
+
+interface Agent {
+  id: string;
+  slug: string;
+  name: string;
+  rev: number;
+  platform: { id: string; name: string; active: boolean };
+  roles: { id: string; slug: string; name: string; archived: boolean }[];
+}
+
+/** The named bots that run on one platform, and the roles each of them may take. */
+function AgentList({ connection, agents, workspaceRoles, onChanged }: { connection: Connection; agents: Agent[]; workspaceRoles: WorkspaceRole[]; onChanged: () => void }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const act = useAction();
+  const remove = (a: Agent) => {
+    if (!confirm(`Remove the agent "${a.name}"? The log keeps what it did.`)) return;
+    act.run(async () => {
+      await del(`/agents/${enc(a.id)}`);
+      onChanged();
+    });
+  };
+  return (
+    <div class="connection-roles agents">
+      <p class="small muted">Agents on this platform, and the roles each may take.</p>
+      {act.error && <Alert>{act.error}</Alert>}
+      <ul class="plain">
+        {agents.map((a) =>
+          editing === a.id ? (
+            <li key={a.id}>
+              <AgentForm
+                connection={connection}
+                agent={a}
+                workspaceRoles={workspaceRoles}
+                onDone={() => {
+                  setEditing(null);
+                  onChanged();
+                }}
+                onCancel={() => setEditing(null)}
+              />
+            </li>
+          ) : (
+            <li key={a.id} class="version-row">
+              <div>
+                <strong>{a.name}</strong> <span class="muted small">@{a.slug}</span>
+                <div class="row">{a.roles.length ? a.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>) : <span class="muted small">no roles yet</span>}</div>
+              </div>
+              <div class="row">
+                <Button kind="quiet" onClick={() => setEditing(a.id)}>
+                  Edit
+                </Button>
+                <Button kind="quiet" onClick={() => remove(a)} busy={act.busy}>
+                  Remove
+                </Button>
+              </div>
+            </li>
+          ),
+        )}
+      </ul>
+      {editing === 'new' ? (
+        <AgentForm
+          connection={connection}
+          workspaceRoles={workspaceRoles}
+          onDone={() => {
+            setEditing(null);
+            onChanged();
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      ) : (
+        <Button kind="default" onClick={() => setEditing('new')}>
+          Add an agent
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function AgentForm({ connection, agent, workspaceRoles, onDone, onCancel }: { connection: Connection; agent?: Agent; workspaceRoles: WorkspaceRole[]; onDone: () => void; onCancel: () => void }) {
+  const [name, setName] = useState(agent?.name ?? '');
+  const [selected, setSelected] = useState<Set<string>>(new Set((agent?.roles ?? []).map((r) => r.id)));
+  const act = useAction();
+  const toggle = (id: string) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const save = (e: Event) => {
+    e.preventDefault();
+    act.run(async () => {
+      await post('/agents', agent ? { id: agent.id, rev: agent.rev, name, roles: [...selected] } : { name, platform: connection.client_id, roles: [...selected] });
+      onDone();
+    });
+  };
+  return (
+    <form class="agent-form" onSubmit={save}>
+      {act.error && <Alert>{act.error}</Alert>}
+      <Field label="Agent name">
+        <input value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} required maxLength={300} />
+      </Field>
+      <fieldset>
+        <legend>Roles it may take</legend>
+        {!workspaceRoles.length && <p class="small muted">Create a role first.</p>}
+        <ul class="plain">
+          {workspaceRoles.map((r) => (
+            <li key={r.id}>
+              <label class="row">
+                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /> {r.name} <span class="muted small">@{r.slug}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+      <div class="row">
+        <Button kind="primary" type="submit" busy={act.busy}>
+          {agent ? 'Save agent' : 'Add agent'}
+        </Button>
+        <Button kind="quiet" type="button" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
