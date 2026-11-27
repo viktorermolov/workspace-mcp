@@ -221,8 +221,8 @@ export function ConsentScreen() {
               </>
             )}
           </dl>
-          <p class="muted small">Approve only a connection you started yourself just now. You can revoke it at any time under Connections.</p>
-          <Field label="Name this connection" hint="Shown in the log next to everything this connection does.">
+          <p class="muted small">Approve only a connection you started yourself just now. You can revoke it at any time under Platforms.</p>
+          <Field label="Name this platform" hint="For example Grok or Claude. Shown in the log next to everything it does.">
             <input value={name} maxLength={100} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="For example: Claude on my phone" />
           </Field>
           {act.error && <Alert>{act.error}</Alert>}

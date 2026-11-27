@@ -1,6 +1,6 @@
 # Connecting Grok
 
-Grok (grok.com) connects to remote MCP servers as **custom connectors**. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Connections** screen.
+Grok (grok.com) connects to remote MCP servers as **custom connectors**. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Platforms** screen.
 
 ## What is known, and from where
 
@@ -25,19 +25,19 @@ Checked on 25 November 2026.
 
 1. In Grok, open **Connectors**, add a custom connector, and enter the MCP address `https://<your address>/mcp`.
 2. Grok opens the consent screen of your workspace. Sign in with your passkey, name the connection (for example "Grok"), and choose **Approve**.
-3. Several Grok Bots can share that one connection. On the **Connections** screen, review the suggested list of roles for that connection (taken from its own history) and confirm the ones the platform may use. If enforcement is already on, a new connection cannot write until you confirm its list.
+3. Several Grok Bots can share that one connection. On the **Platforms** screen, review the suggested list of roles for that connection (taken from its own history) and confirm the ones the platform may use. If enforcement is already on, a new connection cannot write until you confirm its list.
 4. Add each bot as an agent under the connection (**Add an agent**): a name, a short name, and the roles it may take, chosen from the list you confirmed. Each bot passes its role as `claimed_role` and its short name as `agent` in `start` and on every write, so the log shows which bot acted and a task can be addressed to one bot with `for_agent`. Put both into the bot's standing instruction: see [agent-instruction.md](../agent-instruction.md).
 5. In a chat with the connector enabled, say: *"This is my workspace. Call `start` and continue from there."*
 
 ## If it fails
 
-Open **Connections → Diagnostics** in the web interface. Every step of the attempt is recorded: discovery, registration, authorization, token exchange.
+Open **Platforms → Diagnostics** in the web interface. Every step of the attempt is recorded: discovery, registration, authorization, token exchange.
 
 - **Nothing recorded at all**: Grok did not reach the server. Check that the address is public and that no login wall (Cloudflare Access) or bot challenge sits in front of it.
 - **Registration failed**: the diagnostics show the redirect URI Grok sent and the reason. Create a manual client with that URI (below).
 - **Grok asks for a client ID and secret**: create a manual client with the redirect URI `https://grok.com/connectors-oauth-exchange-code/` (or the one Grok shows), and enter the ID and secret in Grok.
 
-To create a manual client: **Connections → Create a client**, enter a name and the redirect URI, and keep **The platform keeps a client secret** ticked if Grok asks for a secret. The secret is shown once.
+To create a manual client: **Platforms → Create a client**, enter a name and the redirect URI, and keep **The platform keeps a client secret** ticked if Grok asks for a secret. The secret is shown once.
 
 ## Grok Bot routines
 

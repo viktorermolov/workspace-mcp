@@ -186,7 +186,7 @@ export function resolveAgentActor(db: DB, actor: Actor, claimedRole: string | un
   if (named) {
     // A named agent answers with its own role list, which is always inside its platform's confirmed list.
     if (!agentMayTake(db, named.id, role.id)) {
-      const message = `agent "${named.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Connections screen`;
+      const message = `agent "${named.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Platforms screen`;
       if (mode === 'enforce') {
         auditRoleCheck(db, actor, 'rejected', { reason: 'agent_role_not_allowed', claimed_role: role.slug, agent: named.slug });
         throw new DomainError('forbidden', message);
@@ -275,7 +275,7 @@ export function assertStartRole(db: DB, actor: Actor, roleRef: string): void {
     const a = get<{ id: string; slug: string }>(db, 'SELECT id, slug FROM agent WHERE member_id = ? AND slug = ? AND client_id = ?', actor.memberId, actor.agent, actor.connectionId);
     if (a) {
       if (agentMayTake(db, a.id, role.id)) return;
-      const message = `agent "${a.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Connections screen`;
+      const message = `agent "${a.slug}" may not take the role "${role.slug}"; the owner sets an agent's roles, within the roles confirmed for its platform, on the Platforms screen`;
       if (mode === 'enforce') {
         auditRoleCheck(db, actor, 'rejected', { reason: 'start_agent_role_not_allowed', claimed_role: role.slug, agent: a.slug });
         throw new DomainError('forbidden', message);

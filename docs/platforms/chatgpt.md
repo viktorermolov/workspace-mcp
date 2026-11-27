@@ -1,6 +1,6 @@
 # Connecting ChatGPT
 
-ChatGPT connects to remote MCP servers through its connector and plugin platform. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Connections** screen.
+ChatGPT connects to remote MCP servers through its connector and plugin platform. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Platforms** screen.
 
 Checked against OpenAI's [authentication guide for plugins and apps](https://developers.openai.com/plugins/build/auth) on 25 November 2026. Where in ChatGPT a custom MCP server is added, and which plans and settings allow it, changes often and is not covered by that page; follow OpenAI's current help for adding a custom connector or app. A real connection from ChatGPT is the final check and is done by the owner after deployment.
 
@@ -23,11 +23,11 @@ ChatGPT reads tool annotations: reads are marked read-only, so it does not ask y
 
 If ChatGPT asks for a client ID and secret instead of registering itself:
 
-1. In the web interface, open **Connections → Create a client**.
+1. In the web interface, open **Platforms → Create a client**.
 2. Enter a name and the redirect URI that ChatGPT shows for the connector (`https://chatgpt.com/connector_platform_oauth_redirect` or the `…/connector/oauth/<id>` form). Keep **The platform keeps a client secret** ticked if ChatGPT asks for a secret.
 3. Copy the client ID and the secret. The secret is shown once.
 4. Enter both in ChatGPT.
 
 ## Optional: restrict who can call the server
 
-ChatGPT presents an OpenAI-managed client certificate (mutual TLS) and publishes its egress IP ranges. Workspace MCP does not check either itself: every request still needs a valid token. If you want an extra network-level filter, configure it in your proxy or tunnel. Every attempt is recorded under **Connections → Diagnostics** in the web interface.
+ChatGPT presents an OpenAI-managed client certificate (mutual TLS) and publishes its egress IP ranges. Workspace MCP does not check either itself: every request still needs a valid token. If you want an extra network-level filter, configure it in your proxy or tunnel. Every attempt is recorded under **Platforms → Diagnostics** in the web interface.

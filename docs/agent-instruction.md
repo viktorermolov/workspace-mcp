@@ -4,7 +4,7 @@ The server already tells every connected client to call `start` first. On most p
 
 Replace `<role>` with the role the agent should take (for example `entry`, `development` or `assistant`), or delete the role sentence to let the agent pick one from the list `start` returns.
 
-Replace `<agent>` with the agent's short name from the **Connections** screen (for example `arina`). It matters when several named bots share one platform: the log, checkpoints and task claims then show which of them acted, and tasks can be addressed to one of them. If the platform has no agents added, delete the two lines that mention `agent`.
+Replace `<agent>` with the agent's short name from the **Platforms** screen (for example `arina`). It matters when several named bots share one platform: the log, checkpoints and task claims then show which of them acted, and tasks can be addressed to one of them. If the platform has no agents added, delete the two lines that mention `agent`.
 
 ```text
 You have a connector called Workspace. It holds my working rules, roles, projects, documents, tasks and checkpoints, shared by all my AI platforms. Treat it as the source of truth about how I work and where work stands.

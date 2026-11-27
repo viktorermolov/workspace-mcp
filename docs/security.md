@@ -30,7 +30,7 @@ One instance serves one owner. It stores text (working rules, role instructions,
 
 ### Roles name the author of a change, and limit who may edit what
 
-Every write from an agent must name the role that is acting (`claimed_role`). The server checks that the role exists, is not archived, and is on the allow-list of that OAuth connection. The owner sets the list on the Connections page. One connection may be allowed to act as several roles, so several bots can share a platform connection and still sign their edits with their own names.
+Every write from an agent must name the role that is acting (`claimed_role`). The server checks that the role exists, is not archived, and is on the allow-list of that OAuth connection. The owner sets the list on the Platforms page. One connection may be allowed to act as several roles, so several bots can share a platform connection and still sign their edits with their own names.
 
 A role may edit items that belong to it. A small set of roles the owner marks as allowed to edit any item may also edit everyone else's. Separately, the owner can mark a coordinating role as allowed to address tasks to agents: such a role may change `for_agent` on any task and nothing else on it. Both marks are set only by the owner in the web interface. The log records the connection and the role that made the change, and which role the item belonged to, so it is visible who edited whose work.
 
@@ -90,7 +90,7 @@ The only way in for platforms is the service's own OAuth 2.1 authorization serve
 - Dynamic registration cannot register `client_credentials` clients: every connection needs the owner's approval on the consent screen.
 - A registration whose redirects are all loopback (`http://127.0.0.1`, `[::1]` or `localhost`) or custom schemes, and that sends no `application_type`, is registered as a native app, so its loopback redirect may use any port (RFC 8252). Public-host `http` redirects are always refused.
 - Self-registered clients that never complete a connection are removed after `UNUSED_CLIENT_TTL_DAYS`; clients the owner created are kept.
-- **Revoke** on the Connections screen marks the connection revoked and drops its grants in one transaction; every later request with its tokens gets `401`.
+- **Revoke** on the Platforms screen marks the connection revoked and drops its grants in one transaction; every later request with its tokens gets `401`.
 
 ### The owner: passkeys only
 

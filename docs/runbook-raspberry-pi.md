@@ -220,7 +220,7 @@ curl -s http://127.0.0.1:8080/healthz; echo
 
 Expected: a `listening` line in the log and the new version in the health check. If the release changes the database, the log first shows `backup before migration` with the name of the backup.
 
-After upgrading to 0.2.0 (or later, the first time role checks are present): open **Connections**, review each connection's suggested role list and confirm it, tick the roles that may edit any item, then turn on enforcement when you are ready. Role checks stay in warning mode until you do. After enforcement is on, a newly approved connection cannot write until you confirm its role list. See the 0.2.0 notes in [CHANGELOG.md](../CHANGELOG.md) and [security.md](security.md).
+After upgrading to 0.2.0 (or later, the first time role checks are present): open **Platforms**, review each connection's suggested role list and confirm it, tick the roles that may edit any item, then turn on enforcement when you are ready. Role checks stay in warning mode until you do. After enforcement is on, a newly approved connection cannot write until you confirm its role list. See the 0.2.0 notes in [CHANGELOG.md](../CHANGELOG.md) and [security.md](security.md).
 
 With a published image (`WORKSPACE_IMAGE` set in `.env`), read the release notes first, check the new version's signature as in [Step 5](#step-5-build-and-start-the-service), then:
 
@@ -281,5 +281,5 @@ See [backups.md](backups.md) for restore, export and import.
 | Public URL returns Cloudflare error 1033 | `cloudflared` is not running or the token is wrong: `docker compose logs cloudflared`. |
 | Public URL returns 502 | The tunnel's public hostname does not point to `workspace:8080`, or the `workspace` container is not healthy. |
 | Setup page says the code is invalid | The code expired or was already used. `docker compose restart workspace` prints a new one. |
-| An AI platform cannot connect | In the web interface, open **More → Connections → Diagnostics**: every step of each attempt is recorded. Check Cloudflare **Security → Events** for blocked requests. |
+| An AI platform cannot connect | In the web interface, open **More → Platforms → Diagnostics**: every step of each attempt is recorded. Check Cloudflare **Security → Events** for blocked requests. |
 | Build fails with `SELF_SIGNED_CERT_IN_CHAIN` | A TLS-inspecting proxy is in the way. Build with its CA: `docker build --secret id=extra_ca,src=/path/ca.pem -t workspace-mcp:local .` |

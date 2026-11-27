@@ -21,7 +21,7 @@ Add a second passkey right away, so you do not lose access if a device is lost: 
 
 ## 2. Connect your first AI platform
 
-The **Connections** screen shows the MCP address to give to platforms:
+The **Platforms** screen shows the MCP address to give to platforms:
 
 ```text
 https://<your address>/mcp
@@ -40,7 +40,7 @@ When the platform opens the consent screen of your workspace:
 2. Check the platform name and the address it will return to.
 3. Give the connection a name you will recognise (for example "Claude on my phone") and choose **Approve**.
 
-The connection then appears on **Connections** with its last activity. There you confirm the roles the platform may act as and, when several named bots share one platform, add each of them as an agent with its own roles. **Revoke** cuts it off at once. If a connection fails, open **Diagnostics** on the same screen: every step of each attempt is recorded there without secrets.
+The connection then appears on **Platforms** with its last activity. There you confirm the roles the platform may act as and, when several named bots share one platform, add each of them as an agent with its own roles. **Revoke** cuts it off at once. If a connection fails, open **Diagnostics** on the same screen: every step of each attempt is recorded there without secrets.
 
 ## 3. Fill the workspace
 

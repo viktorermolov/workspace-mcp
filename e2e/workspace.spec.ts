@@ -323,7 +323,7 @@ async function approveAndCatchRedirect(name: string, redirect: string) {
   await expect(page.getByRole('heading', { name: 'Connect a platform' })).toBeVisible();
   await expect(page.getByText('Test Agent')).toBeVisible();
   await expect(page.locator('dl.facts')).toContainText('127.0.0.1:9');
-  await page.getByLabel('Name this connection').fill(name);
+  await page.getByLabel('Name this platform').fill(name);
   const back = page.waitForRequest((r) => r.url().startsWith(redirect));
   await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
   await page.getByRole('button', { name: 'Approve' }).click();
@@ -360,7 +360,7 @@ async function connectReviewsAgent(name: string): Promise<{ token: string; clien
   await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined);
   await page.goto(u.toString());
   await expect(page.getByRole('heading', { name: 'Connect a platform' })).toBeVisible();
-  await page.getByLabel('Name this connection').fill(name);
+  await page.getByLabel('Name this platform').fill(name);
   const back = page.waitForRequest((r) => r.url().startsWith(redirect));
   await page.route(`${redirect}**`, (r) => r.fulfill({ status: 200, body: 'ok' }));
   await page.getByRole('button', { name: 'Approve' }).click();
@@ -481,7 +481,7 @@ test('a connection name typed as soon as the consent screen shows is kept', asyn
     }).observe(document.body, { childList: true, subtree: true });
   });
   release();
-  const field = page.getByLabel('Name this connection');
+  const field = page.getByLabel('Name this platform');
   await expect(field).toHaveValue('Typed right away');
   // Let every deferred update of the screen run, then check the typed name survived them.
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 100))));

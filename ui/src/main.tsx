@@ -63,7 +63,7 @@ const SIDE_EXTRA = [
   ['/read', 'Reading'],
   ['/reviews', 'Reviews'],
   ['/github', 'GitHub issues'],
-  ['/connections', 'Connections'],
+  ['/connections', 'Platforms'],
   ['/webhooks', 'Webhooks'],
   ['/log', 'Log'],
   ['/data', 'Export and backups'],
