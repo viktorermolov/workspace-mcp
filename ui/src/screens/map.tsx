@@ -15,11 +15,19 @@ interface MapRole {
   open_task_list?: { id: string; title: string; status: string }[];
   open_more?: number;
   routines?: { id: string; name: string; schedule: string; status: string; last_run: string | null }[];
+  agents?: { slug: string; name: string; platform: string }[];
   last_checkpoint: { at: string; stopped_at: string; next: string; project: string | null } | null;
   last_activity_at: string | null;
 }
+interface MapPlatform {
+  id: string;
+  name: string;
+  last_activity_at: string | null;
+  agents: { slug: string; name: string; roles: { slug: string; name: string }[] }[];
+}
 interface MapData {
   roles: MapRole[];
+  platforms?: MapPlatform[];
   links: { from: string; to: string; type: string }[];
   interactions: { from: string; to: string; kind: string; count: number; last_at: string }[];
   interactions_truncated?: boolean;
@@ -126,9 +134,44 @@ export function MapScreen() {
         )}
         {data && data.roles.length > 0 && (
           <>
+            {(data.platforms ?? []).length > 0 && (
+              <section class="platforms" aria-label="Platforms and their agents">
+                {data.platforms!.map((p) => (
+                  <div class="platform" key={p.id}>
+                    <div class="platform-head">
+                      <strong>{p.name}</strong>
+                      <span class="small muted">
+                        {p.agents.length === 1 ? '1 agent' : `${p.agents.length} agents`} · last used <Time at={p.last_activity_at} />
+                      </span>
+                    </div>
+                    {p.agents.length === 0 ? (
+                      <p class="small muted">
+                        No agents recorded. <a href="/connections">Add one</a>
+                      </p>
+                    ) : (
+                      <ul class="plain platform-agents">
+                        {p.agents.map((a) => (
+                          <li key={a.slug}>
+                            <span class="platform-agent">{a.name}</span>
+                            <span class="platform-roles">
+                              {a.roles.length === 0 && <span class="small muted">no roles yet</span>}
+                              {a.roles.map((r) => (
+                                <a key={r.slug} class="chip" href={`/roles/${enc(r.slug)}`}>
+                                  {r.name}
+                                </a>
+                              ))}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </section>
+            )}
             <Graph data={data} />
             <p class="muted small legend">
-              Each card shows a role and its open tasks. Lines on the left are the reporting line, top to bottom. Arrows on the right: solid are declared links, dashed are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
+              At the top: each platform, its agents and the roles they may take. Below, each card shows a role and its open tasks, in the order of the tree. Lines on the left are the reporting line, top to bottom. Arrows on the right: solid are declared links, dashed are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
               {data.roles.some((r) => isTestRole(r.name)) && ' Test roles (named [TEST] …) are dashed and listed after the team.'}
             </p>
             {data.interactions_truncated && <p class="muted small">The dashed lines only cover the most recent 2,000 recorded interactions in the last 30 days.</p>}
@@ -138,7 +181,7 @@ export function MapScreen() {
               </p>
             )}
             <div class="cards">
-              {data.roles.map((r) => {
+              {layoutTree(data.roles).rows.map(({ role: r }) => {
                 const out = [...data.links.filter((l) => l.from === r.slug).map((l) => ({ to: l.to, kind: l.type, count: 0 })), ...data.interactions.filter((i) => i.from === r.slug).map((i) => ({ to: i.to, kind: i.kind, count: i.count }))];
                 return (
                   <Card key={r.slug}>
@@ -152,6 +195,17 @@ export function MapScreen() {
                       </a>
                     </div>
                     {r.area && <p class="muted">{r.area}</p>}
+                    {(r.agents ?? []).length > 0 && (
+                      <p class="small">
+                        Taken by{' '}
+                        {r.agents!.map((a, i) => (
+                          <span key={a.slug}>
+                            {i > 0 && ', '}
+                            <strong>{a.name}</strong> <span class="muted">on {a.platform}</span>
+                          </span>
+                        ))}
+                      </p>
+                    )}
                     {Object.keys(r.open_tasks).some((s) => s !== 'open') && (
                       <p class="small">
                         {Object.entries(r.open_tasks)
