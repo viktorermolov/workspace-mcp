@@ -2,7 +2,7 @@
 
 A self-hosted, portable workspace for your AI agents, served as a remote MCP server.
 
-You keep one workspace (working rules, roles, routines, projects, documents, tasks and checkpoints) and connect it to any AI platform that supports remote MCP with OAuth: Claude, ChatGPT, Grok or another client. When you move to a new platform, connect it and say *"This is my workspace, call `start` and continue from there."* Everything the platform changes stays in the workspace for the next one.
+You keep one workspace (working rules, roles, agents, routines, projects, documents, tasks and checkpoints) and connect it to any AI platform that supports remote MCP with OAuth: Claude, ChatGPT, Grok or another client. When you move to a new platform, connect it and say *"This is my workspace, call `start` and continue from there."* Everything the platform changes stays in the workspace for the next one.
 
 The service stores, shows and notifies. It does not run agents, assign work, set priorities or call an LLM: your agents and you decide, the platform executes.
 
@@ -12,21 +12,32 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 
 > **Status:** 0.4.1. While the version is 0.x, a minor version may change things without keeping compatibility; see [Versions and compatibility](#versions-and-compatibility). Platform connections are documented from each platform's own documentation and have not yet been confirmed against every platform in production. See [CHANGELOG.md](CHANGELOG.md).
 
+## Platforms, agents and roles
+
+Three different things, kept apart:
+
+- A **platform** is a connection you approved: Claude, ChatGPT, Grok, a bot on your own server. The server can verify which platform is calling, and nothing more.
+- An **agent** is a named bot on one platform. One platform can host several agents (for example several bots behind one connector), and each call says which of them is acting.
+- A **role** is a function with an instruction: coordinator, developer, assistant. Agents on different platforms can take the same role, and one agent can take several.
+
+You confirm which roles a platform may act as, add its agents, and give each agent some of those roles. An agent calls `start` with its name and gets its roles, their instructions, its open tasks and its last checkpoint. A task belongs to a role and can be addressed to one agent. The log shows the platform, the agent and the role behind every change.
+
 ## What it stores
 
 - **Working rules**: how to work with you, shared by every role and platform.
+- **Agents**: the named bots on each platform and the roles each may take. Only you change this list.
 - **Roles**: area of responsibility, instruction, typed links to other roles, an optional wake-up webhook, and setup notes for what a new platform must recreate by hand (connectors, triggers).
 - **Routines**: a recurring job owned by a role, with a schedule, timezone, status, optional external platform id, and last run. The server stores this; it does not run the schedule.
 - **Projects**: description, current focus, where work stopped, repositories.
 - **Documents**: Markdown of any kind, attached to the workspace, a project or a role, with full-text search.
-- **Tasks**: status, role, project, parent, dependencies, priority, due date, result, comments and history. Claiming is atomic; cycles are rejected.
-- **Checkpoints**: per role and project, what was done, where it stopped, what comes next.
+- **Tasks**: status, role, the agent it is addressed to (optional), project, parent, dependencies, priority, due date, result, comments and history. Claiming is atomic; cycles are rejected.
+- **Checkpoints**: per role, agent and project, what was done, where it stopped, what comes next.
 - **GitHub issues mirror** (optional): a read-only copy of issues from selected repositories, shown next to tasks.
-- **Log**: who changed what and when.
+- **Log**: which platform, agent and role changed what and when.
 
 ## How it works
 
-- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 18 tools. The entry tool `start` returns your working rules, the role's instruction, open tasks, last checkpoint, routines and what changed since the previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
+- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 18 tools. The entry tool `start` returns your working rules and, for the agent that calls it, the instruction of each of its roles, its open tasks, last checkpoint, routines and what changed since its previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
 - **Agents edit directly, and nothing is lost.** Working rules, role instructions, documents and project descriptions keep every version with its author. Any two versions can be compared line by line, and a rollback is one tap. Agents cannot change history or delete anything permanently.
 - **You see what changed.** The **Changes** screen lists everything agents changed since your last visit, with edits to working rules and role instructions first.
 - **Sign-in without passwords.** Platforms connect through the service's own OAuth 2.1 server (CIMD, dynamic registration or a client you create, PKCE, resource-bound tokens, rotating refresh tokens). You approve each connection with a passkey and can revoke it at any time. Every step of a connection attempt is recorded for diagnosis.
@@ -37,12 +48,12 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 
 Phone first, light and dark themes, served by the same container with no CDN:
 
-- **Map**: roles, their links, open tasks, last checkpoint and activity.
+- **Map**: your platforms with their agents, and the roles as a tree with the agents on each, open tasks and last activity. Every role and every agent has a page of its own.
 - **Tasks**: a tree with dependencies and the mirrored issues, with filters.
 - **Projects and documents**: view and edit, version history, line-by-line comparison, rollback.
 - **Changes**: what agents changed since your last visit, with one-tap rollback.
 - **GitHub**: connect a read-only token, pick repositories, map them to projects, see sync status.
-- **More**: log, working rules, connections with diagnostics, webhooks with their delivery log, backups, export and import, passkeys.
+- **More**: log, working rules, platforms with their agents, role lists and connection diagnostics, webhooks with their delivery log, backups, export and import, passkeys.
 
 ## Quick start
 

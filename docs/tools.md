@@ -28,7 +28,7 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
-| `start` | read | Entry point. Call first in every session. |
+| `start` | read | Entry point. Call first in every session, with your agent slug. |
 | `get` | read | One item by id. |
 | `search` | read | Full-text search or a filtered list. |
 | `save_role` | write | Create or update a role. |
@@ -181,7 +181,7 @@ Returns log events after the cursor, oldest first, each with who (owner, or conn
 
 ## A typical session
 
-1. `start` with your role. Read `instructions`, your open tasks and your last checkpoint.
+1. `start` with your `agent` slug (or with your `role` on a platform without agents). Read `instructions`, your open tasks and your last checkpoint; with several roles they are under `data.my_roles`, one entry per role.
 2. `claim_task` the task you take, `get` what you need, `search` for the rest.
-3. Save your work with the write tools, passing the `rev` you read.
+3. Save your work with the write tools, passing the `rev` you read, your `agent` and, as `claimed_role`, the role you act in.
 4. Before you finish, update your tasks (status, result, blocking reason) and write a `checkpoint`.

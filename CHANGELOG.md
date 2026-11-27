@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - A platform that runs one agent can say so. On the Platforms screen, under a platform with exactly one agent, the owner ticks "is the only agent on this platform"; a call that names no agent then counts as that agent: `start` returns its work, writes are recorded under it, and its roles apply instead of the platform's whole list. It is off by default and switches itself off when an agent is added to, moved to or from, or removed from the platform, so nothing is recorded under the wrong agent. Migration 13 adds the mark. (#164)
 - `start` by agent name alone: with `agent` and no `role`, an agent gets the instruction, open tasks, waiting owner comments, review comments, routines and last checkpoint of every role it may take, in one call (`instructions.role_instructions`, `data.my_roles`, `data.last_checkpoint`). An agent with one role gets what `start` with that role returns. Passing `role` still narrows to one role. (#162)
 
+### Changed
+
+- README explains platforms, agents and roles. The instruction to paste into a platform now has two texts: for a platform with agents the bot starts with its agent name alone, and for a platform without agents with its role. The typical session in the tools reference starts by agent. (#166)
+
 ### Fixed
 
 - Two agents of one role on one platform shared the marker for "changes since your previous start", so the first to call `start` used up the changes for the other. A named agent now has its own marker; its first `start` by name continues from the platform's marker for the role. (#162)
