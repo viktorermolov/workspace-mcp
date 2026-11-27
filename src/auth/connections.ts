@@ -30,7 +30,12 @@ export function getConnection(db: DB, clientId: string): ConnectionRow | undefin
   return get<ConnectionRow>(db, 'SELECT * FROM connection WHERE client_id = ?', clientId);
 }
 
-/** The single active, not-merged platform that currently accepts this OAuth client, if any. */
+/**
+ * The single active, not-merged platform that currently accepts this OAuth client, if any.
+ * Today the accepted client is `current_client_id` only. If a later migration needs more
+ * than one accepted client, this lookup should join that binding table instead of being
+ * rewritten at each call site.
+ */
 export function liveConnectionForClient(db: DB, clientId: string): ConnectionRow | undefined {
   return get<ConnectionRow>(
     db,
@@ -40,6 +45,77 @@ export function liveConnectionForClient(db: DB, clientId: string): ConnectionRow
         AND merged_into_client_id IS NULL`,
     clientId,
   );
+}
+
+/**
+ * OAuth client ids whose tokens this platform currently accepts.
+ * Today that is only `current_client_id` (falling back to the stable platform id).
+ * A later binding table can extend this list without rewriting revoke, expiry, or rollback.
+ */
+export function acceptedClientIds(_db: DB, platform: ConnectionRow): string[] {
+  const current = platform.current_client_id ?? platform.client_id;
+  return current ? [current] : [];
+}
+
+/** Agents, or an owner-confirmed role allow-list, make a platform a re-auth match candidate. */
+export function platformIsConfigured(db: DB, clientId: string): boolean {
+  const agents = get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM agent WHERE client_id = ?', clientId)?.n ?? 0;
+  if (agents > 0) return true;
+  const row = getConnection(db, clientId);
+  if (row?.roles_confirmed_at) return true;
+  const roles =
+    get<{ n: number }>(db, "SELECT COUNT(*) AS n FROM connection_role WHERE client_id = ? AND source = 'owner'", clientId)?.n ?? 0;
+  return roles > 0;
+}
+
+/**
+ * Journal rows under this platform other than its own `connection.approved`.
+ * Attribution is by `connection_id`, by `entity_id` on the platform or one of its agents,
+ * and by `event.agent` when that slug belongs to an agent on the platform.
+ */
+export function journalEntriesBesidesApprove(db: DB, platformClientId: string): number {
+  const row = get<{ n: number }>(
+    db,
+    `SELECT COUNT(*) AS n FROM event e
+      WHERE e.action != 'connection.approved'
+        AND (
+          e.connection_id = ?
+          OR (e.entity_type = 'connection' AND e.entity_id = ?)
+          OR (e.entity_type = 'agent' AND e.entity_id IN (SELECT id FROM agent WHERE client_id = ?))
+          OR (e.agent IS NOT NULL AND TRIM(e.agent) != '' AND e.agent IN (SELECT slug FROM agent WHERE client_id = ?))
+        )`,
+    platformClientId,
+    platformClientId,
+    platformClientId,
+    platformClientId,
+  );
+  return row?.n ?? 0;
+}
+
+/** An empty same-type duplicate may be archived only when all of these hold. */
+export function qualifiesAsEmptyDuplicate(db: DB, platform: ConnectionRow): boolean {
+  if (platform.revoked_at || platform.merged_into_client_id) return false;
+  const agents = get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM agent WHERE client_id = ?', platform.client_id)?.n ?? 0;
+  if (agents > 0) return false;
+  const roles = get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM connection_role WHERE client_id = ?', platform.client_id)?.n ?? 0;
+  if (roles > 0) return false;
+  if (platform.roles_confirmed_at) return false;
+  if (journalEntriesBesidesApprove(db, platform.client_id) > 0) return false;
+  return true;
+}
+
+export function emptyDuplicatesToArchive(db: DB, memberId: string, incomingClientId: string, continuedPlatformId: string): ConnectionRow[] {
+  const incoming = clientInfo(db, incomingClientId);
+  if (!incoming) return [];
+  const out: ConnectionRow[] = [];
+  for (const row of activePlatforms(db, memberId)) {
+    if (row.client_id === continuedPlatformId) continue;
+    const boundId = row.current_client_id || row.client_id;
+    const existing = clientInfo(db, boundId) ?? clientInfo(db, row.client_id);
+    if (!existing || !sameClientType(existing, incoming)) continue;
+    if (qualifiesAsEmptyDuplicate(db, row)) out.push(row);
+  }
+  return out;
 }
 
 export type ClientInfo = {
@@ -92,7 +168,10 @@ export type ContinueTarget = {
   sole_agent: boolean;
 };
 
-export type ReauthContinue = { mode: 'auto'; target: ContinueTarget } | { mode: 'choice'; candidates: ContinueTarget[] } | { mode: 'new' };
+export type ReauthContinue =
+  | { mode: 'auto'; target: ContinueTarget; archive: ContinueTarget[] }
+  | { mode: 'choice'; candidates: ContinueTarget[] }
+  | { mode: 'new' };
 
 function isCimd(info: ClientInfo): boolean {
   return info.registration === 'client-id-metadata-document';
@@ -153,18 +232,21 @@ export function reauthContinueOptions(db: DB, memberId: string, incomingClientId
   if (!incoming) return { mode: 'new' };
   const already = liveConnectionForClient(db, incomingClientId);
   if (already && already.member_id === memberId) {
-    return { mode: 'auto', target: continueTarget(db, already) };
+    return { mode: 'auto', target: continueTarget(db, already), archive: [] };
   }
   const active = activePlatforms(db, memberId);
   if (!active.length) return { mode: 'new' };
   const matches: ContinueTarget[] = [];
+  const archive: ContinueTarget[] = [];
   for (const row of active) {
     // Identity is taken from the OAuth client currently (or originally) bound to the platform.
     const boundId = row.current_client_id || row.client_id;
     const existing = clientInfo(db, boundId) ?? clientInfo(db, row.client_id);
-    if (existing && sameClientType(existing, incoming)) matches.push(continueTarget(db, row));
+    if (!existing || !sameClientType(existing, incoming)) continue;
+    if (platformIsConfigured(db, row.client_id)) matches.push(continueTarget(db, row));
+    else if (qualifiesAsEmptyDuplicate(db, row)) archive.push(continueTarget(db, row));
   }
-  if (matches.length === 1) return { mode: 'auto', target: matches[0]! };
+  if (matches.length === 1) return { mode: 'auto', target: matches[0]!, archive };
   const matchIds = new Set(matches.map((m) => m.client_id));
   const candidates = [
     ...active.filter((row) => matchIds.has(row.client_id)).map((row) => continueTarget(db, row)),
@@ -261,6 +343,25 @@ function bindIncomingClient(
   const previous = platform.current_client_id || platform.client_id;
   const previousApprovedAt = platform.approved_at;
   const t = now();
+  const toArchive = emptyDuplicatesToArchive(db, actor.memberId, incomingClientId, platform.client_id);
+  for (const dup of toArchive) {
+    const dupClient = dup.current_client_id || dup.client_id;
+    run(
+      db,
+      `UPDATE connection
+          SET merged_into_client_id = ?, revoked_at = ?, current_client_id = NULL
+        WHERE client_id = ?`,
+      platform.client_id,
+      t,
+      dup.client_id,
+    );
+    dropGrants(db, dupClient);
+    if (dup.client_id !== dupClient) dropGrants(db, dup.client_id);
+    recordEvent(db, actor, 'connection', dup.client_id, 'connection.merged', `Empty platform "${dup.name}" archived into "${platform.name}"`, {
+      merged_into: platform.client_id,
+      reason: 'empty_reauth_duplicate',
+    });
+  }
   dropGrants(db, previous);
   run(
     db,
@@ -272,16 +373,34 @@ function bindIncomingClient(
   );
   // Keep the owner's platform name; do not rename it to the incoming client name.
   void name;
+  const firstArchived = toArchive[0]?.client_id ?? null;
+  // Extra archive rows first so the bind transfer is the latest pending one.
+  for (const dup of toArchive.slice(1)) {
+    run(
+      db,
+      `INSERT INTO connection_transfer
+         (member_id, platform_client_id, from_client_id, to_client_id, previous_approved_at, kind, archived_client_id, created_at)
+       VALUES (?,?,?,?,?,'reauth',?,?)`,
+      platform.member_id,
+      platform.client_id,
+      previous,
+      incomingClientId,
+      previousApprovedAt,
+      dup.client_id,
+      t,
+    );
+  }
   run(
     db,
     `INSERT INTO connection_transfer
-       (member_id, platform_client_id, from_client_id, to_client_id, previous_approved_at, kind, created_at)
-     VALUES (?,?,?,?,?,'reauth',?)`,
+       (member_id, platform_client_id, from_client_id, to_client_id, previous_approved_at, kind, archived_client_id, created_at)
+     VALUES (?,?,?,?,?,'reauth',?,?)`,
     platform.member_id,
     platform.client_id,
     previous,
     incomingClientId,
     previousApprovedAt,
+    firstArchived,
     t,
   );
   recordEvent(db, actor, 'connection', platform.client_id, 'connection.rebound', `OAuth client bound to platform "${platform.name}"`, {
@@ -290,6 +409,7 @@ function bindIncomingClient(
     auto,
     agents_unchanged: true,
     allow_list_unchanged: true,
+    archived_client_ids: toArchive.map((d) => d.client_id),
   });
   return getConnection(db, platform.client_id)!;
 }
@@ -305,8 +425,9 @@ export function revokeConnection(db: DB, actor: Actor, clientId: string): boolea
     if (!c || c.revoked_at) return false;
     if (c.merged_into_client_id) return false;
     run(db, 'UPDATE connection SET revoked_at = ? WHERE client_id = ?', now(), clientId);
-    dropGrants(db, c.client_id);
-    if (c.current_client_id && c.current_client_id !== c.client_id) dropGrants(db, c.current_client_id);
+    const revokedClients = new Set(acceptedClientIds(db, c));
+    revokedClients.add(c.client_id);
+    for (const id of revokedClients) dropGrants(db, id);
     recordEvent(db, actor, 'connection', clientId, 'connection.revoked', `Connection "${c.name}" revoked`);
     return true;
   });
@@ -324,8 +445,10 @@ export type AccessCheck = { ok: true; connection: ConnectionRow } | { ok: false;
 
 /**
  * Checks an already verified access token against the connection table.
- * `issuedAt` is the token's iat (seconds). Lookup is by `current_client_id` only:
- * a token for a platform's original client id is rejected after a re-bind.
+ * `issuedAt` is the token's iat (seconds). Lookup is by accepted client
+ * (`liveConnectionForClient`): today `current_client_id` only. A token for a
+ * platform's original client id is rejected after a re-bind unless that id is
+ * still accepted.
  */
 export function checkAccess(db: DB, clientId: string | undefined, issuedAt: number | undefined): AccessCheck {
   if (!clientId) return { ok: false, reason: 'token has no client' };
@@ -333,7 +456,7 @@ export function checkAccess(db: DB, clientId: string | undefined, issuedAt: numb
   if (!c) {
     // Consent exists in the OAuth server but the owner never named the connection (should not happen
     // through the UI). Drop the grant so the next authorization shows the consent screen.
-    // Never drop grants of a client that is some row's current_client_id (including an archived one
+    // Never drop grants of a client that is still accepted on a platform (including an archived one
     // that should have been found above — the live lookup already requires an unmerged row).
     const bound = get(db, 'SELECT 1 FROM connection WHERE current_client_id = ?', clientId);
     if (!bound) dropGrants(db, clientId);
@@ -388,6 +511,18 @@ export function rollbackClientTransfer(db: DB, actor: Actor, platformClientId: s
     const t = now();
     dropGrants(db, transfer.to_client_id);
     dropGrants(db, transfer.from_client_id);
+    const siblings = all<TransferRow>(
+      db,
+      `SELECT * FROM connection_transfer
+        WHERE platform_client_id = ? AND rolled_back_at IS NULL AND created_at = ? AND id != ?`,
+      platform.client_id,
+      transfer.created_at,
+      transfer.id,
+    );
+    const archivedIds = [transfer.archived_client_id, ...siblings.map((s) => s.archived_client_id)].filter(
+      (id): id is string => !!id,
+    );
+    for (const archivedId of archivedIds) dropGrants(db, archivedId);
     run(
       db,
       'UPDATE connection SET current_client_id = ?, approved_at = ? WHERE client_id = ?',
@@ -395,23 +530,27 @@ export function rollbackClientTransfer(db: DB, actor: Actor, platformClientId: s
       t,
       platform.client_id,
     );
-    if (transfer.kind === 'migration' && transfer.archived_client_id) {
+    for (const archivedId of archivedIds) {
       run(
         db,
         `UPDATE connection
             SET current_client_id = ?, revoked_at = NULL, merged_into_client_id = NULL, approved_at = ?
           WHERE client_id = ? AND merged_into_client_id = ?`,
-        transfer.archived_client_id,
+        archivedId,
         t,
-        transfer.archived_client_id,
+        archivedId,
         platform.client_id,
       );
     }
     run(db, 'UPDATE connection_transfer SET rolled_back_at = ? WHERE id = ?', t, transfer.id);
+    for (const sib of siblings) {
+      run(db, 'UPDATE connection_transfer SET rolled_back_at = ? WHERE id = ?', t, sib.id);
+    }
     recordEvent(db, actor, 'connection', platform.client_id, 'connection.transfer_rolled_back', `Rolled back a client transfer on "${platform.name}"`, {
       from_client_id: transfer.to_client_id,
       to_client_id: transfer.from_client_id,
       kind: transfer.kind,
+      archived_client_ids: archivedIds,
     });
     return getConnection(db, platform.client_id)!;
   });
@@ -428,7 +567,8 @@ export function listConnections(db: DB) {
   }));
 }
 
-/** Pending clients: registered (or discovered) but never approved, and not bound as a platform's current client. */
+/** Pending clients: registered (or discovered) but never approved, and not an accepted client of any platform.
+ *  Today "accepted" is `current_client_id`; a later binding table would be excluded here the same way. */
 export function listUnapprovedClients(db: DB) {
   return all<Record<string, unknown>>(
     db,
@@ -449,7 +589,8 @@ function toMillis(v: unknown): number {
 /**
  * Deletes self-registered clients (dynamic registration, or a cached metadata document that is
  * fetched again on the next attempt) that were never approved within `days`. Approved clients,
- * clients the owner created in the web interface, every `current_client_id`, and archived
+ * clients the owner created in the web interface, every accepted client (`current_client_id`
+ * today; a later binding table would be included the same way), and archived
  * duplicates' clients are kept.
  */
 export function expireUnusedClients(db: DB, days: number): number {

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Re-authorizing a product while the original platform is still in use no longer treats an empty same-type duplicate as a matching candidate, so the consent screen does not push the owner toward a third platform. Only platforms with agents or owner-confirmed roles count as matches. When exactly one such platform matches, it is continued automatically, and any empty same-type duplicate (no agents, no roles, no journal besides its own approval) is archived in the same step. The consent screen says that empty platform will be archived. A duplicate that is configured in any way is never touched automatically. The owner can undo the transfer, including the archive, from Platforms. (#178)
+
+### Upgrade
+
+- No database migration in this change. Make a local backup of the database before upgrading. Existing data is kept.
+- A later change may add a migration for an empty duplicate that was already created while the original was still in use.
+
 ## [0.6.0] - 2026-11-27
 
 ### Fixed
@@ -13,7 +22,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Upgrade
 
 - Upgrading from 0.5.0 applies one migration (14, `repair-reauth-duplicate-connections`) automatically, after a pre-migration backup. Existing data is kept.
-- Hermes should take a local backup on the Pi before upgrading.
+- Make a local backup of the database before upgrading.
 - After the upgrade, a later empty platform that was created by reconnecting the same product is merged into the earlier configured one when the pair is unique and the original was unused after the duplicate was approved. Anything ambiguous is left as it is and recorded in the log.
 - Reconnecting a platform from the product still opens the consent screen. When the client is the same type as exactly one active platform, the screen says it continues that platform. Otherwise you choose to continue a platform or start a new one (the default).
 - Undo a client transfer (a re-auth bind or a merge performed by migration 14) from Platforms → “Undo last client transfer”. Access and refresh tokens issued before the undo stop working for both clients; each client gets new tokens only through a fresh consent.
