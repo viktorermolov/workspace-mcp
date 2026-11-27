@@ -222,9 +222,9 @@ describe('save_task respects the addressee and the claimed agent', () => {
     assert.equal(row.agent_id, taskRow(t.id).agent_id);
   });
 
-  it('a task with no for_agent behaves as today', async () => {
+  it('a task for any agent of the role ("*") behaves as an unaddressed task did before', async () => {
     await setMode('enforce');
-    const t = await call<Task>(grok, 'save_task', { title: 'Any Developer', role: 'developer', claimed_role: 'developer', agent: 'ada' });
+    const t = await call<Task>(grok, 'save_task', { title: 'Any Developer', role: 'developer', for_agent: '*', claimed_role: 'developer', agent: 'ada' });
     assert.equal(t.for_agent, null);
     const byHal = await call<Task>(home, 'save_task', { id: t.id, rev: t.rev, status: 'in_progress', result: 'Hal picked it up', claimed_role: 'developer', agent: 'hal' });
     assert.equal(byHal.status, 'in_progress');
@@ -233,7 +233,7 @@ describe('save_task respects the addressee and the claimed agent', () => {
 
   it('in enforce mode a task claimed by a named agent cannot have its status changed or be reopened by another agent', async () => {
     await setMode('enforce');
-    const t = await call<Task>(grok, 'save_task', { title: 'Claimed Guard', role: 'developer', claimed_role: 'developer', agent: 'ada' });
+    const t = await call<Task>(grok, 'save_task', { title: 'Claimed Guard', role: 'developer', for_agent: '*', claimed_role: 'developer', agent: 'ada' });
     const claimed = await call<Task>(grok, 'claim_task', { id: t.id, claimed_role: 'developer', agent: 'ada' });
     assert.equal(claimed.claimed_by?.agent, 'ada');
     const before = taskRow(t.id);
@@ -385,7 +385,7 @@ describe('save_task respects the addressee and the claimed agent', () => {
     )!.n;
     assert.ok(auditsAfter >= auditsBefore + 5, `expected refusal audits in warn mode, got ${auditsAfter - auditsBefore}`);
 
-    const claimedSrc = await call<Task>(grok, 'save_task', { title: 'Warn Claimed', role: 'developer', claimed_role: 'developer', agent: 'ada' });
+    const claimedSrc = await call<Task>(grok, 'save_task', { title: 'Warn Claimed', role: 'developer', for_agent: '*', claimed_role: 'developer', agent: 'ada' });
     const claimed = await call<Task>(grok, 'claim_task', { id: claimedSrc.id, claimed_role: 'developer', agent: 'ada' });
     const claimedBefore = taskRow(claimed.id);
     await assert.rejects(

@@ -233,6 +233,20 @@ export function agentMayTake(db: DB, agentId: string, roleId: string): boolean {
 }
 
 /**
+ * The agents a task of this role can be addressed to (#181): every agent that may take the role and
+ * whose platform is not revoked. An agent with no platform cannot take a role. Sorted by slug.
+ */
+export function roleCandidateAgents(db: DB, roleId: string): { id: string; slug: string }[] {
+  return all<{ id: string; slug: string }>(
+    db,
+    `SELECT a.id, a.slug FROM agent a JOIN connection c ON c.client_id = a.client_id
+     WHERE c.revoked_at IS NULL AND EXISTS (SELECT 1 FROM agent_role ar WHERE ar.agent_id = a.id AND ar.role_id = ?)
+     ORDER BY a.slug`,
+    roleId,
+  ).filter((a) => agentMayTake(db, a.id, roleId));
+}
+
+/**
  * Checks the agent a caller named: it must exist and run on the caller's platform. The server can
  * verify only the platform, so this guards against mix-ups, not against a hostile caller.
  * Naming no agent is allowed; when the platform has agents, the response says so once.

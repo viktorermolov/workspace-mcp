@@ -19,7 +19,7 @@ There is a page for [Claude](claude.md), [ChatGPT](chatgpt.md) and [Grok](grok.m
 
 ## Several agents on one platform
 
-One connection is one platform. When several named bots work through it, add each of them under the platform on **Platforms** (**Add an agent**) with a short name and the roles it may take, chosen from the roles confirmed for the platform. Each bot then passes its short name as `agent` in `start` and on every write, so the log, checkpoints and task claims show which of them acted, and a task can be addressed to one of them with `for_agent`.
+One connection is one platform. When several named bots work through it, add each of them under the platform on **Platforms** (**Add an agent**) with a short name and the roles it may take, chosen from the roles confirmed for the platform. Each bot then passes its short name as `agent` in `start` and on every write, so the log, checkpoints and task claims show which of them acted, and a task can be addressed to one of them with `for_agent`. When several agents may take a role, a new task of that role must name one of them, or `"*"` for any of them; a role with one agent gets that agent.
 
 When a platform runs exactly one agent, tick **is the only agent on this platform** under it. Calls that name no agent then count as that agent, so the bot needs no `agent` argument. The agent's own roles apply, not the platform's whole list. Adding, moving or removing an agent on the platform switches this off, and you tick it again if it is still true.
 

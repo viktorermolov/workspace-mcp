@@ -663,4 +663,24 @@ CREATE INDEX connection_transfer_platform ON connection_transfer (platform_clien
     name: 'repair-empty-active-duplicates',
     run: (db) => repairEmptyActiveDuplicates(db),
   },
+  // After 0.6.1's `repair-empty-active-duplicates` (id 15). Holds a re-auth bind
+  // approved on the consent screen until the incoming client completes the
+  // authorization-code exchange, so a consent that never reaches /token does not
+  // drop the previous client's grants. Idempotent: CREATE TABLE IF NOT EXISTS.
+  {
+    id: 16,
+    name: 'pending-client-bind',
+    sql: `
+CREATE TABLE IF NOT EXISTS connection_pending_bind (
+  platform_client_id TEXT PRIMARY KEY,
+  incoming_client_id TEXT NOT NULL,
+  member_id TEXT NOT NULL REFERENCES member(id),
+  auto INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS connection_pending_bind_incoming
+  ON connection_pending_bind (incoming_client_id);
+`,
+  },
 ];
