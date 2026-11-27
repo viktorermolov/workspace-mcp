@@ -264,6 +264,97 @@ export interface ApproveOptions {
   offeredChoice?: boolean;
 }
 
+/** How long a consent-time rebind stays pending, waiting for the authorization-code exchange.
+ *  Longer than the authorization server's 10-minute code lifetime so cleanup is not racy. */
+export const PENDING_BIND_TTL_MS = 15 * 60 * 1000;
+
+export type PendingBindRow = {
+  platform_client_id: string;
+  incoming_client_id: string;
+  member_id: string;
+  auto: number;
+  created_at: string;
+  expires_at: string;
+};
+
+function hasPendingBindTable(db: DB): boolean {
+  return !!get(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'connection_pending_bind'");
+}
+
+/** The pending rebind for this platform, if any (including an expired row not yet cleaned up). */
+export function getPendingBind(db: DB, platformClientId: string): PendingBindRow | undefined {
+  if (!hasPendingBindTable(db)) return undefined;
+  return get<PendingBindRow>(db, 'SELECT * FROM connection_pending_bind WHERE platform_client_id = ?', platformClientId);
+}
+
+/**
+ * Records a rebind approved on the consent screen, without dropping the previous client's
+ * grants or switching `current_client_id`. A later consent for the same platform, or the
+ * same incoming client on another platform, replaces the pending row.
+ */
+export function queuePendingBind(
+  db: DB,
+  actor: Actor,
+  platformId: string,
+  incomingClientId: string,
+  auto: boolean,
+): ConnectionRow {
+  const platform = getConnection(db, platformId);
+  if (!platform || platform.member_id !== actor.memberId || platform.revoked_at || platform.merged_into_client_id) {
+    throw new DomainError('invalid', 'That platform cannot be continued');
+  }
+  if (!hasPendingBindTable(db)) {
+    throw new DomainError('invalid', 'Pending client bind is not available');
+  }
+  const t = now();
+  const expires = new Date(Date.parse(t) + PENDING_BIND_TTL_MS).toISOString();
+  run(db, 'DELETE FROM connection_pending_bind WHERE platform_client_id = ? OR incoming_client_id = ?', platformId, incomingClientId);
+  run(
+    db,
+    `INSERT INTO connection_pending_bind
+       (platform_client_id, incoming_client_id, member_id, auto, created_at, expires_at)
+     VALUES (?,?,?,?,?,?)`,
+    platform.client_id,
+    incomingClientId,
+    actor.memberId,
+    auto ? 1 : 0,
+    t,
+    expires,
+  );
+  return getConnection(db, platform.client_id)!;
+}
+
+/**
+ * Applies a pending rebind after the incoming client's authorization-code exchange succeeds.
+ * Completes even if the pending row has passed `expires_at`, as long as it was not replaced:
+ * a valid code is the signal. Returns undefined when there is no pending bind for this client.
+ */
+export function completePendingBind(db: DB, incomingClientId: string): ConnectionRow | undefined {
+  if (!hasPendingBindTable(db)) return undefined;
+  return tx(db, () => {
+    const pending = get<PendingBindRow>(
+      db,
+      'SELECT * FROM connection_pending_bind WHERE incoming_client_id = ?',
+      incomingClientId,
+    );
+    if (!pending) return undefined;
+    const actor: Actor = { kind: 'owner', memberId: pending.member_id };
+    const info = clientInfo(db, incomingClientId);
+    const row = bindIncomingClient(
+      db,
+      actor,
+      pending.platform_client_id,
+      incomingClientId,
+      '',
+      info,
+      pending.auto === 1,
+      pending.created_at,
+    );
+    run(db, 'DELETE FROM connection_pending_bind WHERE platform_client_id = ?', pending.platform_client_id);
+    return row;
+  });
+}
+
 /** Called from the consent screen when the owner approves. Re-approving a revoked (not merged) client reactivates it. */
 export function approveConnection(db: DB, actor: Actor, clientId: string, name: string, opts: ApproveOptions = {}): ConnectionRow {
   const clean = name.trim().slice(0, 100) || 'Unnamed connection';
@@ -304,7 +395,8 @@ export function approveConnection(db: DB, actor: Actor, clientId: string, name: 
     : undefined);
 
     if (targetId) {
-      return bindIncomingClient(db, actor, targetId, clientId, clean, info, !!opts.autoContinue);
+      // Do not drop previous grants or switch current_client_id until the code is exchanged.
+      return queuePendingBind(db, actor, targetId, clientId, !!opts.autoContinue);
     }
 
     const t = now();
@@ -335,6 +427,7 @@ function bindIncomingClient(
   name: string,
   info: ClientInfo | undefined,
   auto: boolean,
+  approvedAt?: string,
 ): ConnectionRow {
   const platform = getConnection(db, platformId);
   if (!platform || platform.member_id !== actor.memberId || platform.revoked_at || platform.merged_into_client_id) {
@@ -342,7 +435,9 @@ function bindIncomingClient(
   }
   const previous = platform.current_client_id || platform.client_id;
   const previousApprovedAt = platform.approved_at;
-  const t = now();
+  // Use the consent time when completing a pending bind so the new token's iat
+  // (stamped at /token, after consent) is not before approved_at.
+  const t = approvedAt ?? now();
   const toArchive = emptyDuplicatesToArchive(db, actor.memberId, incomingClientId, platform.client_id);
   for (const dup of toArchive) {
     const dupClient = dup.current_client_id || dup.client_id;
@@ -593,11 +688,13 @@ export function listConnections(db: DB) {
 /** Pending clients: registered (or discovered) but never approved, and not an accepted client of any platform.
  *  Today "accepted" is `current_client_id`; a later binding table would be excluded here the same way. */
 export function listUnapprovedClients(db: DB) {
+  const pending = hasPendingBindTable(db) ? 'AND clientId NOT IN (SELECT incoming_client_id FROM connection_pending_bind)' : '';
   return all<Record<string, unknown>>(
     db,
     `SELECT clientId FROM oauthClient
       WHERE clientId NOT IN (SELECT client_id FROM connection)
         AND clientId NOT IN (SELECT current_client_id FROM connection WHERE current_client_id IS NOT NULL)
+        ${pending}
       ORDER BY createdAt DESC LIMIT 100`,
   ).map((r) => clientInfo(db, String(r.clientId)));
 }
@@ -623,7 +720,8 @@ export function expireUnusedClients(db: DB, days: number): number {
     `SELECT id, clientId, createdAt FROM oauthClient
       WHERE userId IS NULL
         AND clientId NOT IN (SELECT client_id FROM connection)
-        AND clientId NOT IN (SELECT current_client_id FROM connection WHERE current_client_id IS NOT NULL)`,
+        AND clientId NOT IN (SELECT current_client_id FROM connection WHERE current_client_id IS NOT NULL)
+        ${hasPendingBindTable(db) ? 'AND clientId NOT IN (SELECT incoming_client_id FROM connection_pending_bind)' : ''}`,
   );
   let n = 0;
   for (const r of rows) {
