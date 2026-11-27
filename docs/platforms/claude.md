@@ -1,6 +1,6 @@
 # Connecting Claude
 
-Claude (claude.ai on the web, Claude Desktop, the mobile apps) connects to Workspace MCP as a **custom connector**. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Connections** screen.
+Claude (claude.ai on the web, Claude Desktop, the mobile apps) connects to Workspace MCP as a **custom connector**. You need the MCP address of your workspace, `https://<your address>/mcp`, shown on the **Platforms** screen.
 
 Checked against Claude's documentation on 25 November 2026: [custom connectors](https://claude.com/docs/connectors/custom), [authentication for connectors](https://claude.com/docs/connectors/building/authentication) and the help article [Get started with custom connectors](https://support.claude.com/en/articles/11175166). A real connection from Claude is the final check and is done by the owner after deployment.
 
@@ -31,9 +31,9 @@ Authentication settings of a connector cannot be changed after it is added. To s
 ## If the default option fails
 
 - **Register automatically** uses dynamic client registration. The server accepts it with the Claude callback above.
-- **Use your own OAuth client**: on **Connections → Create a client** in the web interface, create a client with the redirect URI `https://claude.ai/api/mcp/auth_callback`. Untick **The platform keeps a client secret** for a public client, or keep it ticked and enter the secret in Claude. Enter the client ID (and the secret, if you created one) in Claude.
+- **Use your own OAuth client**: on **Platforms → Create a client** in the web interface, create a client with the redirect URI `https://claude.ai/api/mcp/auth_callback`. Untick **The platform keeps a client secret** for a public client, or keep it ticked and enter the secret in Claude. Enter the client ID (and the secret, if you created one) in Claude.
 
-Every attempt is recorded under **Connections → Diagnostics** in the web interface: discovery, registration, authorization, token exchange and refresh, with the error from the server.
+Every attempt is recorded under **Platforms → Diagnostics** in the web interface: discovery, registration, authorization, token exchange and refresh, with the error from the server.
 
 ## Claude Code
 

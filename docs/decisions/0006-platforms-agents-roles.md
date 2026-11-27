@@ -117,8 +117,25 @@ A defect reported from the live instance during this work was fixed on the way: 
 
 No test was removed or skipped.
 
+### After the first review
+
+Grok reviewed the merged work (#138–#141). Viktor decided to fix everything before a release, and chose the two open design points himself.
+
+| What | Issue | Pull request |
+| --- | --- | --- |
+| Migration 8 creates agents only from roles the owner confirmed; a role a connection merely claimed is no longer a grant | #138 | #142, #144 |
+| Only the addressee can claim an addressed task; a call that names no agent is not the addressee | #139 | #143 |
+| One role rule: the platform's confirmed list is the ceiling, an agent's list narrows it; `start`, writes and addressing use the same check | #140 | #144 |
+| An agent's slug is permanent and is not handed on; a name without Latin letters needs a slug | #141 | #149 |
+| A coordinating role, marked by the owner, may address any task to an agent (migration 11) | #148 | #150 |
+| Bot-facing docs tell a bot to pass `agent`; a page for connecting any other platform | #145 | #151 |
+| Agents travel in a zip export without their platform and are attached again after an import | #146 | #152 |
+| The Connections screen is Platforms; the interface says "platform" | #147 | this change |
+
+Existing tests that changed in these: the agents migration test (it expected the old grants); agent test setups now confirm a platform's roles first, and one refusal case in the enforcement test moved; the slug test for Cyrillic names (it expected `agent`, `agent-2`); the zip export test (it expected no agents); migration lists and counts for migration 11; three browser steps that use the renamed consent field, and the browser flow that adds an agent now confirms the platform's roles first. No test was removed or skipped.
+
 ### Not done
 
-- The interface still says "connection" and "role" in most places; only the Map and the new pages speak of platforms and agents.
+- There are no product-specific connection steps for platforms other than Claude, ChatGPT and Grok: none was checked against a real connection.
 - `rev` is still a number that agents can mix up with `version`.
 - The agent's own instruction stays with the role; an agent has no text of its own.

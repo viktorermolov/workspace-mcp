@@ -119,7 +119,7 @@ export function ConnectionsScreen() {
     });
   };
   const rename = (c: Connection) => {
-    const name = prompt('New name for this connection', c.name);
+    const name = prompt('New name for this platform', c.name);
     if (!name?.trim()) return;
     void act.run(async () => {
       await post(`/connections/${enc(c.client_id)}/rename`, { name: name.trim() });
@@ -135,7 +135,7 @@ export function ConnectionsScreen() {
   };
   return (
     <Page
-      title="Connections"
+      title="Platforms"
       actions={
         <Button kind="default" onClick={() => setShowManual(!showManual)}>
           {showManual ? 'Close' : 'Create a client'}
@@ -319,7 +319,7 @@ function RoleAccessSettings({
           <p>
             Role checks are in <strong>warning</strong> mode: writes still go through, but the server records a warning when a
             role is missing, unknown, archived, not on a confirmed list, or used to edit someone else’s item. Review each
-            connection’s list, mark the roles that may edit any item, then switch to enforce. A week is a reasonable window;
+            platform’s list, mark the roles that may edit any item, then switch to enforce. A week is a reasonable window;
             only you can turn enforcement on, and it does not switch automatically.
           </p>
         </Card>
@@ -327,7 +327,7 @@ function RoleAccessSettings({
       <Card>
         <h2>Role enforcement</h2>
         <p class="muted small">
-          Each agent write must name a role that exists, is not archived, and is on that connection’s confirmed list. A
+          Each agent write must name a role that exists, is not archived, and is on that platform’s confirmed list. A
           suggested list from history is a draft and has no effect until you confirm it.
         </p>
         <label class="row">
@@ -340,7 +340,7 @@ function RoleAccessSettings({
         </label>
         {mode === 'enforce' && pending.length > 0 && data.role_enforcement !== 'enforce' && (
           <>
-            <p class="muted small">These active connections do not yet have a confirmed list:</p>
+            <p class="muted small">These active platforms do not yet have a confirmed list:</p>
             <ul class="small">
               {pending.map((c) => (
                 <li key={c.client_id}>{c.name}</li>
@@ -348,7 +348,7 @@ function RoleAccessSettings({
             </ul>
             <label class="row">
               <input type="checkbox" checked={override} onChange={(e) => setOverride((e.target as HTMLInputElement).checked)} />{' '}
-              Turn on enforcement anyway (recorded in the log). Writes on an unconfirmed connection will be refused until
+              Turn on enforcement anyway (recorded in the log). Writes from a platform with an unconfirmed list will be refused until
               you confirm its list.
             </label>
           </>
@@ -675,7 +675,7 @@ function ConnectionRoleList({
             <label class="row">
               <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /> {r.name}{' '}
               <span class="muted small">@{r.slug}</span>
-              {suggested.has(r.id) && !connection.roles_confirmed && <Badge>from this connection’s history</Badge>}
+              {suggested.has(r.id) && !connection.roles_confirmed && <Badge>from this platform’s history</Badge>}
             </label>
           </li>
         ))}
@@ -870,7 +870,7 @@ export function LogScreen() {
       <p class="muted">
         {filtered ? 'Every recorded change to this item, newest first.' : 'Everything that happened in the workspace, newest first, with who did it and whose item it was.'} The
         role is the name the agent gave for the change. After you turn on enforcement, the server only accepts a role that
-        exists, is not archived, and is on that connection’s confirmed list.
+        exists, is not archived, and is on that platform’s confirmed list.
       </p>
       {filtered && (
         <p>
@@ -1595,7 +1595,7 @@ export function MoreScreen() {
     ['/roles', 'Roles', 'Who does what'],
     ['/projects', 'Projects and documents', 'Descriptions, specs, notes'],
     ['/github', 'GitHub issues', 'Read-only mirror'],
-    ['/connections', 'Connections', 'AI platforms with access'],
+    ['/connections', 'Platforms', 'AI platforms with access, and their agents'],
     ['/webhooks', 'Webhooks', 'Wake agents on changes'],
     ['/log', 'Log', 'Everything, with who did it'],
     ['/data', 'Export and backups', 'Your data, in readable form'],

@@ -32,7 +32,7 @@ The owner also uses the service as the one place to see and steer the agents on 
 - **GitHub issues mirror.** Read-only, one-way sync from configured repositories (a repository is mapped to a project). Issues are shown next to tasks. The only local addition is a role label. The service writes nothing to GitHub. The feature is optional and off until GitHub is connected. Connecting happens in the web interface: the owner pastes a fine-grained token with read-only access to issues, the service validates it and lists the available repositories, the owner picks the ones needed and maps them to projects. The same screen shows the time and result of the last sync, a manual refresh button, token replacement and disconnect.
 - **Checkpoints.** An agent's record per role and project: what was done, where it stopped, what is next.
 - **Log.** Who (connection and claimed role, or the owner) changed what and when. Read by cursor.
-- **Connections.** Platforms the owner has granted access to.
+- **Platforms.** The AI platforms the owner has granted access to (each is one connection), with the agents on each.
 - **Agents.** Named bots on a platform, each with the roles it may take.
 
 Storage decisions:
