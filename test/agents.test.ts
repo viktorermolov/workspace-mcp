@@ -145,7 +145,7 @@ describe('agents on a platform', () => {
 });
 
 describe('agents migration', () => {
-  it('turns what is already known about connections into agents, with nothing to re-enter', () => {
+  it('creates agents only from the roles the owner confirmed for a connection', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-agents-'));
     const db = openDatabase(path.join(dir, 'w.sqlite'));
     try {
@@ -164,13 +164,14 @@ describe('agents migration', () => {
       conn('c1', 'First', '2026-01-01T00:00:00.000Z');
       conn('c2', 'Second', '2026-01-02T00:00:00.000Z');
       conn('c3', 'Revoked', '2026-01-03T00:00:00.000Z', t);
-      // c1: on the confirmed list as coordinator, and has written as developer (by slug) and as an archived role.
+      // c1: confirmed by the owner as coordinator and as an archived role; developer is only suggested, and it has written as developer.
       run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_a', 'owner')");
       const wrote = (client: string, claimed: string) =>
         run(db, "INSERT INTO event (member_id, at, actor_kind, connection_id, claimed_role, entity_type, action, summary) VALUES ('mem_1', ?, 'agent', ?, ?, 'task', 'task.created', 's')", t, client, claimed);
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_d', 'owner')");
+      run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES ('c1', 'role_b', 'suggested')");
       wrote('c1', 'developer');
-      wrote('c1', 'old');
-      // c2: has written as developer (by id) and under a name that is not a role.
+      // c2: nothing confirmed; it has written as developer (by id) and under a name that is not a role.
       wrote('c2', 'role_b');
       wrote('c2', 'somebody');
       // c3 is revoked: nothing is created for it.
@@ -186,14 +187,13 @@ describe('agents migration', () => {
         agents.map((a) => ({ ...a })),
         [
           { slug: 'coordinator', name: 'Coordinator', client_id: 'c1', role: 'coordinator' },
-          { slug: 'developer', name: 'Developer', client_id: 'c1', role: 'developer' },
-          { slug: 'developer-2', name: 'Developer', client_id: 'c2', role: 'developer' },
         ],
+        'a role a connection only claimed, or that was only suggested, is not granted',
       );
-      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 3);
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM agent')!.n, 1);
       assert.equal(get(db, "SELECT 1 FROM sqlite_master WHERE name = 'agent_backfill'"), undefined);
       // The role lists that the checks on writes use are untouched.
-      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM connection_role')!.n, 2);
+      assert.equal(get<{ n: number }>(db, 'SELECT count(*) AS n FROM connection_role')!.n, 4);
     } finally {
       db.close();
       fs.rmSync(dir, { recursive: true, force: true });
