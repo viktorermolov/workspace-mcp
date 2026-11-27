@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- A role page reads first. It shows the role's area, the agents that take it and their platforms, the instruction rendered as Markdown, its open tasks, its routines and its last checkpoint; the form is behind **Edit**. Each routine has a **Comment** button, so the owner can now comment on a routine in the interface, see the role's answer and resolve it. A role that was just created stays in the form. (#128)
 - **Projects and documents** starts with a "Rules and instructions" section: the working rules, other rules sets and every role's instruction, each opening on its reading page. They are still under More as well. (#126)
 - The **Map** shows who runs where: at the top, each active platform with its agents and the roles each may take; on every role card, the agents that may take it and their platform. The role cards now follow the order of the tree instead of the alphabet. The tree itself is unchanged. (#122)
 - The **Changes** screen groups what happened to one item into one card (a task that was created, assigned and claimed is one card with three lines, oldest first), so the feed is about half as long. Edits to working rules and role instructions still come first, each on its own. On desktop the sidebar is split into the main screens, **Content** and **Settings**. (#120)

@@ -122,6 +122,9 @@ test('owner creates roles, a project and a task', async () => {
 test('the map lays a parent and child out as a tree, including at 390×844', async () => {
   await page.goto('/roles/writer');
   await expect(page.getByRole('heading', { name: 'Writer' })).toBeVisible();
+  // The role page opens as a read view; the form is behind Edit.
+  await expect(page.getByRole('heading', { name: /^Instruction/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Reports to').selectOption({ label: 'Editor' });
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByLabel('Reports to')).toHaveValue('editor');
@@ -171,6 +174,25 @@ test('the map lays a parent and child out as a tree, including at 390×844', asy
   }
 
   if (prev) await page.setViewportSize(prev);
+});
+
+test('the role page reads first: instruction, tasks, routines with owner comments, and the form behind Edit', async () => {
+  await page.goto('/roles/writer');
+  await expect(page.getByRole('heading', { name: /^Instruction/ })).toBeVisible();
+  await expect(page.getByLabel('Reports to')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Draft the intro/ })).toBeVisible();
+  const routine = page.locator('.routine-item').filter({ hasText: 'Morning check' });
+  await expect(routine).toBeVisible();
+  await routine.getByRole('button', { name: 'Comment' }).click();
+  await routine.getByLabel(/Comment on/).fill('Run this an hour later.');
+  await routine.getByRole('button', { name: 'Send comment' }).click();
+  await expect(routine.getByText('Run this an hour later.')).toBeVisible();
+  await routine.getByRole('button', { name: 'Resolve' }).click();
+  await expect(routine.getByText('Run this an hour later.')).toHaveCount(0);
+  const over = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth));
+  expect(over).toBe(0);
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Reports to')).toBeVisible();
 });
 
 test('the task list shows what a task waits for under any filter, and Back keeps the filter', async () => {
