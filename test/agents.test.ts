@@ -294,6 +294,46 @@ describe('start by agent name alone', () => {
     assert.ok(late.data.changes_since_previous_start, 'not a first start: the platform had a marker for the role');
     assert.ok(late.data.changes_since_previous_start!.events.some((e) => e.summary.includes('Before Late named itself')));
   });
+
+  it('the first start by name alone continues from the role marker, not from the role-less one (#172)', async () => {
+    const platform = (await owner.json<{ connections: { client_id: string }[] }>('/api/owner/connections')).connections[0]!.client_id;
+    const seen = (s: Start) => (s.data.changes_since_previous_start?.events ?? []).map((e) => e.summary);
+    await call(grok, 'save_role', { name: 'Ops', slug: 'ops', instruction: 'Run things.' });
+    await call(grok, 'save_role', { name: 'QA', slug: 'qa', instruction: 'Test things.' });
+    await confirmRoles(owner, platform, ['coordinator', 'developer', 'marketer', 'ops', 'qa']);
+
+    // One role, and the platform never started without a role... except long ago: an old role-less marker exists.
+    await call(grok, 'start', {});
+    await call(grok, 'save_task', { title: 'Seen under ops', role: 'ops', claimed_role: 'ops' });
+    await call(grok, 'start', { role: 'ops' });
+    await call(grok, 'save_task', { title: 'New for ops', role: 'ops', claimed_role: 'ops' });
+    await owner.json('/api/owner/agents', { json: { name: 'Solo', platform, roles: ['ops'] } });
+    const solo = await call<Start>(grok, 'start', { agent: 'solo' });
+    assert.ok(solo.data.changes_since_previous_start, 'continues from the role marker');
+    assert.ok(seen(solo).some((x) => x.includes('New for ops')), 'the change since the last start with the role is shown');
+    assert.ok(!seen(solo).some((x) => x.includes('Seen under ops')), 'a change already shown under the role is not shown again');
+    assert.deepEqual(seen(await call<Start>(grok, 'start', { agent: 'solo' })).filter((x) => x.includes('for ops')), []);
+
+    // Several roles: the oldest of their markers, so nothing is skipped.
+    await call(grok, 'start', { role: 'qa' });
+    await call(grok, 'save_task', { title: 'After qa start', role: 'qa', claimed_role: 'qa' });
+    await call(grok, 'start', { role: 'ops' });
+    await call(grok, 'save_task', { title: 'After ops start', role: 'ops', claimed_role: 'ops' });
+    await owner.json('/api/owner/agents', { json: { name: 'Duo', platform, roles: ['ops', 'qa'] } });
+    const duo = seen(await call<Start>(grok, 'start', { agent: 'duo' }));
+    assert.ok(duo.some((x) => x.includes('After qa start')) && duo.some((x) => x.includes('After ops start')));
+  });
+
+  it('with no role marker at all, the first start by name alone uses the role-less marker', async () => {
+    const platform = (await owner.json<{ connections: { client_id: string }[] }>('/api/owner/connections')).connections[0]!.client_id;
+    await call(grok, 'save_role', { name: 'Fresh', slug: 'fresh' });
+    await confirmRoles(owner, platform, ['coordinator', 'developer', 'marketer', 'ops', 'qa', 'fresh']);
+    await call(grok, 'start', {});
+    await call(grok, 'save_task', { title: 'Only the overview saw the past', role: 'fresh', claimed_role: 'fresh' });
+    await owner.json('/api/owner/agents', { json: { name: 'Newbie', platform, roles: ['fresh'] } });
+    const s = await call<Start>(grok, 'start', { agent: 'newbie' });
+    assert.ok((s.data.changes_since_previous_start?.events ?? []).some((e) => e.summary.includes('Only the overview saw the past')));
+  });
 });
 
 describe('a platform with one agent', () => {
