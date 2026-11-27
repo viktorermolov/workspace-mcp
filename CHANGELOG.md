@@ -28,6 +28,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Tool responses are smaller. Every MCP response is compact JSON without indentation. `start` lists archived roles by slug only (`data.archived_role_slugs` replaces `data.archived_roles`; the slug is what stays reserved, and the conflict error still gives the id), and events in `changes_since_previous_start` leave out fields that are empty. Clients that read `data.archived_roles` must switch to the new field. (#114)
 - The brief and decision record 0006 define platforms, agents and roles as three separate things, and the order in which agents are delivered. (#106)
 - Decision record 0006 also records how the decision was reached: what the review found, which proposals were withdrawn and why, and what a reviewer should check. (#111)
+- Decision record 0006 ends with what was delivered, by issue and pull request, where the result differs from the plan, which existing tests changed and what is not done. README and the architecture page say 18 tools, not 16. (#136)
 
 ## [0.3.1] - 2026-11-26
 

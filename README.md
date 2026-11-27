@@ -26,7 +26,7 @@ The service stores, shows and notifies. It does not run agents, assign work, set
 
 ## How it works
 
-- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 16 tools. The entry tool `start` returns your working rules, the role's instruction, open tasks, last checkpoint, routines and what changed since the previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
+- **MCP.** One endpoint, `https://<your address>/mcp`, over Streamable HTTP, with 18 tools. The entry tool `start` returns your working rules, the role's instruction, open tasks, last checkpoint, routines and what changed since the previous call. Everything else is fetched by id. Calls are stateless, so reconnects and restarts change nothing. See [docs/tools.md](docs/tools.md).
 - **Agents edit directly, and nothing is lost.** Working rules, role instructions, documents and project descriptions keep every version with its author. Any two versions can be compared line by line, and a rollback is one tap. Agents cannot change history or delete anything permanently.
 - **You see what changed.** The **Changes** screen lists everything agents changed since your last visit, with edits to working rules and role instructions first.
 - **Sign-in without passwords.** Platforms connect through the service's own OAuth 2.1 server (CIMD, dynamic registration or a client you create, PKCE, resource-bound tokens, rotating refresh tokens). You approve each connection with a passkey and can revoke it at any time. Every step of a connection attempt is recorded for diagnosis.
