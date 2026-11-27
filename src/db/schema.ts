@@ -595,4 +595,12 @@ SELECT b.id, b.role_id FROM agent_backfill b WHERE EXISTS (SELECT 1 FROM agent a
 DROP TABLE agent_backfill;
 `,
   },
+  // #164: the owner can mark a platform as running one agent; calls that name no agent then count as that agent.
+  {
+    id: 13,
+    name: 'connection-sole-agent',
+    sql: `
+ALTER TABLE connection ADD COLUMN sole_agent INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];

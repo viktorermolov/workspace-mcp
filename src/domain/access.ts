@@ -238,10 +238,35 @@ export function agentMayTake(db: DB, agentId: string, roleId: string): boolean {
  * Naming no agent is allowed; when the platform has agents, the response says so once.
  * In warn mode a wrong name is reported and not recorded; in enforce it is forbidden.
  */
+/** The agent of a platform the owner marked as running exactly one. A second agent on the platform ends it. */
+export function soleAgent(db: DB, clientId: string): { id: string; slug: string } | undefined {
+  if (get<{ sole_agent: number }>(db, 'SELECT sole_agent FROM connection WHERE client_id = ?', clientId)?.sole_agent !== 1) return undefined;
+  const agents = all<{ id: string; slug: string }>(db, 'SELECT id, slug FROM agent WHERE client_id = ? LIMIT 2', clientId);
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
+/** Owner only: say that a platform runs exactly one agent, so its calls need not name it. */
+export function setSoleAgent(db: DB, actor: Actor, clientId: string, on: boolean): void {
+  if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can change this');
+  tx(db, () => {
+    const c = get<{ name: string; revoked_at: string | null }>(db, 'SELECT name, revoked_at FROM connection WHERE member_id = ? AND client_id = ?', actor.memberId, clientId);
+    if (!c) throw new DomainError('not_found', `connection not found: ${clientId}`);
+    const agents = all<{ slug: string }>(db, 'SELECT slug FROM agent WHERE client_id = ? LIMIT 2', clientId);
+    if (on && agents.length !== 1) {
+      throw new DomainError('invalid', `"${c.name}" has ${agents.length === 0 ? 'no agents' : 'more than one agent'}: this works only for a platform with exactly one agent`);
+    }
+    run(db, 'UPDATE connection SET sole_agent = ? WHERE client_id = ?', on ? 1 : 0, clientId);
+    recordEvent(db, actor, 'connection', clientId, 'connection.sole_agent_updated', on ? `Calls from "${c.name}" that name no agent count as its agent "${agents[0]!.slug}"` : `Calls from "${c.name}" that name no agent no longer count as its agent`, { sole_agent: on, ...(on ? { agent: agents[0]!.slug } : {}) });
+  });
+}
+
 export function resolveNamedAgent(db: DB, actor: Actor, agentRef: string | undefined): { id: string; slug: string } | undefined {
   if (actor.kind !== 'agent') return undefined;
   const ref = agentRef?.trim();
   if (!ref) {
+    // The owner marked this platform as running one agent: a call that names nobody is that agent's.
+    const sole = actor.connectionId ? soleAgent(db, actor.connectionId) : undefined;
+    if (sole) return sole;
     if (actor.connectionId && get(db, 'SELECT 1 FROM agent WHERE client_id = ? LIMIT 1', actor.connectionId)) {
       addWarning({ code: 'agent_missing', message: 'This platform has named agents: pass agent (your agent slug from start, data.agents) so the log shows who made the change.' });
     }

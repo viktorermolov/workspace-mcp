@@ -74,6 +74,7 @@ interface Connection {
   roles_confirmed_at?: string | null;
   roles_suggested_at?: string | null;
   roles_confirmed?: boolean;
+  sole_agent?: number;
 }
 interface ConnectionsPayload {
   connections: Connection[];
@@ -213,7 +214,12 @@ export function ConnectionsScreen() {
                 />
               )}
               {list.data && c.active && (
-                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform?.id === c.client_id)} workspaceRoles={list.data.roles} onChanged={() => agents.reload()} />
+                <AgentList connection={c} agents={(agents.data?.agents ?? []).filter((a) => a.platform?.id === c.client_id)} workspaceRoles={list.data.roles}
+                  onChanged={() => {
+                    agents.reload();
+                    list.reload();
+                  }}
+                />
               )}
             </li>
           ))}
@@ -489,6 +495,25 @@ function AgentList({ connection, agents, workspaceRoles, onChanged }: { connecti
   return (
     <div class="connection-roles agents">
       <p class="small muted">Agents on this platform. Each may take some of the roles confirmed for the platform above.</p>
+      {agents.length === 1 && (
+        <label class="row small">
+          <input
+            type="checkbox"
+            checked={connection.sole_agent === 1}
+            disabled={act.busy}
+            onChange={(e) =>
+              act.run(async () => {
+                await post(`/connections/${enc(connection.client_id)}/sole-agent`, { sole_agent: (e.target as HTMLInputElement).checked });
+                onChanged();
+              })
+            }
+          />{' '}
+          <span>
+            <strong>{agents[0]!.name}</strong> is the only agent on this platform: a call that names no agent counts as it, with its roles. Adding another
+            agent here switches this off.
+          </span>
+        </label>
+      )}
       {act.error && <Alert>{act.error}</Alert>}
       <ul class="plain">
         {agents.map((a) =>
