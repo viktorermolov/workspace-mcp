@@ -571,4 +571,28 @@ CREATE INDEX task_agent ON task (agent_id);
 ALTER TABLE role ADD COLUMN routes_tasks INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  // #154: migration 8 numbered agent slugs ("builder-2" for a second connection with the role builder) and
+  // skipped an agent in silence when that slug was also the slug of another role's agent. Migration 8 is
+  // released, so this one adds the agents it skipped. It touches only what migration 8 left: a connection
+  // whose list was confirmed again later, or a workspace where the owner has already added, changed or
+  // removed any agent, is left alone, because a missing agent there may be the owner's choice.
+  {
+    id: 12,
+    name: 'agents-skipped-by-slug',
+    sql: `
+CREATE TABLE agent_backfill AS
+SELECT 'agt_' || lower(hex(randomblob(8))) AS id, c.member_id AS member_id, c.client_id AS client_id, r.id AS role_id, r.name AS name, r.slug AS role_slug
+FROM connection c JOIN role r ON r.member_id = c.member_id AND r.archived_at IS NULL
+WHERE c.revoked_at IS NULL AND c.roles_confirmed_at IS NOT NULL
+  AND c.roles_confirmed_at <= (SELECT applied_at FROM app_migration WHERE id = 8)
+  AND EXISTS (SELECT 1 FROM connection_role cr WHERE cr.client_id = c.client_id AND cr.role_id = r.id AND cr.source = 'owner')
+  AND NOT EXISTS (SELECT 1 FROM agent a JOIN agent_role ar ON ar.agent_id = a.id WHERE a.client_id = c.client_id AND ar.role_id = r.id)
+  AND NOT EXISTS (SELECT 1 FROM event e WHERE e.member_id = c.member_id AND e.entity_type = 'agent');
+INSERT OR IGNORE INTO agent (id, member_id, client_id, slug, name, rev, created_at, updated_at)
+SELECT id, member_id, client_id, substr(role_slug, 1, 50) || '-' || substr(id, 5, 6), name, 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM agent_backfill;
+INSERT INTO agent_role (agent_id, role_id)
+SELECT b.id, b.role_id FROM agent_backfill b WHERE EXISTS (SELECT 1 FROM agent a WHERE a.id = b.id);
+DROP TABLE agent_backfill;
+`,
+  },
 ];
