@@ -260,6 +260,9 @@ export function ProjectsScreen() {
   const [archived, setArchived] = useState(false);
   const list = useData(() => searchAll<{ id: string; title: string; snippet: string; updated_at: string }>(`/search?type=project${archived ? '&archived=1' : ''}`), [archived]);
   const docs = useData(() => searchAll<{ id: string; title: string; snippet: string; updated_at: string }>('/search?type=document'));
+  // Working rules and role instructions are not documents, but they are what the owner looks for here.
+  const rules = useData(() => api<{ sets?: { id: string; slug: string; title: string; is_default: boolean; project: string | null }[] }>('/entity/rules'));
+  const choices = useData(() => api<{ roles: { slug: string; name: string }[] }>('/choices'));
   return (
     <Page
       title="Projects and documents"
@@ -269,6 +272,30 @@ export function ProjectsScreen() {
         </Button>
       }
     >
+      <div class="section-head">
+        <h2>Rules and instructions</h2>
+      </div>
+      <ul class="list">
+        {(rules.data?.sets ?? [{ id: '', slug: 'working-rules', title: 'Working rules', is_default: true, project: null }]).map((s) => (
+          <li key={s.slug}>
+            <a href={s.is_default ? '/read/rules' : `/read/rules/${enc(s.id)}`}>
+              <strong>{s.title}</strong>
+              <span class="muted small">{s.is_default ? 'rules for every role and platform' : s.project ? `rules of project ${s.project}` : 'rules set'}</span>
+            </a>
+          </li>
+        ))}
+        {(choices.data?.roles ?? []).map((r) => (
+          <li key={`role-${r.slug}`}>
+            <a href={`/read/role/${enc(r.slug)}`}>
+              <strong>{r.name}</strong>
+              <span class="muted small">role instruction</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+      <div class="section-head">
+        <h2>Projects</h2>
+      </div>
       <label class="check">
         <input type="checkbox" checked={archived} onChange={(e) => setArchived((e.target as HTMLInputElement).checked)} /> include archived
       </label>
