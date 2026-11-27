@@ -26,7 +26,7 @@ Checked on 25 November 2026.
 1. In Grok, open **Connectors**, add a custom connector, and enter the MCP address `https://<your address>/mcp`.
 2. Grok opens the consent screen of your workspace. Sign in with your passkey, name the connection (for example "Grok"), and choose **Approve**.
 3. Several Grok Bots can share that one connection. On the **Platforms** screen, review the suggested list of roles for that connection (taken from its own history) and confirm the ones the platform may use. If enforcement is already on, a new connection cannot write until you confirm its list.
-4. Add each bot as an agent under the connection (**Add an agent**): a name, a short name, and the roles it may take, chosen from the list you confirmed. Each bot passes its role as `claimed_role` and its short name as `agent` in `start` and on every write, so the log shows which bot acted and a task can be addressed to one bot with `for_agent`. Put both into the bot's standing instruction: see [agent-instruction.md](../agent-instruction.md).
+4. Add each bot as an agent under the connection (**Add an agent**): a name, a short name, and the roles it may take, chosen from the list you confirmed. Each bot passes its role as `claimed_role` and its short name as `agent` in `start` and on every write, so the log shows which bot acted and a task can be addressed to one bot with `for_agent`. When several bots may take a role, a new task of that role must name one of them, or `"*"` for any of them; a role with one bot gets that bot. Put both into the bot's standing instruction: see [agent-instruction.md](../agent-instruction.md).
 5. In a chat with the connector enabled, say: *"This is my workspace. Call `start` and continue from there."*
 
 ## If it fails

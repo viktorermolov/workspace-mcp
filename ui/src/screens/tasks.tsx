@@ -350,6 +350,14 @@ export function TaskScreen({ id }: { id: string }) {
   );
 }
 
+
+/** What an empty "For agent" means for the chosen role (#181): its only agent, none, or a choice still to make. */
+function noAgentLabel(roleAgents: number): string {
+  if (roleAgents >= 2) return 'choose an agent';
+  if (roleAgents === 1) return "the role's only agent";
+  return 'no agent';
+}
+
 function TaskForm({
   task,
   defaults,
@@ -443,9 +451,10 @@ function TaskForm({
           </select>
         </Field>
         {(agents.length > 0 || f.for_agent) && (
-          <Field label="For agent" hint="Optional. Only agents that may take the chosen role.">
+          <Field label="For agent" hint="Required when several agents may take the role. A role with one agent gets that agent.">
             <select value={f.for_agent} onChange={set('for_agent')}>
-              <option value="">any agent with the role</option>
+              <option value="">{noAgentLabel(agents.filter((a) => f.role && a.roles.includes(f.role)).length)}</option>
+              {f.role && <option value="*">any agent with the role</option>}
               {agents
                 .filter((a) => a.slug === f.for_agent || (f.role && a.roles.includes(f.role)))
                 .map((a) => (
