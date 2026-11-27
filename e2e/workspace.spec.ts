@@ -44,6 +44,15 @@ async function go(name: string) {
   return page.locator('nav.sidebar').getByRole('link', { name, exact: true }).click();
 }
 
+/** Sideways overflow, in pixels, of the page and of the Map graph (0 means no horizontal scrolling). */
+async function mapOverflow() {
+  return page.evaluate(() => {
+    const over = (el: Element) => Math.max(0, el.scrollWidth - el.clientWidth);
+    const wrap = document.querySelector('.graph-wrap');
+    return { doc: over(document.scrollingElement ?? document.documentElement), body: over(document.body), wrap: wrap ? over(wrap) : -1 };
+  });
+}
+
 test('first-time setup registers the owner passkey', async () => {
   await page.goto('/');
   await expect(page).toHaveURL(/\/setup$/);
@@ -104,7 +113,7 @@ test('owner creates roles, a project and a task', async () => {
   await expect(page.getByRole('heading', { name: 'Draft the intro' })).toBeVisible();
 
   await go('Map');
-  await expect(page.locator('svg.graph')).toBeVisible();
+  await expect(page.locator('.graph')).toBeVisible();
   await expect(page.locator('.card').filter({ hasText: 'Writer' }).getByText('1 open')).toBeVisible();
   await go('Tasks');
   await expect(page.getByText('Draft the intro')).toBeVisible();
@@ -128,39 +137,28 @@ test('the map lays a parent and child out as a tree, including at 390×844', asy
   expect(routineRes.ok, `create routine: ${routineRes.status} ${routineRes.text}`).toBeTruthy();
 
   await go('Map');
-  const graph = page.locator('svg.graph');
+  const graph = page.locator('.graph');
   await expect(graph).toBeVisible();
   await expect(graph).toHaveAttribute('data-layout', 'tree');
   await expect(page.locator('.card').filter({ hasText: 'Writer' }).getByText('Morning check')).toBeVisible();
 
-  const pos = await graph.evaluate((svg) => {
-    const out: Record<string, { x: number; y: number }> = {};
-    for (const a of svg.querySelectorAll('a')) {
-      const name = a.querySelector('.graph-label')?.textContent?.trim() ?? '';
-      const c = a.querySelector('circle');
-      if (c && name) out[name] = { x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')) };
-    }
-    return out;
-  });
-  expect(pos.Writer && pos.Editor, 'both roles are in the tree').toBeTruthy();
-  expect(pos.Writer.y, 'child sits below its parent, not on a circle').toBeGreaterThan(pos.Editor.y);
+  const box = async (slug: string) => {
+    const b = await page.locator(`.graph-card[data-slug="${slug}"]`).boundingBox();
+    expect(b, `card ${slug} is in the tree`).toBeTruthy();
+    return b!;
+  };
+  const editor = await box('editor');
+  const writer = await box('writer');
+  expect(writer.y, 'child sits below its parent').toBeGreaterThan(editor.y);
+  expect(writer.x, 'child is indented under its parent').toBeGreaterThan(editor.x);
+  await expect(page.locator('.graph-card[data-slug="writer"]')).toContainText('1 open');
 
   const prev = page.viewportSize();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(graph).toBeVisible();
-  const overflow = await page.evaluate(() => ({
-    doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    body: document.body.scrollWidth - document.body.clientWidth,
-  }));
-  expect(overflow.doc).toBeLessThanOrEqual(1);
-  expect(overflow.body).toBeLessThanOrEqual(1);
+  expect(await mapOverflow()).toEqual({ doc: 0, body: 0, wrap: 0 });
 
-  const wrap = page.locator('.graph-wrap');
-  await expect(wrap).toBeVisible();
-  const overflowX = await wrap.evaluate((el) => getComputedStyle(el).overflowX);
-  expect(['auto', 'scroll', 'overlay']).toContain(overflowX);
-
-  const taps = await graph.locator('a').evaluateAll((els) =>
+  const taps = await graph.locator('a.graph-card').evaluateAll((els) =>
     els.map((el) => {
       const b = el.getBoundingClientRect();
       return { w: b.width, h: b.height };
@@ -649,6 +647,86 @@ test('review comments work at 390×844', async () => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
 
   if (previous) await page.setViewportSize(previous);
+});
+
+test('the map shows a large team as a vertical card tree with no sideways scroll, including at 390×844', async () => {
+  // The shape from #102: the real team (Арина → bots → Hermes) plus leftover unparented [TEST] roles.
+  // The old fixed-column forest was over 2,000px wide for this team.
+  const team: [string, string, string | null][] = [
+    ['arina', 'Арина', null],
+    ['builder', 'Builder', 'arina'],
+    ['dev-guardian', 'Dev Guardian', 'arina'],
+    ['growth', 'Growth', 'arina'],
+    ['chief-strategist', 'Chief Strategist', 'arina'],
+    ['chief-of-staff', 'Chief of Staff', 'arina'],
+    ['researcher', 'Researcher', 'arina'],
+    ['designer', 'Designer', 'arina'],
+    ['analyst', 'Analyst', 'arina'],
+    ['support', 'Support', 'arina'],
+    ['translator', 'Translator', 'arina'],
+    ['hermes', 'Hermes — админ Raspberry Pi', 'chief-of-staff'],
+    ['test-builder', '[TEST] Builder', null],
+    ['test-chief-strategist', '[TEST] Chief Strategist', null],
+    ['test-chief-of-staff', '[TEST] Chief of Staff', null],
+  ];
+  const failed = await page.evaluate(async (team) => {
+    const errors: string[] = [];
+    for (const [slug, name, parent] of team) {
+      const r = await fetch('/api/owner/roles', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slug, name, area: `${name} work`, ...(parent ? { parent } : {}) }),
+      });
+      if (!r.ok) errors.push(`${slug}: ${r.status} ${await r.text()}`);
+    }
+    return errors;
+  }, team);
+  expect(failed).toEqual([]);
+
+  const prev = page.viewportSize();
+  for (const width of [prev?.width ?? 1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/');
+    const graph = page.locator('.graph[data-layout="tree"]');
+    await expect(graph).toBeVisible();
+    await expect(page.locator('.graph-card[data-slug="hermes"]')).toBeVisible();
+
+    const cards = await graph.locator('a.graph-card').evaluateAll((els) =>
+      els.map((el) => {
+        const b = el.getBoundingClientRect();
+        return {
+          slug: el.getAttribute('data-slug') ?? '',
+          name: el.querySelector('.graph-name')?.textContent ?? '',
+          test: el.classList.contains('test'),
+          x: b.left,
+          y: b.top,
+          right: b.right,
+          w: b.width,
+          h: b.height,
+        };
+      }),
+    );
+    const at = (slug: string) => cards.find((c) => c.slug === slug)!;
+    expect(cards.length).toBe(team.length + 2); // plus Writer and Editor from the earlier tests
+    expect(cards.reduce((a, b) => (b.y < a.y ? b : a)).slug, 'Арина is the top card').toBe('arina');
+    for (const [slug, , parent] of team) {
+      if (!parent) continue;
+      expect(at(slug).y, `${slug} is below ${parent}`).toBeGreaterThan(at(parent).y);
+      expect(at(slug).x, `${slug} is indented under ${parent}`).toBeGreaterThan(at(parent).x);
+    }
+    const lowestReal = Math.max(...cards.filter((c) => !c.test).map((c) => c.y));
+    for (const c of cards.filter((c) => c.test)) expect(c.y, `${c.slug} comes after the real team`).toBeGreaterThan(lowestReal);
+    expect(cards.filter((c) => c.test).length).toBe(3);
+    expect(at('hermes').name, 'card names are not cut to a fixed length').toBe('Hermes — админ Raspberry Pi');
+    for (const c of cards) {
+      expect(c.x, `${c.slug} starts on screen`).toBeGreaterThanOrEqual(0);
+      expect(c.right, `${c.slug} ends on screen`).toBeLessThanOrEqual(width);
+      expect(c.h).toBeGreaterThanOrEqual(44);
+      expect(c.w).toBeGreaterThanOrEqual(120);
+    }
+    expect(await mapOverflow(), `no sideways scroll at ${width}px`).toEqual({ doc: 0, body: 0, wrap: 0 });
+  }
+  if (prev) await page.setViewportSize(prev);
 });
 
 test('navigation fits the screen and the page breaks no content security rule', async () => {

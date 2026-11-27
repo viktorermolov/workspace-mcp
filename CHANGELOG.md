@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- The Map graph is redesigned as a vertical tree of rectangular role cards (full role name and open-task count), so the reporting hierarchy reads top to bottom and fits the screen width on phones (~375–430px) and desktop with no horizontal scrolling of the page or the graph. Cards stretch to the available width; deep trees indent less. Reporting lines run down the left side; declared links (solid) and recorded interactions (dashed) are arrows in a narrow gutter on the right. The biggest real tree comes first, and roles named `[TEST] …` are dashed and placed after every real role, so they no longer become the visible roots that push the team off-screen. The old circle nodes, 14-character labels and fixed 160px column forest are removed. (#102)
+
 ## [0.3.0] - 2026-11-26
 
 ### Added

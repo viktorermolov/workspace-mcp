@@ -1,4 +1,5 @@
 import { api, enc } from '../api.ts';
+import { type ArcInput, arcsFor, indentFor, isTestRole, layoutTree } from '../map-layout.ts';
 import { Badge, Card, Empty, Loading, Page, Time, useData } from '../ui.tsx';
 
 interface MapRole {
@@ -34,137 +35,81 @@ const KIND: Record<string, string> = {
   parent: 'reports to',
 };
 
-const COL = 160;
-const ROW = 110;
-const PAD_X = 48;
-const PAD_Y = 44;
-const NODE_R = 22;
+// Card tree geometry, in CSS pixels. Cards stretch to the available width, so the tree never needs sideways scrolling.
+const PITCH = 64;
+const CARD_H = 52;
+const GUTTER = 40;
 
-function layoutForest(roles: MapRole[]) {
-  const bySlug = new Map(roles.map((r) => [r.slug, r]));
-  const children = new Map<string, string[]>();
-  const hasParent = new Set<string>();
-  for (const r of roles) {
-    const p = r.parent?.slug;
-    if (p && bySlug.has(p)) {
-      const list = children.get(p) ?? [];
-      list.push(r.slug);
-      children.set(p, list);
-      hasParent.add(r.slug);
-    }
-  }
-  for (const list of children.values()) list.sort((a, b) => (bySlug.get(a)?.name ?? a).localeCompare(bySlug.get(b)?.name ?? b));
-  const roots = roles
-    .filter((r) => !hasParent.has(r.slug))
-    .map((r) => r.slug)
-    .sort((a, b) => (bySlug.get(a)?.name ?? a).localeCompare(bySlug.get(b)?.name ?? b));
-
-  const subtreeW = new Map<string, number>();
-  const walkW = (slug: string, stack: Set<string>): number => {
-    if (subtreeW.has(slug)) return subtreeW.get(slug)!;
-    if (stack.has(slug)) {
-      subtreeW.set(slug, 1);
-      return 1;
-    }
-    stack.add(slug);
-    const kids = children.get(slug) ?? [];
-    const w = kids.length ? kids.reduce((s, k) => s + walkW(k, stack), 0) : 1;
-    stack.delete(slug);
-    subtreeW.set(slug, w);
-    return w;
-  };
-  for (const root of roots) walkW(root, new Set());
-
-  const pos = new Map<string, { x: number; y: number; role: MapRole }>();
-  const place = (slug: string, left: number, depth: number, stack: Set<string>) => {
-    const w = subtreeW.get(slug) ?? 1;
-    const role = bySlug.get(slug)!;
-    pos.set(slug, { x: left + (w * COL) / 2, y: PAD_Y + depth * ROW, role });
-    if (stack.has(slug)) return;
-    stack.add(slug);
-    let cx = left;
-    for (const k of children.get(slug) ?? []) {
-      const kw = subtreeW.get(k) ?? 1;
-      place(k, cx, depth + 1, stack);
-      cx += kw * COL;
-    }
-    stack.delete(slug);
-  };
-  let left = PAD_X;
-  for (const root of roots) {
-    const w = subtreeW.get(root) ?? 1;
-    place(root, left, 0, new Set());
-    left += w * COL + 24;
-  }
-  const xs = [...pos.values()].map((p) => p.x);
-  const ys = [...pos.values()].map((p) => p.y);
-  const width = Math.max(320, (xs.length ? Math.max(...xs) : 0) + PAD_X + 48);
-  const height = Math.max(200, (ys.length ? Math.max(...ys) : 0) + PAD_Y + 56);
-  return { pos, width, height };
-}
-
-/** Roles as a top-down forest: solid arrows are reporting and declared links, dashed arrows are recorded interactions. */
+/** Roles as a vertical tree of cards: lines on the left are the reporting line; arrows on the right are other links. */
 function Graph({ data }: { data: MapData }) {
-  const n = data.roles.length;
-  if (n < 1) return null;
-  const { pos, width, height } = layoutForest(data.roles);
-  const pairs = new Map<string, { from: string; to: string; declared: boolean; recorded: number }>();
-  for (const l of data.links) {
-    const k = `${l.from}>${l.to}`;
-    pairs.set(k, { from: l.from, to: l.to, declared: true, recorded: pairs.get(k)?.recorded ?? 0 });
-  }
+  if (data.roles.length < 1) return null;
+  const { rows, maxDepth } = layoutTree(data.roles);
+  const indent = indentFor(maxDepth);
+  const pairs = new Map<string, ArcInput>();
+  for (const l of data.links) pairs.set(`${l.from}>${l.to}`, { from: l.from, to: l.to, declared: true });
   for (const i of data.interactions) {
     const k = `${i.from}>${i.to}`;
-    const p = pairs.get(k) ?? { from: i.from, to: i.to, declared: false, recorded: 0 };
-    p.recorded += i.count;
-    pairs.set(k, p);
+    if (!pairs.has(k)) pairs.set(k, { from: i.from, to: i.to, declared: false });
   }
+  const arcs = arcsFor(rows, [...pairs.values()]);
+  const gutter = arcs.length ? GUTTER : 0;
+  const height = rows.length * PITCH - (PITCH - CARD_H);
+  const bySlug = new Map(rows.map((r) => [r.role.slug, r]));
+  const mid = (row: number) => row * PITCH + CARD_H / 2;
   return (
     <div class="graph-wrap">
-      <svg class="graph" data-layout="tree" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Reporting tree of roles">
-        <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" class="graph-arrow" />
-          </marker>
-        </defs>
-        {[...pairs.values()].map((p) => {
-          const a = pos.get(p.from);
-          const b = pos.get(p.to);
-          if (!a || !b || a === b) return null;
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const pad = NODE_R + 4;
-          return (
-            <line
-              key={`${p.from}>${p.to}`}
-              x1={a.x + (dx / len) * pad}
-              y1={a.y + (dy / len) * pad}
-              x2={b.x - (dx / len) * pad}
-              y2={b.y - (dy / len) * pad}
-              class={p.declared ? 'graph-link' : 'graph-link recorded'}
-              marker-end="url(#arrow)"
-            />
-          );
-        })}
-        {[...pos.values()].map(({ x, y, role }) => (
-          <a key={role.slug} href={`/roles/${enc(role.slug)}`}>
-            <rect x={x - 22} y={y - 22} width="44" height="44" class="graph-hit" />
-            <circle cx={x} cy={y} r={NODE_R} class={`graph-node${role.open_total ? ' busy' : ''}${role.archived ? ' archived' : ''}`} />
-            <text x={x} y={y + 4} text-anchor="middle" class="graph-count">
-              {role.open_total}
-            </text>
-            <text x={x} y={y + 38} text-anchor="middle" class="graph-label">
-              {role.name.length > 14 ? `${role.name.slice(0, 13)}…` : role.name}
-            </text>
-            {role.archived && (
-              <text x={x} y={y + 50} text-anchor="middle" class="graph-label archived-label">
-                archived
-              </text>
-            )}
+      <div class="graph" data-layout="tree" role="group" aria-label="Reporting tree of roles" style={{ height: `${height}px` }}>
+        <svg class="graph-lines" width={(maxDepth + 1) * indent} height={height} aria-hidden="true">
+          {rows.map((r) => {
+            const p = r.parent ? bySlug.get(r.parent) : undefined;
+            if (!p) return null;
+            const x = p.depth * indent + indent / 2;
+            return <path key={r.role.slug} class="graph-link" d={`M${x},${p.row * PITCH + CARD_H} V${mid(r.row)} H${r.depth * indent}`} />;
+          })}
+        </svg>
+        {gutter > 0 && (
+          <svg class="graph-arcs" width={gutter} height={height} aria-hidden="true">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="graph-arrow" />
+              </marker>
+            </defs>
+            {arcs.map((a) => {
+              const span = Math.abs(a.toRow - a.fromRow);
+              const bend = Math.min(gutter - 4, 10 + 4 * span);
+              const c = (bend - 1) / 0.75;
+              const y1 = mid(a.fromRow) - 6;
+              const y2 = mid(a.toRow) + 6;
+              return (
+                <path
+                  key={`${a.from}>${a.to}`}
+                  class={a.declared ? 'graph-link' : 'graph-link recorded'}
+                  d={`M2,${y1} C${c},${y1} ${c},${y2} 3,${y2}`}
+                  marker-end="url(#arrow)"
+                />
+              );
+            })}
+          </svg>
+        )}
+        {rows.map(({ role, depth, row, test }) => (
+          <a
+            key={role.slug}
+            href={`/roles/${enc(role.slug)}`}
+            class={`graph-card${role.open_total ? ' busy' : ''}${role.archived ? ' archived' : ''}${test ? ' test' : ''}`}
+            data-slug={role.slug}
+            data-depth={depth}
+            title={role.name}
+            aria-label={`${role.name}${role.archived ? ' (archived)' : ''}: ${role.open_total} open tasks`}
+            style={{ top: `${row * PITCH}px`, left: `${depth * indent}px`, right: `${gutter}px`, height: `${CARD_H}px` }}
+          >
+            <span class="graph-name">
+              {role.name}
+              {role.archived && <span class="graph-archived"> · archived</span>}
+            </span>
+            <span class="graph-count">{role.open_total} open</span>
           </a>
         ))}
-      </svg>
+      </div>
     </div>
   );
 }
@@ -183,7 +128,8 @@ export function MapScreen() {
           <>
             <Graph data={data} />
             <p class="muted small legend">
-              Numbers are open tasks. Solid arrows are the reporting line and declared links; dashed arrows are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
+              Each card shows a role and its open tasks. Lines on the left are the reporting line, top to bottom. Arrows on the right: solid are declared links, dashed are recorded interactions (assigned, commented, claimed). Times are record times, not live status.
+              {data.roles.some((r) => isTestRole(r.name)) && ' Test roles (named [TEST] …) are dashed and listed after the team.'}
             </p>
             {data.interactions_truncated && <p class="muted small">The dashed lines only cover the most recent 2,000 recorded interactions in the last 30 days.</p>}
             {data.unassigned_open_tasks > 0 && (
