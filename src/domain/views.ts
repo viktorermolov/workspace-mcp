@@ -23,6 +23,7 @@ import { listRoutines, requireRoutine, routineSummary, routineView } from './rou
 import { agentSelf, agentSummaries, findAgent } from './agents.ts';
 
 import { lastCheckpoint, requireTask, taskSummary, taskView, type TaskRow } from './tasks.ts';
+import { closedTaskInbox, inboxView } from './task-notices.ts';
 
 export const ENTITY_TYPES = ['rules', 'role', 'project', 'document', 'task', 'checkpoint', 'issue', 'routine', 'review_comment'] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
@@ -481,15 +482,22 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
     since = { since_event: prev.last_event_id, events, has_more: ch.has_more, ...(ch.has_more ? { next_cursor: ch.next_cursor } : {}) };
     if (ch.has_more) seenUpTo = ch.next_cursor;
   }
-  run(
-    db,
-    `INSERT INTO start_cursor (connection_id, role_key, last_event_id, updated_at) VALUES (?,?,?,?)
-     ON CONFLICT (connection_id, role_key) DO UPDATE SET last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,
-    connKey,
-    key,
-    seenUpTo,
-    now(),
-  );
+  // The session inbox for closed tasks (#183) has its own marker, so a long list of changes does not hold
+  // back the newest notices. The first time, it starts where changes_since_previous_start starts.
+  const inboxKey = `${key}#inbox`;
+  const inboxPrev = cursorOf(inboxKey) ?? prev;
+  const inbox = closedTaskInbox(db, actor, blocks.map((b) => b.view.id), inboxPrev?.last_event_id ?? 0, latest);
+  for (const [k, v] of [[key, seenUpTo], [inboxKey, latest]] as const) {
+    run(
+      db,
+      `INSERT INTO start_cursor (connection_id, role_key, last_event_id, updated_at) VALUES (?,?,?,?)
+       ON CONFLICT (connection_id, role_key) DO UPDATE SET last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,
+      connKey,
+      k,
+      v,
+      now(),
+    );
+  }
 
   const allRoutines = listRoutines(db, memberId);
   const agentList = agentSummaries(db, memberId, START_LIST_MAX);
@@ -587,6 +595,7 @@ export function startView(db: DB, actor: Actor, roleRef?: string, opts: { budget
             last_checkpoint: lastOwn ? { ...cpView(lastOwn, long), role: many.find((b) => b.checkpoint === lastOwn)!.view.slug } : null,
           }
         : {}),
+      ...inboxView(inbox, pv),
       changes_since_previous_start: since,
       latest_event_id: latest,
       ...commentsFor(long, comments),

@@ -17,6 +17,7 @@ While working:
 - Fetch details by id with `get`, or find them with `search`. Do not guess what is in the workspace.
 - On every write (`save_task`, `save_document`, `claim_task`, `checkpoint`, and the other write tools), pass `agent` with "<agent>" and `claimed_role` with the slug of the role you are acting in: for a task, the task's role.
 - Tasks addressed to you come first. A task addressed to another agent is not yours to claim. When you take a task, claim it with `claim_task`, and keep its status, result and blocking reason current with `save_task`. To hand a task to one agent, set `for_agent` on it.
+- If `start` lists `closed_tasks_you_created` or `comments_on_closed_tasks`, read them: a task you handed over was finished, or someone wrote on a closed task you created or handled. Answer a comment with `comment_task`.
 - If `start` lists `review_comments` or `owner_comments_waiting_on_tasks`, answer them: `reply_review_comment` (with `status: "answered"` when you have resolved the owner's remark; only the owner can close a comment) and `comment_task`.
 - Record decisions and findings in documents (`save_document`) and keep project focus current (`save_project`).
 - If a call is refused or carries a warning, read the message: it names the argument or the role that is wrong. If an update fails with a conflict, read the item again, merge, and retry. Never overwrite someone else's change blindly.
