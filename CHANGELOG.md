@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- A task addressed to an agent could be claimed by a call that named no agent, from any platform. Only the addressee can claim it now; the owner still can. (#139)
 - A document opened from Projects, an older version on the History screen and comments on a task page are rendered as Markdown instead of showing the Markdown source. They use the same built-in renderer as the reading pages. (#124)
 
 ### Changed

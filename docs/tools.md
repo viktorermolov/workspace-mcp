@@ -119,7 +119,7 @@ Cycles in the parent hierarchy or in dependencies are rejected with `invalid`. A
 
 Input: `id`, `claimed_role` (your role, for the log), `role` (optional: the role the task is claimed for, and used to set `role_id` if the task has none). Using `role` as the author when `claimed_role` is omitted is deprecated.
 
-Atomically takes an open task that nobody has claimed and sets it to `in_progress`, recording the connection, role and agent. A task addressed to an agent (`for_agent`) is a `conflict` for a caller that names a different agent. If another agent got it first, the call fails with `conflict`.
+Atomically takes an open task that nobody has claimed and sets it to `in_progress`, recording the connection, role and agent. A task addressed to an agent (`for_agent`) is a `conflict` for a caller that names a different agent or names none. If another agent got it first, the call fails with `conflict`.
 
 ### `comment_task`
 

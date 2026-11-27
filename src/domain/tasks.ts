@@ -333,8 +333,10 @@ export function claimTask(db: DB, actor: Actor, input: { id: string; role?: stri
     const t = requireTask(db, actor.memberId, input.id);
     assertCanEdit(db, actor, t.role_id, { what: 'task' });
     const addressed = slugOf(db, 'agent', t.agent_id);
-    if (addressed && actor.kind === 'agent' && actor.agent && actor.agent !== addressed) {
-      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent)`, { for_agent: addressed });
+    // A call that names no agent is not the addressee either: a bot that forgot to pass agent must not take another agent's task.
+    if (addressed && actor.kind === 'agent' && actor.agent !== addressed) {
+      const who = actor.agent ? '' : ' This call named no agent: pass agent if the task is yours.';
+      throw new DomainError('conflict', `task ${t.id} is addressed to agent "${addressed}"; it can be claimed by that agent, or re-addressed with save_task (for_agent).${who}`, { for_agent: addressed });
     }
     const assign = input.role
       ? requireRole(db, actor.memberId, input.role)
