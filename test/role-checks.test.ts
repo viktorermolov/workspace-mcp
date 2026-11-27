@@ -62,6 +62,7 @@ describe('role checks on writes', () => {
         [13, 'connection-sole-agent'],
         [14, 'repair-reauth-duplicate-connections'],
         [15, 'repair-empty-active-duplicates'],
+        [16, 'pending-client-bind'],
       ],
     );
   });

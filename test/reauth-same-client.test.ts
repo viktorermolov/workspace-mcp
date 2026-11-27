@@ -174,7 +174,7 @@ describe('migration 14 repair-reauth-duplicate-connections', () => {
 
       setLogLevel('info');
       const out = captureStdout(() => {
-        assert.equal(runAppMigrations(db), 2);
+        assert.equal(runAppMigrations(db), 3);
       });
       assert.match(out, /connection duplicate repaired/);
       assert.match(out, /repair-reauth-duplicate-connections/);
@@ -233,7 +233,7 @@ describe('migration 14 repair-reauth-duplicate-connections', () => {
       putConnection(db, 'only', { name: 'Grok', confirmed: '2026-06-01T00:00:00.000Z' });
       confirmRoles(db, 'only');
       addAgent(db, 'only');
-      assert.equal(runAppMigrations(db), 2);
+      assert.equal(runAppMigrations(db), 3);
       const before = getConnection(db, 'only')!;
       assert.equal(before.current_client_id, 'only');
       const logs = repairReauthDuplicateConnections(db);
