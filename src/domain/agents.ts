@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, invalid, LIMITS, newId, notFound, recordEvent, slugify, type Actor } from './core.ts';
-import { roleByRef } from './access.ts';
+import { agentMayTake, isRoleAllowedForConnection, roleByRef } from './access.ts';
 
 /**
  * An agent is a named bot on one platform (an approved connection) with the roles it may take
@@ -45,7 +45,8 @@ export function agentView(db: DB, a: AgentRow) {
     slug: a.slug,
     name: a.name,
     platform: { id: a.client_id, name: c?.name ?? a.client_id, active: !!c && !c.revoked_at },
-    roles: agentRoles(db, a.id).map((r) => ({ id: r.id, slug: r.slug, name: r.name, archived: !!r.archived_at })),
+    // usable: the role is also on the platform's confirmed list, so the agent can really act as it.
+    roles: agentRoles(db, a.id).map((r) => ({ id: r.id, slug: r.slug, name: r.name, archived: !!r.archived_at, usable: agentMayTake(db, a.id, r.id) })),
     rev: a.rev,
     created_at: a.created_at,
     updated_at: a.updated_at,
@@ -70,7 +71,7 @@ export function agentSummaries(db: DB, memberId: string, max: number) {
       name: a.name,
       platform: a.platform,
       roles: agentRoles(db, a.id)
-        .filter((r) => !r.archived_at)
+        .filter((r) => agentMayTake(db, a.id, r.id))
         .map((r) => r.slug),
     })),
     more: Math.max(0, rows.length - max),
@@ -92,10 +93,10 @@ function ownerOnly(actor: Actor): void {
   if (actor.kind !== 'owner') throw new DomainError('forbidden', 'only the owner can create, change or remove agents');
 }
 
-function requirePlatform(db: DB, memberId: string, clientId: string): { client_id: string; name: string } {
+function requirePlatform(db: DB, memberId: string, clientId: string, mustBeActive = true): { client_id: string; name: string } {
   const c = get<{ client_id: string; name: string; revoked_at: string | null }>(db, 'SELECT client_id, name, revoked_at FROM connection WHERE member_id = ? AND client_id = ?', memberId, clientId);
   if (!c) throw invalid(`platform not found: ${clientId}`);
-  if (c.revoked_at) throw invalid(`platform "${c.name}" is revoked; approve it again before adding an agent to it`);
+  if (c.revoked_at && mustBeActive) throw invalid(`platform "${c.name}" is revoked; approve it again before adding an agent to it`);
   return c;
 }
 
@@ -108,6 +109,14 @@ function resolveRoles(db: DB, memberId: string, refs: string[]): { id: string; s
     out.set(r.id, { id: r.id, slug: r.slug });
   }
   return [...out.values()];
+}
+
+/** The platform's confirmed list is the ceiling: an agent can be given only roles the owner confirmed for its platform. */
+function assertOnPlatform(db: DB, platform: { client_id: string; name: string }, roles: { id: string; slug: string }[]): void {
+  const off = roles.filter((r) => !isRoleAllowedForConnection(db, platform.client_id, r.id)).map((r) => r.slug);
+  if (off.length) {
+    throw new DomainError('invalid', `not confirmed for the platform "${platform.name}": ${off.join(', ')}. Confirm the platform's role list first, then give the role to the agent`, { roles: off });
+  }
 }
 
 function setRoles(db: DB, agentId: string, roles: { id: string }[]): void {
@@ -140,6 +149,7 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       const slug = input.slug ?? freeSlug(db, actor.memberId, input.name);
       if (findAgent(db, actor.memberId, slug)) throw new DomainError('conflict', `an agent with slug "${slug}" already exists`);
       const roles = resolveRoles(db, actor.memberId, input.roles ?? []);
+      assertOnPlatform(db, platform, roles);
       const id = newId('agt');
       const at = now();
       run(db, 'INSERT INTO agent (id, member_id, client_id, slug, name, rev, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?)', id, actor.memberId, platform.client_id, slug, input.name.trim(), at, at);
@@ -165,14 +175,22 @@ export function saveAgent(db: DB, actor: Actor, input: SaveAgentInput) {
       vals.push(input.slug);
       changed.push('slug');
     }
-    if (input.platform !== undefined && input.platform !== a.client_id) {
+    const moved = input.platform !== undefined && input.platform !== a.client_id;
+    const platform = requirePlatform(db, actor.memberId, moved ? input.platform! : a.client_id, moved);
+    const held = agentRoles(db, a.id);
+    if (moved) {
       sets.push('client_id = ?');
-      vals.push(requirePlatform(db, actor.memberId, input.platform).client_id);
+      vals.push(platform.client_id);
       changed.push('platform');
+      // On a new platform every role must be confirmed there, also the ones the agent keeps.
+      if (input.roles === undefined) assertOnPlatform(db, platform, held.filter((r) => !r.archived_at));
     }
     if (input.roles !== undefined) {
       const next = resolveRoles(db, actor.memberId, input.roles);
-      const before = agentRoles(db, a.id)
+      const heldIds = new Set(held.map((r) => r.id));
+      // A role the agent already holds may stay while its platform list is unconfirmed; only what is added is checked.
+      assertOnPlatform(db, platform, moved ? next : next.filter((r) => !heldIds.has(r.id)));
+      const before = held
         .map((r) => r.id)
         .sort();
       if (JSON.stringify(before) !== JSON.stringify(next.map((r) => r.id).sort())) {

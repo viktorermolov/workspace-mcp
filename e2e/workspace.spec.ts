@@ -513,6 +513,15 @@ test('a signed-out authorization goes through sign-in to consent', async () => {
 test('an agent is added under its platform and has a page of its own, reachable from the map', async () => {
   await page.goto('/connections');
   const platform = page.locator('.list li').filter({ hasText: 'Agent on my phone' });
+  // An agent can take only roles confirmed for its platform, so before that the form offers none.
+  await platform.getByRole('button', { name: 'Add an agent' }).click();
+  await expect(platform.locator('.agent-form').getByText('Confirm the roles for this platform first')).toBeVisible();
+  await expect(platform.locator('.agent-form').getByLabel(/Writer/)).toHaveCount(0);
+  await platform.getByRole('button', { name: 'Cancel' }).click();
+  const platformRoles = platform.locator('.connection-roles:not(.agents)');
+  await platformRoles.getByLabel(/Writer/).check();
+  await platformRoles.getByRole('button', { name: 'Save and confirm this list' }).click();
+  await expect(platformRoles.getByText('List confirmed.')).toBeVisible();
   await platform.getByRole('button', { name: 'Add an agent' }).click();
   await platform.getByLabel('Agent name').fill('Ada');
   await platform.locator('.agent-form').getByLabel(/Writer/).check();

@@ -1,6 +1,6 @@
 import { all, get, now, run, tx, type DB } from '../db/db.ts';
 import { checkLen, checkRev, DomainError, idempotent, indexEntity, invalid, LIMITS, newId, notFound, recordEvent, type Actor } from './core.ts';
-import { assertCanEdit, withOwnerRole } from './access.ts';
+import { agentMayTake, assertCanEdit, withOwnerRole } from './access.ts';
 import { findRole, requireProject, requireRole } from './entities.ts';
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'in_review', 'done', 'cancelled'] as const;
@@ -323,8 +323,7 @@ function requireTaskAgent(db: DB, memberId: string, ref: string): string {
 function assertAgentFitsRole(db: DB, agentId: string, roleId: string | null): void {
   const slug = slugOf(db, 'agent', agentId);
   if (!roleId) throw invalid(`a task addressed to agent "${slug}" needs a role: pass role as well`);
-  const ok = get(db, 'SELECT 1 FROM agent_role WHERE agent_id = ? AND role_id = ?', agentId, roleId);
-  if (!ok) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
+  if (!agentMayTake(db, agentId, roleId)) throw invalid(`agent "${slug}" may not take the role "${slugOf(db, 'role', roleId)}", so it would never see this task`);
 }
 
 /** Atomic claim: only one caller can move an open, unclaimed task to in_progress. */
