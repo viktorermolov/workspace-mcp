@@ -152,7 +152,9 @@ export function MapScreen() {
                       <ul class="plain platform-agents">
                         {p.agents.map((a) => (
                           <li key={a.slug}>
-                            <span class="platform-agent">{a.name}</span>
+                            <a class="platform-agent" href={`/agents/${enc(a.slug)}`}>
+                              {a.name}
+                            </a>
                             <span class="platform-roles">
                               {a.roles.length === 0 && <span class="small muted">no roles yet</span>}
                               {a.roles.map((r) => (
@@ -201,7 +203,10 @@ export function MapScreen() {
                         {r.agents!.map((a, i) => (
                           <span key={a.slug}>
                             {i > 0 && ', '}
-                            <strong>{a.name}</strong> <span class="muted">on {a.platform}</span>
+                            <a href={`/agents/${enc(a.slug)}`}>
+                              <strong>{a.name}</strong>
+                            </a>{' '}
+                            <span class="muted">on {a.platform}</span>
                           </span>
                         ))}
                       </p>

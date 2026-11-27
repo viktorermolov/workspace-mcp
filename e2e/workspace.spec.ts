@@ -473,6 +473,31 @@ test('a signed-out authorization goes through sign-in to consent', async () => {
   await approveAndCatchRedirect('Second agent', redirect);
 });
 
+test('an agent is added under its platform and has a page of its own, reachable from the map', async () => {
+  await page.goto('/connections');
+  const platform = page.locator('.list li').filter({ hasText: 'Agent on my phone' });
+  await platform.getByRole('button', { name: 'Add an agent' }).click();
+  await platform.getByLabel('Agent name').fill('Ada');
+  await platform.locator('.agent-form').getByLabel(/Writer/).check();
+  await platform.getByRole('button', { name: 'Add agent' }).click();
+  await expect(platform.getByRole('link', { name: 'Ada' })).toBeVisible();
+
+  await page.goto('/');
+  const block = page.locator('.platform').filter({ hasText: 'Agent on my phone' });
+  await expect(block.getByRole('link', { name: 'Writer' })).toBeVisible();
+  await block.getByRole('link', { name: 'Ada' }).click();
+  await expect(page).toHaveURL(/\/agents\/ada$/);
+  await expect(page.getByRole('heading', { name: 'Ada', exact: true })).toBeVisible();
+  await expect(page.getByText('Runs on')).toContainText('Agent on my phone');
+  await expect(page.locator('.chip').filter({ hasText: 'Writer' })).toBeVisible();
+  await expect(page.getByText('No open task is addressed to this agent.')).toBeVisible();
+  const over = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth));
+  expect(over).toBe(0);
+  await page.locator('.chip').filter({ hasText: 'Writer' }).click();
+  await expect(page).toHaveURL(/\/roles\/writer$/);
+  await expect(page.getByRole('link', { name: 'Ada' })).toBeVisible();
+});
+
 test('connections can be revoked', async () => {
   await page.goto('/connections');
   const row = page.locator('.list li').filter({ hasText: 'Second agent' });

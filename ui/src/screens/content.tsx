@@ -228,7 +228,10 @@ export function RoleScreen({ id }: { id: string }) {
                   {o!.agents!.map((a, i) => (
                     <span key={a.slug}>
                       {i > 0 && ', '}
-                      <strong>{a.name}</strong> <span class="muted">on {a.platform}</span>
+                      <a href={`/agents/${enc(a.slug)}`}>
+                        <strong>{a.name}</strong>
+                      </a>{' '}
+                      <span class="muted">on {a.platform}</span>
                     </span>
                   ))}
                 </>
