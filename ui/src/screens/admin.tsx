@@ -129,7 +129,14 @@ export function ConnectionsScreen() {
     });
   };
   const rollbackTransfer = (c: Connection) => {
-    if (!confirm(`Undo the last client transfer on "${c.name}"? Access and refresh tokens issued before the undo stop working for both clients. They have to connect again.`)) return;
+    const sameClientArchive =
+      c.pending_transfer &&
+      c.pending_transfer.from_client_id === c.pending_transfer.to_client_id &&
+      c.pending_transfer.kind === 'migration';
+    const question = sameClientArchive
+      ? `Undo the last client transfer on "${c.name}"? The archived empty platform will be restored. This platform and its tokens stay as they are.`
+      : `Undo the last client transfer on "${c.name}"? Access and refresh tokens issued before the undo stop working for both clients. They have to connect again.`;
+    if (!confirm(question)) return;
     void act.run(async () => {
       await post(`/connections/${enc(c.client_id)}/rollback-transfer`);
       await list.reload();

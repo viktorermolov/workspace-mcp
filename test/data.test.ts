@@ -470,8 +470,8 @@ describe('data safety', () => {
     );
 
     const applied = runAppMigrations(db);
-    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4 … repair-reauth-duplicate-connections is 14).
-    assert.equal(applied, 12);
+    // titled-rules-sets (3) plus later migrations that also sit after 2 (connection_roles is 4 … repair-empty-active-duplicates is 15).
+    assert.equal(applied, 13);
     const row = get<{ id: string; slug: string; title: string; is_default: number; project_id: string | null; member_id: string }>(
       db,
       'SELECT id, slug, title, is_default, project_id, member_id FROM rules WHERE member_id = ?',
