@@ -253,7 +253,7 @@ describe('migration 15 repair-empty-active-duplicates', () => {
 
       setLogLevel('info');
       const out = captureStdout(() => {
-        assert.equal(runAppMigrations(db), 1);
+        assert.equal(runAppMigrations(db), 2);
       });
       assert.match(out, /empty active duplicate archived/);
       assert.match(out, /repair-empty-active-duplicates/);
@@ -328,7 +328,7 @@ describe('migration 15 repair-empty-active-duplicates', () => {
       addAgent(db, 'soloAgent', 'duet', '2026-11-27T19:08:00.000Z');
       putConnection(db, 'soloEmpty', { name: 'Manus', created: '2026-11-21T00:00:00.000Z', approved: '2026-11-21T00:00:00.000Z' });
       applyOne(db, 14);
-      assert.equal(runAppMigrations(db), 1);
+      assert.equal(runAppMigrations(db), 2);
 
       const agentPlat = getConnection(db, 'soloAgent')!;
       assert.equal(agentPlat.merged_into_client_id, null);

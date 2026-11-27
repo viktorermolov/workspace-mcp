@@ -180,6 +180,7 @@ export function ConsentScreen() {
   const redirect = params.get('redirect_uri') ?? '';
   const [name, setName] = useState('');
   const [choice, setChoice] = useState<string>(''); // '' = new platform
+  const [doneUrl, setDoneUrl] = useState<string | null>(null);
   const act = useAction();
   const info = useData(async () => {
     try {
@@ -214,7 +215,12 @@ export function ConsentScreen() {
       if (accept && cont?.mode === 'auto') body.continue_client_id = cont.target.client_id;
       if (accept && cont?.mode === 'choice') body.continue_client_id = choice || null;
       const r = await post<{ url: string }>('/consent', body);
-      location.assign(r.url);
+      setDoneUrl(r.url);
+      try {
+        location.assign(r.url);
+      } catch {
+        /* some non-http callbacks throw; the continue link below still works */
+      }
     });
 
   let host = redirect;
@@ -228,8 +234,20 @@ export function ConsentScreen() {
 
   return (
     <Standalone title="Connect a platform">
-      {info.error && <Alert>{info.error}</Alert>}
-      {info.data && (
+      {info.error && !doneUrl && <Alert>{info.error}</Alert>}
+      {doneUrl && (
+        <>
+          <p class="lead">Return to the platform to finish connecting.</p>
+          <p>
+            <a href={doneUrl}>Continue to the platform</a>
+          </p>
+          <p class="muted small">
+            If this page stays open, that can happen on a phone when the platform's app is installed. Do not approve again.
+            If access did not complete, long-press the link above and open it in the browser rather than the app.
+          </p>
+        </>
+      )}
+      {info.data && !doneUrl && (
         <>
           <p class="lead">
             <strong>{info.data.client.name || 'An unnamed client'}</strong> asks for full access to this workspace: it can read and change roles, rules, projects,

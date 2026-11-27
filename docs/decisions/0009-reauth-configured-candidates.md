@@ -48,6 +48,10 @@ The original platform and its tokens are not changed: `current_client_id` and `a
 
 A lone platform — including one that has an agent, and one that is empty — is not a duplicate and is left as it is. A platform that is configured in any way, or whose journal has anything besides approve, is never archived automatically. No `connection_client` binding table is added: only the original's accepted client stays in use.
 
+### Deferred rebind
+
+The rebind itself (dropping the previous client's grants, switching `current_client_id`, bumping `approved_at`, and recording the transfer, including any archive of an empty duplicate) is not applied at the consent screen. It is stored as a pending binding and is applied on the incoming client's first successful `authorization_code` exchange. Until then the previous client's access and refresh tokens keep working. A later consent for the same platform, or the same incoming client on another platform, replaces the pending row; it does not stack rebinds. The row records an `expires_at` 15 minutes after consent, but there is no background cleaner, and `expires_at` is not a gate: a successful exchange still applies the pending bind after that time, as long as the row has not been replaced. If the code is never exchanged, the existing connection stays unchanged, and the stale pending row remains until a later consent replaces it. See issue #189.
+
 ## Why
 
 Counting every active same-type row as a match made a leftover empty duplicate, which migration 14 correctly left in place, look like a second real platform. The owner was then offered a new platform as the default, and approving it created a third row. Only configured platforms are the ones the owner has equipped; an empty leftover should not block continuing the original, and when it is truly empty it can be archived in the same step, with a journal and an undo. Anything that already has agents, roles, or other journal entries might be a real platform, so it is left alone and the owner chooses.

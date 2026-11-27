@@ -42,6 +42,8 @@ When the platform opens the consent screen of your workspace:
 
 The connection then appears on **Platforms** with its last activity. There you confirm the roles the platform may act as and, when several named bots share one platform, add each of them as an agent with its own roles. **Revoke** cuts it off at once. If a connection fails, open **Diagnostics** on the same screen: every step of each attempt is recorded there without secrets.
 
+To reconnect a platform later, start the connection again from the product and approve the consent screen. The previous connection stays in use until the product finishes the authorization-code exchange; approving again before that does not drop the existing tokens. On an iPhone, if the product's app is installed, the consent page may stay open after Approve because the phone hands the callback to the app: do not approve again. If access does not complete, long-press the continue link and open it in Safari. See the [Grok](platforms/grok.md#reconnecting) notes for the iPhone case (those steps follow Apple's documentation and have not been tested on a real iPhone).
+
 ## 3. Fill the workspace
 
 The workspace starts empty. Either:
