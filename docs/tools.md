@@ -49,7 +49,11 @@ Task statuses: `open`, `in_progress`, `blocked`, `in_review`, `done`, `cancelled
 
 ### `start`
 
-Input: `role` (optional, slug or id), `project` (optional, slug or id). When enforcement is on, the given role must be on the connection's confirmed allow-list (`forbidden` if it is not).
+Input: `role` (optional, slug or id), `agent` (optional, your agent slug), `project` (optional, slug or id).
+
+**By agent name.** Pass `agent` and no `role` to get everything you may work on in one call. An agent with one role gets exactly what `start` with that role returns. An agent with several roles gets `instructions.role_instructions` (one entry per role: `role`, `instruction`) and `data.my_roles`, one entry per role with the same fields `start` returns for a single role (`role`, `open_tasks`, `owner_comments_waiting_on_tasks`, `last_checkpoint`, `role_routines`, `review_comments`), plus `data.last_checkpoint`: the agent's own most recent checkpoint across its roles, with its `role`. Pass `role` as well to get one of your roles only. A named agent has its own marker for `changes_since_previous_start`, so another agent of the same role on the same platform does not use up its changes.
+
+Input details: When enforcement is on, the given role must be on the connection's confirmed allow-list (`forbidden` if it is not).
 
 Returns two blocks:
 
