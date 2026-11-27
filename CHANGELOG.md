@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-27
+
 ### Added
 
 - A task's creator now hears when the task is closed. The first time a task moves to `done` or `cancelled`, a `task.closed` entry is written to the log for its creator, unless the creator closed it. A later close (done to cancelled, or reopened and closed again) writes no second entry. The creator sees it in `start` under `closed_tasks_you_created` (task, how it was closed, its current status, who closed it, a preview of the result), and the creator's role is woken with the existing `task.updated` webhook event. The creating agent is read from the log, so tasks created before this release are covered too. (#183)
@@ -16,9 +18,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Upgrade
 
-- Calls that create or re-address a task of a role with several agents without naming the agent now fail with `invalid`. Pass the agent's slug in `for_agent`, or `"*"` for any agent of the role; `null` no longer means "any agent" for such a role.
+- Make a consistent local backup of the database before upgrading, for example with `cli backup` or with the container stopped. This release adds no schema migration. Existing data is kept.
+- Creating or re-addressing a task of a role that several agents may take, with no agent (`for_agent` left out, empty or `null`), is now invalid and refused. Pass the agent's slug in `for_agent`, or `"*"` for any agent of the role. `"*"` on a task with no role is invalid. `null` no longer means "any agent" for a multi-agent role.
 - Existing tasks with no agent are unchanged by the upgrade and can still be edited. To address one, call `save_task` with its `id`, `rev` and `for_agent` (the owner, its role, or a coordinator role).
-- Roles with one agent are addressed to that agent automatically, and older connectors whose tools have no `for_agent` keep working with no reconnect.
+- Roles with one agent are still addressed to that agent automatically if you leave `for_agent` out. Older connectors whose tools have no `for_agent` keep working with no reconnect: those clients can still create and re-address tasks of a one-agent role, but a create or re-address for a role with several agents is now refused until they pass `for_agent`. `start` always returns `instructions.for_agent_rule`, so a client that already has the tools still hears the rule.
 
 ## [0.6.2] - 2026-11-27
 
