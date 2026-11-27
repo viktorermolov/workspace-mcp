@@ -12,7 +12,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Re-authorizing a product while the original platform is still in use no longer treats an empty same-type duplicate as a matching candidate, so the consent screen does not push the owner toward a third platform. Only platforms with agents or owner-confirmed roles count as matches. When exactly one such platform matches, it is continued automatically, and any empty same-type duplicate (no agents, no roles, no journal besides its own approval) is archived in the same step. The consent screen says that empty platform will be archived. A duplicate that is configured in any way is never touched automatically. The owner can undo the transfer, including the archive, from Platforms. (#178)
+- An empty same-type duplicate that was already created while the original was still in use is archived by migration 15 when the pair is unique and the duplicate has no agents, no roles, and no journal besides its own approval. The original platform and its tokens are not changed. The duplicate's unused consent and grants are revoked so that client cannot obtain a token. An empty consent row is not treated as configuration. A lone platform, with or without an agent, is left as it is. The owner can undo the archive from Platforms; that undo restores the empty platform and does not drop the original's tokens or change its approval time. (#178)
 - A task addressed to an agent, or claimed by a named agent, can no longer have its status, result, blocking reason or role changed, be reopened, archived, or re-addressed (including clearing the addressee or addressing someone else), except by the addressee, the owner, or a coordinator re-addressing it. This holds in both warn and enforce mode. The refusal uses the same wording as claiming the task. Re-addressing a claimed in-progress task clears the claim so the new addressee must claim it before continuing. (#180)
+
+### Changed
+
+- Before 1.0, a breaking change is a minor version, a fix without new functionality is a patch, and 1.0.0 is released only on the owner's explicit decision. The README and [0008](docs/decisions/0008-semver.md) follow this rule. (#181)
+
+### Upgrade
+
+- Upgrading from 0.6.0 applies one migration (15, `repair-empty-active-duplicates`) automatically, after a pre-migration backup. Existing data is kept.
+- Make a local backup of the database before upgrading.
+- After the upgrade, an empty same-type duplicate that was left in place because the original was still in use is archived when the pair is unique and the duplicate has no agents, no roles, and no journal besides its own approval. The original platform and its tokens are not changed. The owner can undo the archive from Platforms → “Undo last client transfer” without dropping the original platform's tokens or changing its approval time. Anything that is not a unique empty duplicate is left as it is and recorded in the log.
+- Upgrading from 0.5.0 applies migrations 14 and 15. Migration 14 still binds a unique later empty duplicate when the original was unused after that duplicate was approved; migration 15 then archives a leftover empty duplicate of a still-used original, as above.
+- Rollback to 0.6.0 or 0.5.0 is possible only by restoring the pre-migration backup.
 
 ## [0.6.0] - 2026-11-27
 
@@ -23,7 +37,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Upgrade
 
 - Upgrading from 0.5.0 applies one migration (14, `repair-reauth-duplicate-connections`) automatically, after a pre-migration backup. Existing data is kept.
-- Hermes should take a local backup on the Pi before upgrading.
+- Make a local backup of the database before upgrading.
 - After the upgrade, a later empty platform that was created by reconnecting the same product is merged into the earlier configured one when the pair is unique and the original was unused after the duplicate was approved. Anything ambiguous is left as it is and recorded in the log.
 - Reconnecting a platform from the product still opens the consent screen. When the client is the same type as exactly one active platform, the screen says it continues that platform. Otherwise you choose to continue a platform or start a new one (the default).
 - Undo a client transfer (a re-auth bind or a merge performed by migration 14) from Platforms → “Undo last client transfer”. Access and refresh tokens issued before the undo stop working for both clients; each client gets new tokens only through a fresh consent.

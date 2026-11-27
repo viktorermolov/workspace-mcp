@@ -56,8 +56,8 @@ Automatic continuation, with no extra click, happens only when every condition h
 
 (a) Consent is given in the owner's session with a passkey.
 (b) The incoming client is the same client type as the platform's currently bound client: the same registration method (DCR or CIMD), the same set of redirect URIs, the same `token_endpoint_auth_method`, and the same client name. For CIMD the `client_id` URL must also be equal. Name is never sufficient on its own.
-(c) The workspace has exactly one active, non-revoked, non-merged platform that matches.
-(d) The consent screen always shows «Continues platform X: N agents, roles…». Approve continues that platform; the owner is not asked to pick.
+(c) The workspace has exactly one active, non-revoked, non-merged platform that matches. Which platforms count as matches is recorded in [0009](0009-reauth-configured-candidates.md): only configured platforms (agents or owner-confirmed roles).
+(d) The consent screen always shows «Continues platform X: N agents, roles…». When an empty same-type duplicate will be archived, the banner says so before Approve (0009). Approve continues that platform; the owner is not asked to pick.
 (e) The previous client's tokens are revoked in the same transaction that binds the new client and bumps `approved_at`, before the authorization code is exchanged.
 (f) The transfer is journaled. It grants no new permissions (agents and the allow-list stay as they were). Rollback is owner-only.
 
@@ -67,7 +67,9 @@ CIMD clients that reconnect with the same URL already hit the existing row; the 
 
 ### Owner rollback
 
-A `connection_transfer` row records `from_client_id`, `to_client_id`, `previous_approved_at`, kind (`reauth` or `migration`), and an optional archived client. The same owner action undoes a re-auth bind or a merge performed by migration 14: it restores `current_client_id`, sets `approved_at` to now on the restored platform and on an un-archived duplicate so tokens issued before the undo are refused, and drops access and refresh tokens of both clients. For a `migration` transfer it also un-archives the duplicate. Deleted refresh tokens cannot be recreated; each client gets new tokens only through a fresh consent.
+A `connection_transfer` row records `from_client_id`, `to_client_id`, `previous_approved_at`, kind (`reauth` or `migration`), and an optional archived client. The same owner action undoes a re-auth bind or a merge performed by migration 14: it restores `current_client_id`, sets `approved_at` to now on the restored platform and on an un-archived duplicate so tokens issued before the undo are refused, and drops access and refresh tokens of both clients. When the transfer recorded an archived client (a migration merge, or a re-auth that archived an empty duplicate per 0009), it also un-archives that duplicate and drops its grants. Deleted refresh tokens cannot be recreated; each client gets new tokens only through a fresh consent.
+
+An exception applies when `from_client_id` equals `to_client_id` (the platform's accepted client did not change), as recorded by migration 15 (`kind` `migration` with `archived_client_id`). Undo then only un-archives the duplicate and keeps that client's consent and grants revoked; it does not issue tokens, does not delete the original's refresh tokens, and does not change the original's `approved_at` or `current_client_id`. Tokens issued for the original stay valid. A real client switch (`from_client_id` ≠ `to_client_id`) still follows the behaviour above.
 
 The owner rolls back from the Platforms screen («Undo last client transfer»), which calls `POST /api/owner/connections/:id/rollback-transfer`. That is the existing owner-only web surface (passkey session, CSRF). A CLI command was not added: `cli` is an offline tool and requires the service to be stopped, which is the wrong place to undo a live connector's client binding. Rolling the migration 14 schema itself back (the new columns) remains a restore of the pre-migration backup.
 

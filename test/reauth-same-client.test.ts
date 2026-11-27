@@ -117,13 +117,24 @@ function seedMember(db: DB): void {
 function addAgent(db: DB, clientId: string, slug = 'grok-dev'): void {
   const t = '2026-06-01T00:00:00.000Z';
   const id = `agt_${slug}`;
-  run(db, 'INSERT INTO agent (id, member_id, slug, name, client_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?)', id, 'mem_1', slug, slug, clientId, t, t);
+  const memberId =
+    get<{ member_id: string }>(db, 'SELECT member_id FROM connection WHERE client_id = ?', clientId)?.member_id ??
+    get<{ id: string }>(db, 'SELECT id FROM member LIMIT 1')?.id ??
+    'mem_1';
+  run(db, 'INSERT INTO agent (id, member_id, slug, name, client_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?)', id, memberId, slug, slug, clientId, t, t);
 }
 
 function confirmRoles(db: DB, clientId: string, roleId = 'role_dev'): void {
   run(db, "INSERT INTO connection_role (client_id, role_id, source) VALUES (?, ?, 'owner')", clientId, roleId);
   run(db, 'UPDATE connection SET roles_confirmed_at = approved_at WHERE client_id = ?', clientId);
 }
+
+function configurePlatform(db: DB, clientId: string, slug: string): void {
+  addAgent(db, clientId, slug);
+}
+
+
+
 
 function captureStdout(fn: () => void): string {
   const chunks: string[] = [];
@@ -163,7 +174,7 @@ describe('migration 14 repair-reauth-duplicate-connections', () => {
 
       setLogLevel('info');
       const out = captureStdout(() => {
-        assert.equal(runAppMigrations(db), 1);
+        assert.equal(runAppMigrations(db), 2);
       });
       assert.match(out, /connection duplicate repaired/);
       assert.match(out, /repair-reauth-duplicate-connections/);
@@ -222,7 +233,7 @@ describe('migration 14 repair-reauth-duplicate-connections', () => {
       putConnection(db, 'only', { name: 'Grok', confirmed: '2026-06-01T00:00:00.000Z' });
       confirmRoles(db, 'only');
       addAgent(db, 'only');
-      assert.equal(runAppMigrations(db), 1);
+      assert.equal(runAppMigrations(db), 2);
       const before = getConnection(db, 'only')!;
       assert.equal(before.current_client_id, 'only');
       const logs = repairReauthDuplicateConnections(db);
@@ -440,6 +451,7 @@ describe('re-auth continuation and rollback', () => {
   it('automatically continues the one matching platform, rotates the old token, and journals the transfer', async () => {
     const first = await connectAgent(env, owner, 'Auto Grok');
     const platform = listConnections(env.svc.db).find((c) => c.name === 'Auto Grok')!;
+    configurePlatform(env.svc.db, platform.client_id, 'auto-grok-bot');
     const second = await connectAgent(env, owner, 'Auto Grok');
     const again = listConnections(env.svc.db).filter((c) => c.active && c.name === 'Auto Grok');
     assert.equal(again.length, 1);
@@ -460,6 +472,7 @@ describe('re-auth continuation and rollback', () => {
   it('offers a choice instead of auto-continuing when two platforms match', async () => {
     const a = await connectAgent(env, owner, 'Twin Grok');
     const aId = listConnections(env.svc.db).find((c) => c.name === 'Twin Grok')!.client_id;
+    configurePlatform(env.svc.db, aId, 'twin-grok-bot');
     const reg = await fetch(`${env.base}/api/auth/oauth2/register`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -531,6 +544,8 @@ describe('re-auth continuation and rollback', () => {
   it('lets only the owner roll back a re-auth transfer, and rejects earlier tokens of both clients', async () => {
     const first = await connectAgent(env, owner, 'Rollback Grok');
     const firstTok = first.provider.tokens()!;
+    const rolled = listConnections(env.svc.db).find((c) => c.name === 'Rollback Grok')!;
+    configurePlatform(env.svc.db, rolled.client_id, 'rollback-grok-bot');
     const second = await connectAgent(env, owner, 'Rollback Grok');
     const secondTok = second.provider.tokens()!;
     const platform = listConnections(env.svc.db).find((c) => c.active && c.name === 'Rollback Grok')!;
@@ -585,6 +600,7 @@ describe('re-auth continuation and rollback', () => {
 
   it('revoke after a transfer removes access and refresh tokens of the live client', async () => {
     const first = await connectAgent(env, owner, 'Revoke After');
+    configurePlatform(env.svc.db, listConnections(env.svc.db).find((c) => c.name === 'Revoke After')!.client_id, 'revoke-after-bot');
     const second = await connectAgent(env, owner, 'Revoke After');
     const platform = listConnections(env.svc.db).find((c) => c.active && c.name === 'Revoke After')!;
     const liveId = second.provider.clientInformation().client_id;
@@ -618,6 +634,7 @@ describe('re-auth continuation and rollback', () => {
 
   it('keeps a bound current_client_id out of expireUnusedClients', async () => {
     const first = await connectAgent(env, owner, 'Expire Grok');
+    configurePlatform(env.svc.db, listConnections(env.svc.db).find((c) => c.name === 'Expire Grok')!.client_id, 'expire-grok-bot');
     const second = await connectAgent(env, owner, 'Expire Grok');
     const platform = listConnections(env.svc.db).find((c) => c.active && c.name === 'Expire Grok')!;
     const bound = platform.current_client_id!;
@@ -628,6 +645,8 @@ describe('re-auth continuation and rollback', () => {
     void first;
     void second;
   });
+
+
 });
 
 describe('sameClientType', () => {
