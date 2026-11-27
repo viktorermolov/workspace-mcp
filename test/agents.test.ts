@@ -252,7 +252,7 @@ describe('start by agent name alone', () => {
 
   it('search lists the tasks of one agent: addressed to it or taken by it', async () => {
     type Found = { results: { type: string; title: string; for_agent?: string }[] };
-    const taken = await call<{ id: string }>(grok, 'save_task', { title: 'Taken by Bob', role: 'developer', claimed_role: 'developer', agent: 'bob' });
+    const taken = await call<{ id: string }>(grok, 'save_task', { title: 'Taken by Bob', role: 'developer', for_agent: '*', claimed_role: 'developer', agent: 'bob' });
     await call(grok, 'claim_task', { id: taken.id, claimed_role: 'developer', agent: 'bob' });
     const bob = await call<Found>(grok, 'search', { for_agent: 'bob' });
     assert.deepEqual(bob.results.map((r) => r.title).sort(), ['For Bob', 'Taken by Bob']);
@@ -276,7 +276,7 @@ describe('start by agent name alone', () => {
     // Both agents have started as developer before; then something changes once.
     await call(grok, 'start', { agent: 'ada', role: 'developer' });
     await call(grok, 'start', { agent: 'bob', role: 'developer' });
-    await call(grok, 'save_task', { title: 'News for both', role: 'developer', claimed_role: 'developer' });
+    await call(grok, 'save_task', { title: 'News for both', role: 'developer', for_agent: '*', claimed_role: 'developer' });
     const sees = (s: Start) => (s.data.changes_since_previous_start?.events ?? []).some((e) => e.summary.includes('News for both'));
     const ada = await call<Start>(grok, 'start', { agent: 'ada', role: 'developer' });
     assert.equal(sees(ada), true);
@@ -684,7 +684,7 @@ describe('tasks addressed to an agent', () => {
   it('a coordinator gives one task to the developer on one platform and one to the developer on another', async () => {
     const forAda = await call<Task>(grok, 'save_task', { title: 'For Ada', role: 'developer', for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' });
     await call<Task>(grok, 'save_task', { title: 'For Hal', role: 'developer', for_agent: 'hal', claimed_role: 'marketer', agent: 'mia' });
-    await call<Task>(grok, 'save_task', { title: 'For any developer', role: 'developer', claimed_role: 'marketer', agent: 'mia' });
+    await call<Task>(grok, 'save_task', { title: 'For any developer', role: 'developer', for_agent: '*', claimed_role: 'marketer', agent: 'mia' });
     assert.equal(forAda.for_agent, 'ada');
     const ada = await call<Start>(grok, 'start', { role: 'developer', agent: 'ada' });
     const hal = await call<Start>(other, 'start', { role: 'developer', agent: 'hal' });
@@ -709,7 +709,7 @@ describe('tasks addressed to an agent', () => {
   it('a role the owner marked may re-address a task of another role, and change nothing else on it', async () => {
     await owner.json('/api/owner/settings/role-enforcement', { json: { mode: 'enforce', override: true } });
     try {
-      const t = await call<Task>(grok, 'save_task', { title: 'Routed', role: 'developer', claimed_role: 'developer', agent: 'ada' });
+      const t = await call<Task>(grok, 'save_task', { title: 'Routed', role: 'developer', for_agent: '*', claimed_role: 'developer', agent: 'ada' });
       // Marketer does not own the task, so it cannot address it.
       await assert.rejects(call(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: 'ada', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
       // MCP cannot grant the mark; the owner sets it.
@@ -723,7 +723,15 @@ describe('tasks addressed to an agent', () => {
       await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: 'mia', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'invalid' && /may not take the role "developer"/.test(err(e).message));
       await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: null, title: 'Renamed', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
       await assert.rejects(call(grok, 'save_task', { id: t.id, rev: routed.rev, status: 'done', claimed_role: 'marketer', agent: 'mia' }), (e) => err(e).error === 'forbidden');
-      const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: null, claimed_role: 'marketer', agent: 'mia' });
+      // A coordinator cannot leave a task of a role with several agents unaddressed by clearing it (#181): it passes an agent or "*".
+      for (const none of [null, '']) {
+        await assert.rejects(
+          call(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: none, claimed_role: 'marketer', agent: 'mia' }),
+          (e) => err(e).error === 'invalid' && /role "developer" has more than one agent \(ada, hal\).*Nothing was changed\./.test(err(e).message),
+        );
+        assert.equal(get<{ rev: number }>(env.svc.db, 'SELECT rev FROM task WHERE id = ?', t.id)!.rev, routed.rev);
+      }
+      const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: routed.rev, for_agent: '*', claimed_role: 'marketer', agent: 'mia' });
       assert.equal(cleared.for_agent, null);
       const ev = get<{ summary: string }>(env.svc.db, "SELECT summary FROM event WHERE action = 'role.privilege_updated' ORDER BY id DESC LIMIT 1");
       assert.equal(ev!.summary, 'Role "Marketer" may address any task to an agent');
@@ -734,7 +742,7 @@ describe('tasks addressed to an agent', () => {
     }
   });
 
-  it('refuses an unknown agent, an agent that cannot take the role, and an address without a role; null clears it', async () => {
+  it('refuses an unknown agent, an agent that cannot take the role, and an address without a role; "*" clears it', async () => {
     for (const [args, reason] of [
       [{ title: 'X', role: 'developer', for_agent: 'nobody' }, /agent not found/],
       [{ title: 'X', role: 'developer', for_agent: 'mia' }, /may not take the role "developer"/],
@@ -744,7 +752,7 @@ describe('tasks addressed to an agent', () => {
     }
     const t = await call<Task>(grok, 'save_task', { title: 'Movable', role: 'developer', for_agent: 'ada', claimed_role: 'developer', agent: 'ada' });
     await assert.rejects(call(grok, 'save_task', { id: t.id, rev: t.rev, role: 'marketer', claimed_role: 'developer', agent: 'ada' }), (e) => /may not take the role "marketer"/.test(err(e).message));
-    const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: null, claimed_role: 'developer', agent: 'ada' });
+    const cleared = await call<Task>(grok, 'save_task', { id: t.id, rev: t.rev, for_agent: '*', claimed_role: 'developer', agent: 'ada' });
     assert.equal(cleared.for_agent, null);
     assert.equal(get<{ n: number }>(env.svc.db, "SELECT count(*) AS n FROM task WHERE title = 'X'")!.n, 0);
   });
